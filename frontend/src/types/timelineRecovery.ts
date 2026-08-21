@@ -10,10 +10,10 @@ export type TimelineBookkeepingRepair = {
 };
 
 export type TimelineIntegrityReport = {
-  checkedAt: string;
-  status: "healthy" | "needs_attention";
+  checkedAt: string | null;
+  status: "not_checked" | "healthy" | "needs_attention";
   sources: Array<{
-    collection: "audio_chunks" | "transcriptions" | "diarizations";
+    collection: "audio_chunks" | "transcriptions";
     label: string;
     documents: number;
     firstStart: string | null;
@@ -28,7 +28,7 @@ export type TimelineIntegrityReport = {
     stale: number;
     firstStart: string | null;
     lastStart: string | null;
-    totals: Record<"audio_chunks" | "transcriptions" | "diarizations", number>;
+    totals: Record<"audio_chunks" | "transcriptions", number>;
   }>;
   bookkeeping: {
     checked: boolean;
@@ -40,7 +40,18 @@ export type TimelineIntegrityReport = {
   lastBookkeepingRepair: null | Omit<TimelineBookkeepingRepair, "note">;
   campaign: null | {
     campaignId: string;
-    status: "queued" | "running" | "completed" | "completed_with_errors";
+    workerType?: string;
+    queue?: string;
+    status:
+      | "paused_legacy"
+      | "paused"
+      | "paused_error"
+      | "queued"
+      | "running"
+      | "recovering"
+      | "verifying"
+      | "completed"
+      | "completed_with_errors";
     plannedJobs: number;
     queuedJobs: number;
     missingJobs: number;
@@ -61,11 +72,21 @@ export type TimelineIntegrityReport = {
       end: string | null;
       reason: string;
     }>;
+    nextBatchIndex?: number | null;
+    processedThrough?: string | null;
+    activeJobId?: string | null;
+    lastActivityAt?: string | null;
+    blockingReason?: string | null;
+    canResume?: boolean;
+    canPause?: boolean;
+    progress?: Record<string, unknown> | null;
   };
   issues: Array<{
     severity: "warning" | "error";
     code: string;
     message: string;
+    action?: "full_rebuild" | "stale_only" | "resume_campaign";
+    actionLabel?: string;
   }>;
   scope: {
     verifies: string[];
@@ -74,6 +95,13 @@ export type TimelineIntegrityReport = {
   performance: {
     totalMs: number;
     stages: Record<string, number>;
-    note: string;
+    note?: string;
+  };
+  snapshot?: {
+    state: "missing" | "ready" | "refreshing" | "stale" | "failed";
+    asOf?: string;
+    lastAttemptAt?: string;
+    lastError?: string;
+    operationId?: string;
   };
 };

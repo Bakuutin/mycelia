@@ -11,6 +11,7 @@ import {
   TIMELINE_OBJECT_RANGE_INDEX,
 } from "./timeline-query.ts";
 import {
+  deriveEntityTypingPending,
   deriveObjectListCategories,
   OBJECT_LIST_CATEGORIES,
   OBJECT_LIST_TYPE_FLAGS,
@@ -1199,6 +1200,7 @@ export class ObjectsResource
         const doc = {
           ...input.object,
           _listCategories: deriveObjectListCategories(input.object),
+          _entityTypingPending: deriveEntityTypingPending(input.object),
           version: 1,
           createdAt: now,
           updatedAt: now,
@@ -1339,7 +1341,10 @@ export class ObjectsResource
         }
 
         const typeFields = OBJECT_LIST_TYPE_FLAGS.map(([flag]) => flag);
-        if (typeFields.includes(input.field)) {
+        if (
+          typeFields.includes(input.field) || input.field === "name" ||
+          input.field === "metadata.aiProvenance.entityTyping"
+        ) {
           const next = { ...current };
           if (input.value === null || input.value === undefined) {
             delete next[input.field];
@@ -1347,6 +1352,7 @@ export class ObjectsResource
             next[input.field] = input.value;
           }
           updateDoc.$set._listCategories = deriveObjectListCategories(next);
+          updateDoc.$set._entityTypingPending = deriveEntityTypingPending(next);
         }
 
         await mongo({
@@ -1563,6 +1569,10 @@ export class ObjectsResource
           }
         }
         $set._listCategories = deriveObjectListCategories({
+          ...winner,
+          ...$set,
+        });
+        $set._entityTypingPending = deriveEntityTypingPending({
           ...winner,
           ...$set,
         });
@@ -1827,6 +1837,7 @@ export class ObjectsResource
           createdAt: new Date(),
         };
         newDoc._listCategories = deriveObjectListCategories(newDoc);
+        newDoc._entityTypingPending = deriveEntityTypingPending(newDoc);
 
         const insertResult = await mongo({
           action: "insertOne",

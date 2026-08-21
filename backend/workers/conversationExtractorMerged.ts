@@ -78,9 +78,9 @@ export const schema = z.object({
   start: zDateOrString().optional(),
   end: zDateOrString().optional(),
   limit: z.number().default(1),
-  model: z.string().optional()
+  model: z.string().default("medium")
     .describe(
-      "Optional model alias override for this run; otherwise the chunk model is used",
+      "Model alias or exact model resolved from current extraction settings when this extraction job is dispatched",
     ),
   force: z.boolean().default(false)
     .describe(
@@ -460,7 +460,9 @@ const capability: JobCapability = {
         chunkDiagnostics.utterances = utterances.length;
         chunkDiagnostics.promptChars = prompt.length;
 
-        const model = input.model?.trim() || chunk.params.model;
+        // The creator no longer snapshots a model on the chunk. The extractor
+        // job's current defaults/routing decision are authoritative.
+        const model = input.model.trim();
         const fallbackModel = resolveWorkerFallbackModel(
           input.fallbackModel,
           "CONVERSATION_EXTRACTION_FALLBACK_MODEL",

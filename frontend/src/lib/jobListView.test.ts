@@ -63,6 +63,15 @@ describe("jobs list views", () => {
     });
   });
 
+  it("sends a campaign filter for Timeline rebuild tracking", () => {
+    expect(buildJobsListRequest("operational", ["histRecalculation"], {
+      campaignId: "6a84b87878391add0d82e6aa",
+    })).toMatchObject({
+      types: ["histRecalculation"],
+      campaignId: "6a84b87878391add0d82e6aa",
+    });
+  });
+
   it("does not turn progress events into a fake lifecycle state", () => {
     expect(resolveJobEventState("job.progress", undefined, "active")).toBe(
       "active",

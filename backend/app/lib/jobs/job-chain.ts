@@ -15,6 +15,24 @@ export function shouldContinueJobChain(
 }
 
 /**
+ * Timeline rebuild campaigns are advanced only by the durable campaign
+ * reconciler. The generic BullMQ completion hook must never bypass a paused
+ * campaign (especially a legacy campaign awaiting explicit confirmation).
+ */
+export function shouldScheduleGenericContinuation(
+  data: Record<string, unknown>,
+  result: unknown,
+): boolean {
+  if (
+    data.type === "histRecalculation" &&
+    typeof data.timelineRebuildCampaignId === "string"
+  ) {
+    return false;
+  }
+  return shouldContinueJobChain(result);
+}
+
+/**
  * Automatic summarization batches must resolve prompt/model defaults again for
  * every continuation. Copying the previous validated payload would pin a stale
  * prompt snapshot for the entire historical backlog.
@@ -33,7 +51,10 @@ export function getContinuationJobData(
   ) {
     continuation.campaignId = result.campaignId;
   }
-  if (typeof result?.cursor === "string" && result.cursor.length > 0) {
+  if (
+    data.type !== "histRecalculation" &&
+    typeof result?.cursor === "string" && result.cursor.length > 0
+  ) {
     const parsedCursor = new Date(result.cursor);
     continuation.cursor = Number.isNaN(parsedCursor.getTime())
       ? result.cursor

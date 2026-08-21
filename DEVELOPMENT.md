@@ -135,11 +135,13 @@ For an existing database, use a controlled rollout:
    containers. Migrations `0051`, `0052`, and `0053` create the indexes, empty
    projection collections, and durable density queue. `0053` idempotently
    repairs installations that recorded an earlier `0052` before the queue and
-   state fields existed. Do not restart MongoDB or Redis.
+   state fields existed. Migration `0063` adds the Jobs dashboard snapshots,
+   run-history rollups, Timeline campaign lifecycle, and the indexed entity
+   typing marker. Do not restart MongoDB or Redis.
 3. Run one `objectListCatalogBackfill` job. Its `hasMore` continuations drain
    the catalog automatically; verify `object_list_state` has
-   `schemaVersion: 1, ready: true` before treating indexed section reads as
-   active.
+   `schemaVersion: 2, ready: true, entityTypingReady: true` before treating
+   indexed section reads and the covered entity-typing backlog count as active.
 4. Run one `objectTimelineDensityRebuild` job. Enable/accept the far-zoom bars
    only after `object_timeline_density_state._id = "current"` reports
    `ready: true` and `building: false`.
@@ -205,10 +207,31 @@ enforced eight-slot total. Routes that do not fit remain disabled, and the card
 keeps the enabled/total route count visible. The same maximum applies to saved
 provider capacity and BullMQ worker concurrency.
 
-Jobs → Workers keeps Concurrency, Batch, and Schedule as separate fixed-width
-columns with the same numeric-field/save-button pattern. Diarization route
-health and slots stay in External services & routing; queue state stays in the
-worker row, so there is no second live-slots dashboard.
+Jobs → Workers uses the backend worker catalog shared with Settings. Worker
+descriptions, availability, queue state, and history stay visible by default;
+Concurrency, Batch, and Schedule are available through **Advanced columns**.
+Diarization route health and slots stay in External services & routing, so
+there is no second live-slots dashboard.
+
+#### Timeline density rebuild recovery
+
+Timeline density rebuilds affect only derived audio/transcription histogram
+buckets. They never rewrite raw audio, transcript text, terminal transcription
+markers, or speaker identity. Speaker identity reads active speaker segments
+directly, so diarizations are not part of histogram audit totals or rebuilds.
+
+A full rebuild creates a durable `timeline_rebuild_campaigns` row before its
+first 31-day batch. `histRecalculation` runs at concurrency one and reports its
+delete, 5-minute, hourly, daily, and weekly phases. The backend reconciles an
+explicitly started, unpaused campaign every 30 seconds and restores a missing
+successor. A legacy campaign remains `paused_legacy` until an operator confirms
+**Resume**; page load or deployment never starts it. Pause/Resume and campaign
+links are available from Jobs, and the job list filters by `campaignId`.
+
+Campaign completion requires a manual exact Timeline audit after all planned
+batches finish. Audio/transcription mismatches require **Rebuild Timeline
+density**; stale buckets use **Update stale ranges**. Terminal-marker repair is
+a separate Preview then Apply workflow.
 
 Recent source-file metadata loads independently once and is ordered by
 `source_files.updatedAt`, `start`, and `_id`; it is not described as downstream
@@ -233,18 +256,22 @@ source exists, the UI labels the campaign EWMA as a legacy single-lane estimate.
 
 Keep live service availability separate from corpus-wide statistics:
 
-- Jobs and settings use `services_health` for provider checks. The **Work ready
-  now** exact backlog is disabled on page load and runs only through **Calculate
-  exact backlog**.
-- The Workers table gets live queue depth from `worker-status`. Lifetime run
-  history runs only through **Calculate run history** and uses one bounded,
-  deadline-limited aggregation instead of two full collection scans.
-- A successful exact pipeline snapshot is cached for five minutes and concurrent
-  callers share one calculation. A Mongo deadline starts a two-minute retry
-  backoff; the last successful snapshot is retained when available. If an
-  individual corpus-wide object count reaches its deadline, the other exact
-  counts remain visible and that card is marked unavailable instead of failing
-  the whole request.
+- Jobs and Settings read one canonical worker catalog. The last successful
+  catalog is persisted in `jobs_dashboard_snapshots`; discovery or Python
+  `/capabilities` failure marks rows stale/degraded instead of returning an
+  empty list. `ingestion` is daemon-managed and has no queue controls.
+- Page load reads only live queue totals and persisted snapshots. **Update
+  history**, **Update backlog**, and the Timeline audit action return an
+  operation id immediately; old values remain visible while the leased refresh
+  runs. A failed refresh marks the snapshot stale without erasing its data.
+- Run history is stored in `job_run_history_daily`. Its first manual build
+  creates the terminal-job baseline; later updates scan the `(updatedAt, _id)`
+  cursor and rebuild only affected UTC day/type rollups. Clearing terminal rows
+  is a soft archive and does not delete the underlying records.
+- Exact backlog metrics run sequentially and keep their own freshness/error
+  state. A timeout preserves that metric's previous value. Entity typing never
+  falls back to the former negative full scan: after `objectListCatalogBackfill`
+  validates schema v2, it uses the partial `_entityTypingPending` index.
 - Voice identity status reads profile/campaign metadata only. The global active
   diarization classification `$group` runs only through **Calculate exact**. A
   calibration is usable only when its profile id, profile revision, and
@@ -267,8 +294,10 @@ Keep live service availability separate from corpus-wide statistics:
 
 Migration `0056_pipeline_dashboard_indexes.ts` adds the partial Jobs index used
 for recent completed transcription batch history and the compound Map index for
-conversation time ranges. Apply pending migrations before relying on the new
-query hints.
+conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds
+the dashboard cursor/rollup indexes, durable snapshot and campaign collections,
+the unique campaign/batch constraint, and the partial entity-typing marker
+index. Apply pending migrations before relying on the new query hints.
 
 Mongo's Compose health check is an exec-form, one-row native `mongostat` probe
 every 30 seconds, with 1.5-second connection/server/socket deadlines and a

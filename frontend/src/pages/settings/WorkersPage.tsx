@@ -6,51 +6,39 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
-  Cog,
   CheckCircle2,
-  XCircle,
-  Clock,
+  Cog,
   Pause,
   Play,
-  Settings,
   RefreshCw,
+  Settings,
+  XCircle,
 } from "lucide-react";
-import type { WorkerPolicy } from "@/types/jobs";
-
-interface WorkerEntry {
-  _id: string;
-  name: string;
-  discovered: boolean;
-  inputSchema: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
-  policies?: WorkerPolicy[];
-  defaultOverrides?: Record<string, unknown>;
-  lastSeen: string;
-  createdAt: string;
-  updatedAt: string;
-}
+import type { JobsDashboard, WorkerCatalogEntry } from "@/types/jobsDashboard";
 
 interface WorkerStatus {
   paused: boolean;
 }
 
 const WorkersPage = () => {
-  const [workers, setWorkers] = useState<WorkerEntry[]>([]);
-  const [workerStatuses, setWorkerStatuses] = useState<Record<string, WorkerStatus>>({});
+  const [workers, setWorkers] = useState<WorkerCatalogEntry[]>([]);
+  const [schemas, setSchemas] = useState<Record<string, any>>({});
+  const [workerStatuses, setWorkerStatuses] = useState<
+    Record<string, WorkerStatus>
+  >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
-      setLoading(true);
-      const [workersResult, statusResult] = await Promise.all([
-        callResource("jobs", { action: "list_workers" }),
-        callResource("jobs", { action: "get_worker_status" }),
-      ]);
-
-      setWorkers(workersResult.workers || []);
-      setWorkerStatuses(statusResult.workers || {});
+      if (workers.length === 0) setLoading(true);
+      const dashboard = await callResource("jobs", {
+        action: "get_jobs_dashboard",
+      }) as JobsDashboard;
+      setWorkers(dashboard.catalog.workers || []);
+      setSchemas(dashboard.catalog.schemas || {});
+      setWorkerStatuses(dashboard.runtime.workers || {});
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch workers");
@@ -63,7 +51,10 @@ const WorkersPage = () => {
     fetchData();
   }, []);
 
-  const toggleWorkerPause = async (workerType: string, currentlyPaused: boolean) => {
+  const toggleWorkerPause = async (
+    workerType: string,
+    currentlyPaused: boolean,
+  ) => {
     setTogglingWorker(workerType);
     try {
       await callResource("jobs", {
@@ -82,29 +73,11 @@ const WorkersPage = () => {
   };
 
   const getSchemaFieldCount = (schema: Record<string, unknown>): number => {
-    const properties = schema?.properties as Record<string, unknown> | undefined;
+    const properties = schema?.properties as
+      | Record<string, unknown>
+      | undefined;
     if (!properties) return 0;
     return Object.keys(properties).filter((key) => key !== "type").length;
-  };
-
-  const getOverrideCount = (worker: WorkerEntry): number => {
-    return Object.keys(worker.defaultOverrides || {}).length;
-  };
-
-  const formatLastSeen = (lastSeen: string): string => {
-    const date = new Date(lastSeen);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-
-    const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `${diffHours}h ago`;
-
-    const diffDays = Math.floor(diffHours / 24);
-    return `${diffDays}d ago`;
   };
 
   if (loading) {
@@ -123,7 +96,7 @@ const WorkersPage = () => {
     );
   }
 
-  if (error) {
+  if (error && workers.length === 0) {
     return (
       <div className="space-y-6">
         <div>
@@ -143,8 +116,14 @@ const WorkersPage = () => {
     );
   }
 
-  const discoveredWorkers = workers.filter((w) => w.discovered);
-  const unavailableWorkers = workers.filter((w) => !w.discovered);
+  const discoveredWorkers = workers.filter((worker) =>
+    worker.availability === "ready" ||
+    worker.availability === "daemon-managed"
+  );
+  const unavailableWorkers = workers.filter((worker) =>
+    worker.availability !== "ready" &&
+    worker.availability !== "daemon-managed"
+  );
 
   return (
     <div className="space-y-6">
@@ -161,6 +140,12 @@ const WorkersPage = () => {
         </Button>
       </div>
 
+      {error && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm text-amber-600">
+          Showing the last worker catalog snapshot. Refresh failed: {error}
+        </div>
+      )}
+
       {/* Active Workers */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
@@ -169,94 +154,95 @@ const WorkersPage = () => {
           <Badge variant="secondary">{discoveredWorkers.length}</Badge>
         </div>
 
-        {discoveredWorkers.length === 0 ? (
-          <Card className="p-6 text-center text-muted-foreground">
-            No workers are currently active. Start the backend worker process to
-            see available workers.
-          </Card>
-        ) : (
-          <div className="grid gap-4">
-            {discoveredWorkers.map((worker) => {
-              const status = workerStatuses[worker.name];
-              const isPaused = status?.paused ?? false;
-              const fieldCount = getSchemaFieldCount(worker.inputSchema);
-              const overrideCount = getOverrideCount(worker);
-              const isToggling = togglingWorker === worker.name;
+        {discoveredWorkers.length === 0
+          ? (
+            <Card className="p-6 text-center text-muted-foreground">
+              No workers are currently active. Start the backend worker process
+              to see available workers.
+            </Card>
+          )
+          : (
+            <div className="grid gap-4">
+              {discoveredWorkers.map((worker) => {
+                const status = workerStatuses[worker.type];
+                const isPaused = status?.paused ?? false;
+                const fieldCount = getSchemaFieldCount(
+                  schemas[worker.type]?.input || {},
+                );
+                const isToggling = togglingWorker === worker.type;
 
-              return (
-                <Card
-                  key={worker._id}
-                  className={`p-4 transition-colors ${
-                    isPaused
-                      ? "border-amber-500/50 bg-amber-500/5"
-                      : "border-green-500/30 bg-green-500/5"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      {isPaused ? (
-                        <Pause className="w-5 h-5 text-amber-500 shrink-0" />
-                      ) : (
-                        <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-medium">{worker.name}</h4>
-                          {isPaused && (
-                            <Badge
-                              variant="outline"
-                              className="text-xs text-amber-600 border-amber-500/50"
-                            >
-                              Paused
-                            </Badge>
+                return (
+                  <Card
+                    key={worker.type}
+                    className={`p-4 transition-colors ${
+                      isPaused
+                        ? "border-amber-500/50 bg-amber-500/5"
+                        : "border-green-500/30 bg-green-500/5"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {isPaused
+                          ? (
+                            <Pause className="w-5 h-5 text-amber-500 shrink-0" />
+                          )
+                          : (
+                            <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" />
                           )}
-                        </div>
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {formatLastSeen(worker.lastSeen)}
-                          </span>
-                          <span>{fieldCount} configurable fields</span>
-                          {overrideCount > 0 && (
-                            <Badge
-                              variant="secondary"
-                              className="text-xs bg-blue-500/10 text-blue-700 dark:text-blue-400"
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-medium">{worker.label}</h4>
+                            {isPaused && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs text-amber-600 border-amber-500/50"
+                              >
+                                Paused
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
+                            <span
+                              className="max-w-[34rem] truncate"
+                              title={worker.description}
                             >
-                              {overrideCount} override{overrideCount !== 1 ? "s" : ""}
+                              {worker.description}
+                            </span>
+                            <span>{fieldCount} configurable fields</span>
+                            <Badge variant="outline" className="text-xs">
+                              {worker.availability}
                             </Badge>
-                          )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toggleWorkerPause(worker.name, isPaused)}
-                        disabled={isToggling}
-                        title={isPaused ? "Resume worker" : "Pause worker"}
-                      >
-                        {isToggling ? (
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                        ) : isPaused ? (
-                          <Play className="w-4 h-4" />
-                        ) : (
-                          <Pause className="w-4 h-4" />
-                        )}
-                      </Button>
-                      <Link to={`/settings/workers/${worker.name}`}>
-                        <Button variant="outline" size="sm">
-                          <Settings className="w-4 h-4 mr-2" />
-                          Configure
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            toggleWorkerPause(worker.type, isPaused)}
+                          disabled={isToggling || !worker.capabilities.pause}
+                          title={isPaused ? "Resume worker" : "Pause worker"}
+                        >
+                          {isToggling
+                            ? <RefreshCw className="w-4 h-4 animate-spin" />
+                            : isPaused
+                            ? <Play className="w-4 h-4" />
+                            : <Pause className="w-4 h-4" />}
                         </Button>
-                      </Link>
+                        <Link to={`/settings/workers/${worker.type}`}>
+                          <Button variant="outline" size="sm">
+                            <Settings className="w-4 h-4 mr-2" />
+                            Configure
+                          </Button>
+                        </Link>
+                      </div>
                     </div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+                  </Card>
+                );
+              })}
+            </div>
+          )}
       </div>
 
       {/* Unavailable Workers */}
@@ -277,23 +263,23 @@ const WorkersPage = () => {
             <div className="grid gap-3">
               {unavailableWorkers.map((worker) => (
                 <Card
-                  key={worker._id}
+                  key={worker.type}
                   className="p-4 opacity-60"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3 min-w-0 flex-1">
                       <XCircle className="w-5 h-5 text-muted-foreground shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <h4 className="font-medium">{worker.name}</h4>
+                        <h4 className="font-medium">{worker.label}</h4>
                         <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            Last seen {formatLastSeen(worker.lastSeen)}
+                          <span className="truncate" title={worker.description}>
+                            {worker.description}
                           </span>
+                          <span>{worker.availability}</span>
                         </div>
                       </div>
                     </div>
-                    <Link to={`/settings/workers/${worker.name}`}>
+                    <Link to={`/settings/workers/${worker.type}`}>
                       <Button variant="ghost" size="sm">
                         <Settings className="w-4 h-4" />
                       </Button>

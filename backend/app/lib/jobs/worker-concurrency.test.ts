@@ -23,6 +23,15 @@ Deno.test("transcription runtime can use provider-aware parallel slots", () => {
   expect(assertWorkerConcurrency("transcription", 2)).toBe(2);
 });
 
+Deno.test("timeline histogram rebuild is always single-threaded", () => {
+  expect(getWorkerConcurrencyRange("histRecalculation")).toEqual({
+    min: 1,
+    max: 1,
+  });
+  expect(normalizeWorkerConcurrency("histRecalculation", 8)).toBe(1);
+  expect(() => assertWorkerConcurrency("histRecalculation", 2)).toThrow();
+});
+
 Deno.test("worker concurrency accepts the general one through eight range", () => {
   expect(getWorkerConcurrencyRange("summarization")).toEqual({
     min: 1,

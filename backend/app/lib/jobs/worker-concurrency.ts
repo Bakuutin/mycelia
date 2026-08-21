@@ -1,7 +1,11 @@
 export const MIN_WORKER_CONCURRENCY = 1;
 export const MAX_WORKER_CONCURRENCY = 8;
 
-const WORKER_CONCURRENCY_CAPS: Record<string, number> = {};
+const WORKER_CONCURRENCY_CAPS: Record<string, number> = {
+  // Campaign batches overlap at week boundaries while rebuilding derived
+  // buckets; parallel delete/rebuild would race and corrupt totals.
+  histRecalculation: 1,
+};
 
 export function getWorkerConcurrencyCap(workerType: string): number {
   return WORKER_CONCURRENCY_CAPS[workerType] ?? MAX_WORKER_CONCURRENCY;

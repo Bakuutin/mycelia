@@ -121,6 +121,16 @@ async def health():
     return {"status": "healthy"}
 
 
+@app.get("/capabilities")
+async def capabilities():
+    """Report executable handlers, not TypeScript-side manifests."""
+    return {
+        "status": "ready",
+        "jobs": sorted(JOB_REGISTRY.keys()),
+        "endpoints": [f"POST /jobs/{name}" for name in sorted(JOB_REGISTRY)],
+    }
+
+
 @app.get("/")
 async def root():
     return {

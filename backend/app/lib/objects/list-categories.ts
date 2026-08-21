@@ -61,12 +61,26 @@ export function deriveObjectListCategories(
   return categories;
 }
 
+export function deriveEntityTypingPending(
+  doc: Record<string, unknown>,
+): boolean {
+  const name = typeof doc.name === "string" ? doc.name.trim() : "";
+  if (!name) return false;
+  if (OBJECT_LIST_TYPE_FLAGS.some(([flag]) => flag in doc)) return false;
+  const metadata = doc.metadata as Record<string, any> | undefined;
+  return metadata?.aiProvenance?.entityTyping == null;
+}
+
 export function withObjectListCategories<T extends Record<string, unknown>>(
   doc: T,
-): T & { _listCategories: ObjectListCategory[] } {
+): T & {
+  _listCategories: ObjectListCategory[];
+  _entityTypingPending: boolean;
+} {
   return {
     ...doc,
     _listCategories: deriveObjectListCategories(doc),
+    _entityTypingPending: deriveEntityTypingPending(doc),
   };
 }
 

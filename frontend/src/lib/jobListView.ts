@@ -23,6 +23,7 @@ export function buildJobsListRequest(
     statuses?: JobListStatus[];
     limit?: number;
     providerProfileId?: string;
+    campaignId?: string;
   } = {},
 ) {
   return {
@@ -34,6 +35,7 @@ export function buildJobsListRequest(
     ...(options.providerProfileId
       ? { providerProfileId: options.providerProfileId }
       : {}),
+    ...(options.campaignId ? { campaignId: options.campaignId } : {}),
   };
 }
 

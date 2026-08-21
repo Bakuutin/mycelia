@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
@@ -22,13 +22,22 @@ export function TimelineRecoveryStatus() {
     refetchInterval: (query) => {
       const status = (query.state.data as TimelineIntegrityReport | undefined)
         ?.campaign?.status;
-      return status === "queued" || status === "running" ? 10_000 : 60_000;
+      return status === "queued" || status === "running" ||
+          status === "recovering"
+        ? 10_000
+        : 60_000;
     },
+  });
+
+  const refreshMutation = useMutation({
+    mutationFn: async () =>
+      await api.callResource("jobs", { action: "refresh_timeline_integrity" }),
+    onSuccess: () => void refetch(),
   });
 
   const campaign = data?.campaign;
   const campaignBusy = campaign?.status === "queued" ||
-    campaign?.status === "running";
+    campaign?.status === "running" || campaign?.status === "recovering";
   const completedPercent = campaign && campaign.plannedJobs > 0
     ? Math.round(campaign.completed / campaign.plannedJobs * 100)
     : 0;
@@ -68,9 +77,10 @@ export function TimelineRecoveryStatus() {
             </Badge>
           </div>
 
-          {!data && !error && (
+          {(!data || data.status === "not_checked") && !error && (
             <p className="mt-1 text-xs text-muted-foreground">
-              Checking raw data, persisted histograms, and recovery jobs…
+              Timeline integrity has not been checked yet. The audit runs only
+              when requested.
             </p>
           )}
           {error && (
@@ -109,6 +119,9 @@ export function TimelineRecoveryStatus() {
                 {campaign.failed > 0 && (
                   <span className="text-red-500">{campaign.failed} failed</span>
                 )}
+                {campaign.missingJobs > 0 && (
+                  <span>{campaign.missingJobs} not queued yet</span>
+                )}
               </div>
             </div>
           )}
@@ -128,12 +141,18 @@ export function TimelineRecoveryStatus() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => void refetch()}
-            disabled={isFetching}
+            onClick={() => refreshMutation.mutate()}
+            disabled={isFetching || refreshMutation.isPending ||
+              data?.snapshot?.state === "refreshing"}
             title="Refresh timeline integrity status"
           >
             <RefreshCw
-              className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`}
+              className={`h-3.5 w-3.5 ${
+                isFetching || refreshMutation.isPending ||
+                  data?.snapshot?.state === "refreshing"
+                  ? "animate-spin"
+                  : ""
+              }`}
             />
           </Button>
           <Button

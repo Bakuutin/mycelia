@@ -12,7 +12,7 @@ import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import {
   getContinuationJobData,
   getContinuationPriority,
-  shouldContinueJobChain,
+  shouldScheduleGenericContinuation,
 } from "./job-chain.ts";
 import {
   getWorkerConcurrencyRange,
@@ -24,8 +24,13 @@ import {
 } from "./service-health.ts";
 import { isCancelledJobRecord } from "./job-state.ts";
 import { releaseTranscriptionSequenceClaimsForJob } from "./transcription-claim-reaper.ts";
+import {
+  reconcileActiveTimelineCampaigns,
+  syncTimelineCampaign,
+} from "./timeline-campaign-recovery.ts";
 
 const workers = new Map<string, Worker>();
+let timelineRecoveryInterval: ReturnType<typeof setInterval> | null = null;
 
 const PROVIDER_FAILURE_PATTERN =
   /LLM API error|Failed to call resource llm|LLM_EMPTY_RESPONSE|LLM_INVALID_RESPONSE|No healthy (LLM|STT|provider)|error sending request|Connection refused|ECONNREFUSED|fetch failed/i;
@@ -249,12 +254,12 @@ export async function startWorkers() {
         JSON.stringify(job.returnvalue),
       );
 
-      if (shouldContinueJobChain(job.returnvalue)) {
+      if (shouldScheduleGenericContinuation(job.data, job.returnvalue)) {
         console.log(
           `[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`,
         );
         try {
-          await enqueueJob(
+          const continuation = await enqueueJob(
             getContinuationJobData(
               job.data,
               job.returnvalue,
@@ -265,7 +270,57 @@ export async function startWorkers() {
               reuseHealthyRoute: job.data.type === "diarization",
             },
           );
+          const auth = await getServerAuth();
+          const mongo = await getMongoResource(auth);
+          await mongo({
+            action: "updateOne",
+            collection: "jobs",
+            query: { _id: new ObjectId(job.id!) },
+            update: {
+              $set: {
+                continuation: {
+                  status: "queued",
+                  attemptedAt: new Date(),
+                  jobId: continuation.id,
+                },
+              },
+            },
+          });
+          if (
+            job.data.type === "histRecalculation" &&
+            typeof job.data.timelineRebuildCampaignId === "string"
+          ) {
+            await syncTimelineCampaign(
+              mongo,
+              job.data.timelineRebuildCampaignId,
+            );
+          }
         } catch (error) {
+          try {
+            const auth = await getServerAuth();
+            const mongo = await getMongoResource(auth);
+            await mongo({
+              action: "updateOne",
+              collection: "jobs",
+              query: { _id: new ObjectId(job.id!) },
+              update: {
+                $set: {
+                  continuation: {
+                    status: "failed",
+                    attemptedAt: new Date(),
+                    error: error instanceof Error
+                      ? error.message
+                      : String(error),
+                  },
+                },
+              },
+            });
+          } catch (persistError) {
+            console.error(
+              `[${jobType}] Could not persist continuation failure`,
+              persistError,
+            );
+          }
           console.warn(
             `[${jobType}] Deferred hasMore continuation: ${
               error instanceof Error ? error.message : String(error)
@@ -322,6 +377,12 @@ export async function startWorkers() {
 
   // Restore paused workers from config
   await restorePausedWorkers();
+  await reconcileActiveTimelineCampaigns();
+  if (!timelineRecoveryInterval) {
+    timelineRecoveryInterval = setInterval(() => {
+      void reconcileActiveTimelineCampaigns();
+    }, 30_000);
+  }
 }
 
 async function restorePausedWorkers() {
@@ -341,6 +402,11 @@ async function restorePausedWorkers() {
 
 export async function stopWorkers() {
   console.log("Stopping job workers...");
+
+  if (timelineRecoveryInterval) {
+    clearInterval(timelineRecoveryInterval);
+    timelineRecoveryInterval = null;
+  }
 
   await Promise.all([...workers.values()].map((worker) => worker.close()));
   workers.clear();

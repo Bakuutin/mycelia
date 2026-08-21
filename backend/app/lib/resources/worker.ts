@@ -10,7 +10,6 @@ import { workerPauseManager } from "@/lib/jobs/worker-pause-manager.ts";
 import { getConfigResource } from "@/lib/config/resource.server.ts";
 import { getJobTimeoutMinutes } from "@/lib/jobs/job-timeouts.ts";
 import { env } from "#/env.ts";
-import { buildUntypedScanFilters } from "../../../workers/entityTyping.ts";
 import { buildTaggerConversationQuery } from "../../../workers/tagger.ts";
 import {
   assertJobServicesHealthy,
@@ -31,19 +30,29 @@ import {
   buildTimelineRebuildBatches,
   timelineCampaignStatus,
 } from "@/lib/jobs/timeline-recovery.ts";
+import {
+  ensureTimelineCampaignDocument,
+  reconcileTimelineCampaign,
+  syncTimelineCampaign,
+  TIMELINE_REBUILD_CAMPAIGNS,
+} from "@/lib/jobs/timeline-campaign-recovery.ts";
 import { resolveLiveJobState } from "@/lib/jobs/job-live-state.ts";
-import { isMongoDeadlineError, runExactCount } from "@/lib/jobs/exact-count.ts";
+import { runExactCount } from "@/lib/jobs/exact-count.ts";
+import { buildWorkerCatalog } from "@/lib/jobs/worker-catalog.ts";
+import {
+  beginDashboardRefresh,
+  completeDashboardRefresh,
+  EXACT_BACKLOG_SNAPSHOT_ID,
+  failDashboardRefresh,
+  readDashboardSnapshot,
+  refreshRunHistorySnapshot,
+  RUN_HISTORY_SNAPSHOT_ID,
+  serializeDashboardSnapshot,
+  TIMELINE_INTEGRITY_SNAPSHOT_ID,
+  WORKER_CATALOG_SNAPSHOT_ID,
+} from "@/lib/jobs/jobs-dashboard-snapshots.ts";
 
 const STALE_JOB_AGE_MS = 15 * 60 * 1000;
-const PIPELINE_HEALTH_CACHE_TTL_MS = 5 * 60 * 1000;
-const PIPELINE_HEALTH_TIMEOUT_BACKOFF_MS = 2 * 60 * 1000;
-let pipelineHealthCache: {
-  value: Record<string, any>;
-  computedAt: number;
-} | null = null;
-let pipelineHealthInFlight: Promise<Record<string, any>> | null = null;
-let pipelineHealthRetryAfter = 0;
-let pipelineHealthLastError: string | null = null;
 
 const WORKER_SPECIFIC_IDLE_TYPES = [
   "vad",
@@ -145,7 +154,6 @@ export function getIdleAutoJobQuery() {
 const TIMELINE_SOURCE_COLLECTIONS = [
   ["audio_chunks", "Audio chunks"],
   ["transcriptions", "Transcriptions"],
-  ["diarizations", "Diarizations"],
 ] as const;
 const TIMELINE_RESOLUTIONS = ["5min", "1hour", "1day", "1week"] as const;
 
@@ -181,6 +189,7 @@ const ListJobsSchema = z.object({
     .optional(),
   limit: z.number().int().min(1).max(5000).optional(),
   providerProfileId: z.string().trim().min(1).max(200).optional(),
+  campaignId: z.string().trim().min(1).max(200).optional(),
 });
 
 const CancelAllJobsSchema = z.object({
@@ -337,6 +346,22 @@ const StatsSchema = z.object({
   action: z.literal("stats"),
 });
 
+const GetJobsDashboardSchema = z.object({
+  action: z.literal("get_jobs_dashboard"),
+});
+
+const RefreshRunHistorySchema = z.object({
+  action: z.literal("refresh_run_history"),
+});
+
+const RefreshExactBacklogSchema = z.object({
+  action: z.literal("refresh_exact_backlog"),
+});
+
+const RefreshTimelineIntegritySchema = z.object({
+  action: z.literal("refresh_timeline_integrity"),
+});
+
 const ErrorStatsSchema = z.object({
   action: z.literal("error_stats"),
   sinceDays: z.number().int().min(1).max(90).default(14),
@@ -367,6 +392,21 @@ const StartTimelineRebuildSchema = z.object({
   start: z.string().datetime({ offset: true }).optional(),
   end: z.string().datetime({ offset: true }).optional(),
   batchDays: z.number().int().min(1).max(62).default(31),
+});
+
+const GetTimelineRebuildStatusSchema = z.object({
+  action: z.literal("get_timeline_rebuild_status"),
+  campaignId: z.string().min(1).optional(),
+});
+
+const PauseTimelineRebuildSchema = z.object({
+  action: z.literal("pause_timeline_rebuild"),
+  campaignId: z.string().min(1),
+});
+
+const ResumeTimelineRebuildSchema = z.object({
+  action: z.literal("resume_timeline_rebuild"),
+  campaignId: z.string().min(1),
 });
 
 const RetryFailedJobsSchema = z.object({
@@ -426,12 +466,19 @@ const RequestSchema = z.union([
   GetWorkerDefaultsSchema,
   UpdateWorkerDefaultsSchema,
   StatsSchema,
+  GetJobsDashboardSchema,
+  RefreshRunHistorySchema,
+  RefreshExactBacklogSchema,
+  RefreshTimelineIntegritySchema,
   ErrorStatsSchema,
   PipelineHealthSchema,
   ServicesHealthSchema,
   TimelineIntegrityReportSchema,
   TimelineBookkeepingRepairSchema,
   StartTimelineRebuildSchema,
+  GetTimelineRebuildStatusSchema,
+  PauseTimelineRebuildSchema,
+  ResumeTimelineRebuildSchema,
   RetryFailedJobsSchema,
   ModelArtifactsSchema,
   ReprocessModelArtifactsSchema,
@@ -672,6 +719,14 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return this.updateWorkerDefaults(input, auth);
       case "stats":
         return this.stats(auth);
+      case "get_jobs_dashboard":
+        return this.getJobsDashboard(auth);
+      case "refresh_run_history":
+        return this.refreshRunHistory(auth);
+      case "refresh_exact_backlog":
+        return this.refreshExactBacklog(auth);
+      case "refresh_timeline_integrity":
+        return this.refreshTimelineIntegrity(auth);
       case "error_stats":
         return this.errorStats(input, auth);
       case "pipeline_health":
@@ -684,6 +739,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return this.timelineBookkeepingRepair(input, auth);
       case "start_timeline_rebuild":
         return this.startTimelineRebuild(input, auth);
+      case "get_timeline_rebuild_status":
+        return this.getTimelineRebuildStatus(input, auth);
+      case "pause_timeline_rebuild":
+        return this.pauseTimelineRebuild(input, auth);
+      case "resume_timeline_rebuild":
+        return this.resumeTimelineRebuild(input);
       case "retry_failed":
         return this.retryFailed(input, auth);
       case "model_artifacts":
@@ -1022,16 +1083,26 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
   ) {
     const mongo = await getMongoResource(auth);
 
-    // Delete all completed, failed, and cancelled jobs from MongoDB
+    const archivedAt = new Date();
     const result = await mongo({
-      action: "deleteMany",
+      action: "updateMany",
       collection: "jobs",
-      query: { state: { $in: ["completed", "failed", "cancelled"] } },
+      query: {
+        state: { $in: ["completed", "failed", "cancelled"] },
+        archivedAt: { $exists: false },
+      },
+      update: {
+        $set: {
+          archivedAt,
+          archivedReason: "user_cleared_terminal_history",
+        },
+      },
     });
 
     return {
       success: true,
-      deletedCount: result.deletedCount || 0,
+      archivedCount: result.modifiedCount || 0,
+      deletedCount: 0,
     };
   }
 
@@ -1046,15 +1117,25 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
 
     const mongo = await getMongoResource(auth);
     const result = await mongo({
-      action: "deleteMany",
+      action: "updateMany",
       collection: "jobs",
-      query: getFailedJobsQuery(input.workerType),
+      query: {
+        ...getFailedJobsQuery(input.workerType),
+        archivedAt: { $exists: false },
+      },
+      update: {
+        $set: {
+          archivedAt: new Date(),
+          archivedReason: "user_cleared_failed_history",
+        },
+      },
     });
 
     return {
       success: true,
       workerType: input.workerType,
-      deletedCount: result.deletedCount || 0,
+      archivedCount: result.modifiedCount || 0,
+      deletedCount: 0,
     };
   }
 
@@ -1121,6 +1202,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         state: "failed",
         retriedAt: { $exists: false },
         dismissedAt: { $exists: false },
+        archivedAt: { $exists: false },
       },
       options: { sort: { createdAt: 1 }, limit: input.limit },
     }) as any[];
@@ -1672,88 +1754,138 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     input: z.infer<typeof PipelineHealthSchema>,
     auth: Auth,
   ): Promise<Record<string, any>> {
-    const now = Date.now();
-    const force = input.force === true;
-    const cached = pipelineHealthCache;
-    if (
-      !force && cached && now - cached.computedAt < PIPELINE_HEALTH_CACHE_TTL_MS
-    ) {
+    const mongo = await getMongoResource(auth);
+    if (input.force) {
+      const operationId = new ObjectId().toString();
+      await this.runExactBacklogRefresh(operationId, auth);
+    }
+    const snapshot = await readDashboardSnapshot<any>(
+      mongo,
+      EXACT_BACKLOG_SNAPSHOT_ID,
+    );
+    if (snapshot?.data) {
       return {
-        ...cached.value,
-        snapshot: {
-          status: "cached",
-          asOf: new Date(cached.computedAt).toISOString(),
-        },
+        ...snapshot.data,
+        snapshot: serializeDashboardSnapshot(snapshot),
       };
     }
-    if (!force && now < pipelineHealthRetryAfter) {
-      if (cached) {
-        return {
-          ...cached.value,
-          snapshot: {
-            status: "stale-timeout",
-            asOf: new Date(cached.computedAt).toISOString(),
-            retryAfter: new Date(pipelineHealthRetryAfter).toISOString(),
-          },
-        };
-      }
-      throw new Error(
-        `Exact pipeline counts are in timeout backoff until ${
-          new Date(pipelineHealthRetryAfter).toISOString()
-        }${pipelineHealthLastError ? `: ${pipelineHealthLastError}` : ""}`,
-      );
-    }
-    if (pipelineHealthInFlight) return await pipelineHealthInFlight;
+    return {
+      checkedAt: null,
+      services: await getExternalServicesHealth(false),
+      backlogs: {
+        summarization: {
+          ready: null,
+          readyStatus: "unavailable",
+          failedJobsUnretried: 0,
+        },
+        tagger: {
+          ready: null,
+          readyStatus: "unavailable",
+          failedJobsUnretried: 0,
+        },
+        entity_typing: {
+          ready: null,
+          readyStatus: "unavailable",
+          readyWarning:
+            "Prepare the object-list catalog before calculating this metric.",
+          failedJobsUnretried: 0,
+        },
+      },
+      recovery: {
+        startupChecks: true,
+        periodicRetrySeconds: 300,
+        note: "No persisted exact backlog snapshot exists yet.",
+      },
+      transcriptionRuntime: {
+        configuredBatchSize: env.TRANSCRIPTION_BATCH_SIZE,
+        configuredTimeoutMinutes: getJobTimeoutMinutes("transcription", {
+          batchSize: env.TRANSCRIPTION_BATCH_SIZE,
+        }),
+        activeBatch: null,
+        recentBatches: [],
+      },
+      snapshot: serializeDashboardSnapshot(snapshot),
+    };
+  }
 
-    pipelineHealthInFlight = this.computePipelineHealth(input, auth)
-      .then((value) => {
-        const computedAt = Date.now();
-        const hasPartialTimeout = Object.values(value.backlogs).some(
-          (backlog: any) => backlog?.readyStatus === "timeout",
+  private async refreshExactBacklog(auth: Auth) {
+    const operationId = new ObjectId().toString();
+    const mongo = await getMongoResource(auth);
+    const lease = await beginDashboardRefresh(
+      mongo,
+      EXACT_BACKLOG_SNAPSHOT_ID,
+      operationId,
+    );
+    if (!lease) {
+      const current = await readDashboardSnapshot(
+        mongo,
+        EXACT_BACKLOG_SNAPSHOT_ID,
+      );
+      return {
+        accepted: false,
+        operationId: current?.operationId,
+        state: "refreshing",
+      };
+    }
+    void this.runExactBacklogRefresh(operationId, auth, lease).catch(
+      (error) => {
+        console.error(
+          `[jobs-dashboard] Exact backlog ${operationId} failed`,
+          error,
         );
-        pipelineHealthCache = { value, computedAt };
-        pipelineHealthRetryAfter = hasPartialTimeout
-          ? computedAt + PIPELINE_HEALTH_TIMEOUT_BACKOFF_MS
-          : 0;
-        pipelineHealthLastError = hasPartialTimeout
-          ? "One or more exact backlog counts exceeded their MongoDB deadline"
-          : null;
-        return {
-          ...value,
-          snapshot: {
-            status: hasPartialTimeout ? "partial-timeout" : "fresh",
-            asOf: new Date(computedAt).toISOString(),
-            ...(hasPartialTimeout
-              ? {
-                retryAfter: new Date(pipelineHealthRetryAfter).toISOString(),
-                warning:
-                  "Some exact counts timed out; the available counts are shown and timed-out cards are marked explicitly.",
-              }
-              : {}),
-          },
-        };
-      })
-      .catch((error) => {
-        if (!isMongoDeadlineError(error)) throw error;
-        pipelineHealthRetryAfter = Date.now() +
-          PIPELINE_HEALTH_TIMEOUT_BACKOFF_MS;
-        pipelineHealthLastError = String(error);
-        if (!pipelineHealthCache) throw error;
-        return {
-          ...pipelineHealthCache.value,
-          snapshot: {
-            status: "stale-timeout",
-            asOf: new Date(pipelineHealthCache.computedAt).toISOString(),
-            retryAfter: new Date(pipelineHealthRetryAfter).toISOString(),
-            warning:
-              "Exact pipeline counts timed out; serving the previous snapshot until the retry backoff expires.",
-          },
-        };
-      })
-      .finally(() => {
-        pipelineHealthInFlight = null;
-      });
-    return await pipelineHealthInFlight;
+      },
+    );
+    return { accepted: true, operationId, state: "refreshing" };
+  }
+
+  private async runExactBacklogRefresh(
+    operationId: string,
+    auth: Auth,
+    acquiredLease?: Record<string, any>,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const lease = acquiredLease ?? await beginDashboardRefresh(
+      mongo,
+      EXACT_BACKLOG_SNAPSHOT_ID,
+      operationId,
+    );
+    if (!lease) return { accepted: false, reason: "already_refreshing" };
+    try {
+      const previous = lease.data as Record<string, any> | undefined;
+      const next = await this.computePipelineHealth({
+        action: "pipeline_health",
+        force: true,
+      }, auth);
+      // A timed-out metric retains its last successful value while being
+      // marked stale; other metrics commit normally.
+      for (const [type, backlog] of Object.entries(next.backlogs)) {
+        const prior = previous?.backlogs?.[type];
+        const status = (backlog as any)?.readyStatus;
+        if (status === "exact") {
+          (backlog as any).readyAsOf = next.checkedAt;
+        } else if (status && prior?.ready != null) {
+          (backlog as any).ready = prior.ready;
+          (backlog as any).readyStatus = `stale-${status}`;
+          (backlog as any).readyAsOf = prior.readyAsOf ?? lease.asOf;
+          (backlog as any).readyError = (backlog as any).readyWarning;
+        }
+      }
+      await completeDashboardRefresh(
+        mongo,
+        EXACT_BACKLOG_SNAPSHOT_ID,
+        operationId,
+        next,
+      );
+      return { accepted: true };
+    } catch (error) {
+      await failDashboardRefresh(
+        mongo,
+        EXACT_BACKLOG_SNAPSHOT_ID,
+        operationId,
+        error,
+      );
+      throw error;
+    }
   }
 
   private async computePipelineHealth(
@@ -1901,21 +2033,33 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         }),
       5,
     );
-    const untypedObjects = await runExactCount(
-      () =>
-        mongo({
-          action: "count",
-          collection: "objects",
-          query: buildUntypedScanFilters(false),
-          options: {
-            // Without a hint MongoDB spends seconds evaluating and then picks
-            // the unrelated conversation time-range index on the live corpus.
-            hint: "_id_",
-            maxTimeMS: 15_000,
-          },
-        }),
-      15,
-    );
+    const objectCatalogState = await mongo({
+      action: "findOne",
+      collection: "object_list_state",
+      query: { _id: "catalog" },
+      options: { projection: { schemaVersion: 1, entityTypingReady: 1 } },
+    });
+    const untypedObjects = objectCatalogState?.schemaVersion >= 2 &&
+        objectCatalogState?.entityTypingReady === true
+      ? await runExactCount(
+        () =>
+          mongo({
+            action: "count",
+            collection: "objects",
+            query: { _entityTypingPending: true },
+            options: {
+              hint: "objects_entity_typing_pending_v1",
+              maxTimeMS: 5_000,
+            },
+          }),
+        5,
+      )
+      : {
+        value: null,
+        status: "unavailable" as const,
+        warning:
+          "Object catalog v2 is not ready. Run Object-list catalog backfill to prepare the indexed entity-typing count.",
+      };
 
     const failedCounts = Object.fromEntries(
       (failedByWorker as any[]).map((entry) => [entry._id, entry.count]),
@@ -1980,7 +2124,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         entity_typing: {
           ready: untypedObjects.value,
           readyStatus: untypedObjects.status,
-          ...(untypedObjects.status === "timeout"
+          ...(untypedObjects.status !== "exact"
             ? { readyWarning: untypedObjects.warning }
             : {}),
           failedJobsUnretried: Number(failedCounts.entity_typing ?? 0),
@@ -2237,6 +2381,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     });
     const campaignId = latest?.data?.timelineRebuildCampaignId;
     if (!campaignId) return null;
+    await ensureTimelineCampaignDocument(mongo, campaignId);
+    const durableReport = await syncTimelineCampaign(mongo, campaignId);
 
     const jobs = await mongo({
       action: "find",
@@ -2329,10 +2475,129 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         end: validDate(job.data?.end)?.toISOString() ?? null,
         reason: job.failedReason ?? job.state,
       })),
+      ...(durableReport ?? {}),
     };
   }
 
   private async timelineIntegrityReport(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const [snapshot, campaign] = await Promise.all([
+      readDashboardSnapshot<any>(mongo, TIMELINE_INTEGRITY_SNAPSHOT_ID),
+      this.latestTimelineCampaign(auth),
+    ]);
+    if (snapshot?.data) {
+      return {
+        ...snapshot.data,
+        campaign,
+        snapshot: serializeDashboardSnapshot(snapshot),
+      };
+    }
+    return {
+      checkedAt: null,
+      status: "not_checked",
+      sources: [],
+      histograms: [],
+      bookkeeping: {
+        checked: false,
+        terminalSequences: null,
+        eligibleChunks: null,
+        modifiedChunks: 0,
+        applied: false,
+      },
+      lastBookkeepingRepair: await this.latestTimelineBookkeepingRepair(auth),
+      campaign,
+      issues: [],
+      scope: {
+        verifies: [],
+        note: "No persisted Timeline integrity snapshot exists yet.",
+      },
+      performance: { totalMs: 0, stages: {} },
+      snapshot: serializeDashboardSnapshot(snapshot),
+    };
+  }
+
+  private async refreshTimelineIntegrity(auth: Auth) {
+    const operationId = new ObjectId().toString();
+    const mongo = await getMongoResource(auth);
+    const lease = await beginDashboardRefresh(
+      mongo,
+      TIMELINE_INTEGRITY_SNAPSHOT_ID,
+      operationId,
+    );
+    if (!lease) {
+      const current = await readDashboardSnapshot(
+        mongo,
+        TIMELINE_INTEGRITY_SNAPSHOT_ID,
+      );
+      return {
+        accepted: false,
+        operationId: current?.operationId,
+        state: "refreshing",
+      };
+    }
+    void this.runTimelineIntegrityRefresh(operationId, auth, lease).catch(
+      (error) => {
+        console.error(
+          `[jobs-dashboard] Timeline integrity ${operationId} failed`,
+          error,
+        );
+      },
+    );
+    return { accepted: true, operationId, state: "refreshing" };
+  }
+
+  private async runTimelineIntegrityRefresh(
+    operationId: string,
+    auth: Auth,
+    acquiredLease?: Record<string, any>,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const lease = acquiredLease ?? await beginDashboardRefresh(
+      mongo,
+      TIMELINE_INTEGRITY_SNAPSHOT_ID,
+      operationId,
+    );
+    if (!lease) return { accepted: false, reason: "already_refreshing" };
+    try {
+      const report = await this.computeTimelineIntegrityReport(auth);
+      await completeDashboardRefresh(
+        mongo,
+        TIMELINE_INTEGRITY_SNAPSHOT_ID,
+        operationId,
+        report,
+      );
+      if (
+        report.status === "healthy" &&
+        report.campaign?.status === "verifying"
+      ) {
+        await mongo({
+          action: "updateOne",
+          collection: TIMELINE_REBUILD_CAMPAIGNS,
+          query: { _id: report.campaign.campaignId },
+          update: {
+            $set: {
+              status: "completed",
+              autoRecover: false,
+              completedAt: new Date(),
+              blockingReason: null,
+            },
+          },
+          options: { touchUpdatedAt: false },
+        });
+      }
+      return { accepted: true };
+    } catch (error) {
+      await failDashboardRefresh(
+        mongo,
+        TIMELINE_INTEGRITY_SNAPSHOT_ID,
+        operationId,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  private async computeTimelineIntegrityReport(auth: Auth) {
     const mongo = await getMongoResource(auth);
     const auditStartedAt = performance.now();
     const stageMs: Record<string, number> = {};
@@ -2373,9 +2638,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
                   transcriptions: {
                     $sum: { $ifNull: ["$totals.transcriptions.count", 0] },
                   },
-                  diarizations: {
-                    $sum: { $ifNull: ["$totals.diarizations.count", 0] },
-                  },
                 },
               }],
               options: { maxTimeMS: 60_000 },
@@ -2390,7 +2652,6 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
               totals: {
                 audio_chunks: Number(row.audio_chunks ?? 0),
                 transcriptions: Number(row.transcriptions ?? 0),
-                diarizations: Number(row.diarizations ?? 0),
               },
             };
           })),
@@ -2425,6 +2686,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       severity: "warning" | "error";
       code: string;
       message: string;
+      action: "full_rebuild" | "stale_only" | "resume_campaign";
+      actionLabel: string;
     }> = [];
     for (const source of sourcesWithHistogram) {
       if (source.difference !== 0) {
@@ -2433,6 +2696,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           code: `histogram_count_${source.collection}`,
           message:
             `${source.label}: daily histogram differs from raw documents by ${source.difference}.`,
+          action: "full_rebuild",
+          actionLabel: "Rebuild Timeline density",
         });
       }
     }
@@ -2442,14 +2707,24 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         severity: "warning",
         code: "stale_histogram_buckets",
         message: `${staleBuckets} histogram bucket(s) are still marked stale.`,
+        action: "stale_only",
+        actionLabel: "Update stale ranges",
       });
     }
-    if (campaign?.status === "completed_with_errors") {
+    if (
+      campaign && (campaign.status === "completed_with_errors" ||
+        campaign.status === "paused_legacy" ||
+        campaign.status === "paused_error" ||
+        (campaign.missingJobs > 0 &&
+          !["queued", "running", "recovering"].includes(campaign.status)))
+    ) {
       issues.push({
         severity: "error",
         code: "timeline_rebuild_campaign_failed",
         message:
           "The latest timeline rebuild campaign has failed, cancelled, or missing jobs.",
+        action: "resume_campaign",
+        actionLabel: `Resume from batch ${(campaign.nextBatchIndex ?? 0) + 1}`,
       });
     }
 
@@ -2464,7 +2739,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       issues,
       scope: {
         verifies: [
-          "raw source ranges and document counts",
+          "raw audio/transcription ranges and document counts",
           "stored histogram totals at every resolution",
           "stale histogram flags",
           "terminal transcription bookkeeping when Preview repair is run",
@@ -2559,24 +2834,76 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const campaignId = new ObjectId().toString();
     const createdAt = new Date();
     const firstBatch = batches[0];
-    const job = await enqueueJob({
-      type: "histRecalculation",
-      start: firstBatch.start,
-      end: firstBatch.end,
-      staleOnly: false,
-      markStale: false,
-      timelineRebuildCampaignId: campaignId,
-      timelineRebuildBatchIndex: 0,
-      timelineRebuildBatchCount: batches.length,
-      timelineRebuildCreatedAt: createdAt,
-      timelineRebuildEnd: end,
-      timelineRebuildBatchDays: input.batchDays,
-    }, {
-      trigger: {
-        type: "manual",
-        reason: `timeline_rebuild:${campaignId}`,
+    await mongo({
+      action: "insertOne",
+      collection: TIMELINE_REBUILD_CAMPAIGNS,
+      doc: {
+        _id: campaignId,
+        status: "queued",
+        autoRecover: true,
+        legacy: false,
+        plannedJobs: batches.length,
+        queuedJobs: 0,
+        missingJobs: batches.length,
+        batchDays: input.batchDays,
+        start,
+        end,
+        createdAt,
+        lastActivityAt: createdAt,
       },
-    }, await getServerAuth());
+    });
+    let job;
+    try {
+      job = await enqueueJob({
+        type: "histRecalculation",
+        start: firstBatch.start,
+        end: firstBatch.end,
+        staleOnly: false,
+        markStale: false,
+        timelineRebuildCampaignId: campaignId,
+        timelineRebuildBatchIndex: 0,
+        timelineRebuildBatchCount: batches.length,
+        timelineRebuildCreatedAt: createdAt,
+        timelineRebuildEnd: end,
+        timelineRebuildBatchDays: input.batchDays,
+      }, {
+        trigger: {
+          type: "manual",
+          reason: `timeline_rebuild:${campaignId}`,
+        },
+      }, await getServerAuth());
+      await mongo({
+        action: "updateOne",
+        collection: TIMELINE_REBUILD_CAMPAIGNS,
+        query: { _id: campaignId },
+        update: {
+          $set: {
+            queuedJobs: 1,
+            missingJobs: batches.length - 1,
+            activeJobId: job.id,
+            lastActivityAt: new Date(),
+          },
+        },
+        options: { touchUpdatedAt: false },
+      });
+    } catch (error) {
+      await mongo({
+        action: "updateOne",
+        collection: TIMELINE_REBUILD_CAMPAIGNS,
+        query: { _id: campaignId },
+        update: {
+          $set: {
+            status: "paused_error",
+            autoRecover: false,
+            blockingReason: error instanceof Error
+              ? error.message
+              : String(error),
+          },
+        },
+        options: { touchUpdatedAt: false },
+      });
+      throw error;
+    }
 
     return {
       success: true,
@@ -2591,6 +2918,53 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       lastJobId: job.id,
       createdAt: createdAt.toISOString(),
     };
+  }
+
+  private async getTimelineRebuildStatus(
+    input: z.infer<typeof GetTimelineRebuildStatusSchema>,
+    auth: Auth,
+  ) {
+    if (input.campaignId) {
+      const mongo = await getMongoResource(auth);
+      await ensureTimelineCampaignDocument(mongo, input.campaignId);
+      return await syncTimelineCampaign(mongo, input.campaignId);
+    }
+    return await this.latestTimelineCampaign(auth);
+  }
+
+  private async pauseTimelineRebuild(
+    input: z.infer<typeof PauseTimelineRebuildSchema>,
+    auth: Auth,
+  ) {
+    const mongo = await getMongoResource(auth);
+    const campaign = await ensureTimelineCampaignDocument(
+      mongo,
+      input.campaignId,
+    );
+    if (!campaign) throw new Error(`Unknown campaign ${input.campaignId}`);
+    await mongo({
+      action: "updateOne",
+      collection: TIMELINE_REBUILD_CAMPAIGNS,
+      query: { _id: input.campaignId },
+      update: {
+        $set: {
+          status: "paused",
+          autoRecover: false,
+          pausedAt: new Date(),
+          blockingReason: "Paused by operator.",
+        },
+      },
+      options: { touchUpdatedAt: false },
+    });
+    return await syncTimelineCampaign(mongo, input.campaignId);
+  }
+
+  private async resumeTimelineRebuild(
+    input: z.infer<typeof ResumeTimelineRebuildSchema>,
+  ) {
+    return await reconcileTimelineCampaign(input.campaignId, {
+      manualResume: true,
+    });
   }
 
   private async resetWorker(
@@ -2969,6 +3343,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         "data.routingContext.providerProfileId": input.providerProfileId,
       }
       : {};
+    const campaignQuery = input.campaignId
+      ? { "data.timelineRebuildCampaignId": input.campaignId }
+      : {};
 
     const jobs = await mongo({
       action: "find",
@@ -2977,8 +3354,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         type: { $in: types },
         state: { $in: queryStatuses },
         dismissedAt: { $exists: false },
+        archivedAt: { $exists: false },
         ...viewQuery,
         ...providerQuery,
+        ...campaignQuery,
       },
       options: {
         sort: { createdAt: -1 },
@@ -3249,15 +3628,81 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const config = await configResource({ action: "get" }) as any;
     const mongo = await getMongoResource(auth);
     const staleCutoff = new Date(Date.now() - STALE_JOB_AGE_MS);
-    const liveJobs = await mongo({
+    const liveCounts = await mongo({
+      action: "aggregate",
+      collection: "jobs",
+      pipeline: [
+        {
+          $match: {
+            type: { $in: types },
+            state: { $in: ["active", "waiting", "delayed"] },
+          },
+        },
+        {
+          $group: {
+            _id: "$type",
+            active: {
+              $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] },
+            },
+            waiting: {
+              $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] },
+            },
+            delayed: {
+              $sum: { $cond: [{ $eq: ["$state", "delayed"] }, 1, 0] },
+            },
+            staleActive: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$state", "active"] },
+                      {
+                        $lte: [
+                          {
+                            $ifNull: [
+                              "$updatedAt",
+                              { $ifNull: ["$startedAt", "$createdAt"] },
+                            ],
+                          },
+                          staleCutoff,
+                        ],
+                      },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ],
+      options: { maxTimeMS: 3_000 },
+    }) as any[];
+    const liveByType = new Map(
+      liveCounts.map((row: any) => [String(row._id), row]),
+    );
+    const staleJobs = await mongo({
       action: "find",
       collection: "jobs",
       query: {
         type: { $in: types },
-        state: { $in: ["active", "waiting", "delayed"] },
+        state: "active",
+        $or: [
+          { updatedAt: { $lte: staleCutoff } },
+          {
+            updatedAt: { $exists: false },
+            startedAt: { $lte: staleCutoff },
+          },
+          {
+            updatedAt: { $exists: false },
+            startedAt: { $exists: false },
+            createdAt: { $lte: staleCutoff },
+          },
+        ],
       },
       options: {
-        limit: 5000,
+        limit: 100,
         projection: {
           type: 1,
           state: 1,
@@ -3289,11 +3734,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
 
     const status: Record<string, any> = {};
     for (const workerType of types) {
-      const workerJobs = liveJobs.filter((job) => job.type === workerType);
-      const staleJobs = workerJobs.filter((job) =>
-        job.state === "active" &&
-        new Date(job.updatedAt ?? job.startedAt ?? job.createdAt).getTime() <=
-          staleCutoff.getTime()
+      const counts = liveByType.get(workerType) ?? {};
+      const workerStaleJobs = staleJobs.filter((job) =>
+        job.type === workerType
       );
       const runtime = getWorkerRuntimeStatus(workerType);
       const defaultTriggerIntervalSeconds = jobRegistry.list().find((entry) =>
@@ -3311,12 +3754,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           config?.workers?.[workerType]?.triggerIntervalSeconds ??
             defaultTriggerIntervalSeconds,
         running: runtime.running,
-        active: workerJobs.filter((job) => job.state === "active").length,
-        waiting: workerJobs.filter((job) => job.state === "waiting").length,
-        delayed: workerJobs.filter((job) => job.state === "delayed").length,
-        staleActive: staleJobs.length,
+        active: Number(counts.active ?? 0),
+        waiting: Number(counts.waiting ?? 0),
+        delayed: Number(counts.delayed ?? 0),
+        staleActive: Number(counts.staleActive ?? 0),
         staleClaims: workerType === "summarization" ? staleClaims : 0,
-        staleJobs: staleJobs.map((job) => ({
+        staleJobs: workerStaleJobs.map((job) => ({
           id: job._id.toString(),
           createdAt: job.createdAt,
           startedAt: job.startedAt,
@@ -3372,207 +3815,207 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     };
   }
 
-  private async stats(auth: Auth) {
+  private async getJobsDashboard(auth: Auth) {
     const mongo = await getMongoResource(auth);
-    const staleCutoff = new Date(Date.now() - 15 * 60 * 1000);
-    // TODO: worker specific logic should belong to the worker file
-
-    // This is a manual dashboard snapshot. Derive per-state and per-type totals
-    // in one corpus pass instead of the former two full collection scans.
-    const pipeline = [
-      { $match: { dismissedAt: { $exists: false } } },
-      {
-        $set: {
-          _statsCompletedAt: {
-            $cond: [
-              { $eq: ["$state", "completed"] },
-              { $toLong: "$createdAt" },
-              null,
-            ],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: "$type",
-          totalRuns: { $sum: 1 },
-          active: {
-            $sum: { $cond: [{ $eq: ["$state", "active"] }, 1, 0] },
-          },
-          staleActive: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ["$state", "active"] },
-                    { $lte: ["$startedAt", staleCutoff] },
-                  ],
-                },
-                1,
-                0,
-              ],
-            },
-          },
-          waiting: {
-            $sum: { $cond: [{ $eq: ["$state", "waiting"] }, 1, 0] },
-          },
-          delayed: {
-            $sum: { $cond: [{ $eq: ["$state", "delayed"] }, 1, 0] },
-          },
-          completed: {
-            $sum: { $cond: [{ $eq: ["$state", "completed"] }, 1, 0] },
-          },
-          failed: {
-            $sum: { $cond: [{ $eq: ["$state", "failed"] }, 1, 0] },
-          },
-          cancelled: {
-            $sum: { $cond: [{ $eq: ["$state", "cancelled"] }, 1, 0] },
-          },
-          // Calculate empty jobs based on result fields
-          emptyRuns: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ["$state", "completed"] },
-                    IDLE_JOB_RESULT_EXPRESSION,
-                  ],
-                },
-                1,
-                0,
-              ],
-            },
-          },
-          idleAutoRuns: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ["$state", "completed"] },
-                    { $eq: ["$trigger.type", "auto"] },
-                    IDLE_JOB_RESULT_EXPRESSION,
-                  ],
-                },
-                1,
-                0,
-              ],
-            },
-          },
-          recentTimestamps: {
-            $topN: {
-              n: 20,
-              sortBy: { _statsCompletedAt: -1 },
-              output: "$_statsCompletedAt",
-            },
-          },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          type: "$_id",
-          totalRuns: 1,
-          active: 1,
-          waiting: 1,
-          delayed: 1,
-          completed: 1,
-          failed: 1,
-          cancelled: 1,
-          emptyRuns: 1,
-          idleAutoRuns: 1,
-          successRate: {
-            $cond: [
-              { $eq: ["$totalRuns", 0] },
-              0,
-              { $multiply: [{ $divide: ["$completed", "$totalRuns"] }, 100] },
-            ],
-          },
-          recentTimestamps: {
-            $filter: {
-              input: "$recentTimestamps",
-              as: "ts",
-              cond: { $ne: ["$$ts", null] },
-            },
-          },
-        },
-      },
-    ];
-
-    const stats = await mongo({
-      action: "aggregate",
-      collection: "jobs",
-      pipeline,
-      options: { maxTimeMS: 10_000 },
-    });
-
-    const byStatus: Record<string, number> = {
-      active: 0,
-      waiting: 0,
-      completed: 0,
-      failed: 0,
-      delayed: 0,
-      cancelled: 0,
-    };
-    let total = 0;
-    for (const stat of stats) {
-      total += Number(stat.totalRuns ?? 0);
-      for (const state of Object.keys(byStatus)) {
-        byStatus[state] += Number(stat[state] ?? 0);
+    const registeredTypes = jobRegistry.getJobTypes();
+    let pythonCapabilities: string[] | null = null;
+    let pythonCapabilitiesError: string | null = null;
+    try {
+      const response = await fetch(`${env.PYTHON_WORKER_URL}/capabilities`, {
+        signal: AbortSignal.timeout(1_500),
+      });
+      if (!response.ok) {
+        throw new Error(`Python capabilities returned HTTP ${response.status}`);
       }
+      const payload = await response.json() as { jobs?: unknown };
+      if (!Array.isArray(payload.jobs)) {
+        throw new Error("Python capabilities did not return a jobs array");
+      }
+      pythonCapabilities = payload.jobs.filter((item): item is string =>
+        typeof item === "string"
+      );
+    } catch (error) {
+      pythonCapabilitiesError = error instanceof Error
+        ? error.message
+        : String(error);
+    }
+    let catalog = buildWorkerCatalog(registeredTypes, { pythonCapabilities });
+    let catalogState: "ready" | "starting" | "stale" = registeredTypes.length
+      ? pythonCapabilitiesError ? "stale" : "ready"
+      : "starting";
+    const existingCatalog = await readDashboardSnapshot<any[]>(
+      mongo,
+      WORKER_CATALOG_SNAPSHOT_ID,
+    );
+    let catalogAsOf = existingCatalog?.asOf;
+
+    if (registeredTypes.length > 0 && !pythonCapabilitiesError) {
+      const now = new Date();
+      catalogAsOf = now;
+      await mongo({
+        action: "updateOne",
+        collection: "jobs_dashboard_snapshots",
+        query: { _id: WORKER_CATALOG_SNAPSHOT_ID },
+        update: {
+          $set: {
+            schemaVersion: 1,
+            state: "ready",
+            data: catalog,
+            asOf: now,
+            lastSuccessfulAt: now,
+            lastError: null,
+          },
+          $setOnInsert: { createdAt: now },
+        },
+        options: { upsert: true, touchUpdatedAt: false },
+      });
+    } else if (existingCatalog?.data?.length) {
+      catalog = existingCatalog.data.map((entry: any) => ({
+        ...entry,
+        availability: entry.executionKind === "daemon"
+          ? "daemon-managed"
+          : entry.executionKind === "python-http" && pythonCapabilitiesError
+          ? "degraded"
+          : registeredTypes.length === 0
+          ? "starting"
+          : entry.availability,
+      }));
+      catalogState = "stale";
     }
 
-    // Calculate frequency from timestamps
-    const staleClaims = await mongo({
-      action: "count",
-      collection: "objects",
-      query: {
-        "_summarizationClaim.startedAt": {
-          $lte: staleCutoff.toISOString(),
-        },
-      },
-    }) as number;
-
-    const result = stats.map((stat: any) => {
-      const timestamps = stat.recentTimestamps || [];
-      let avgFrequency = "-";
-
-      if (timestamps.length >= 2) {
-        const sorted = [...timestamps].sort((a: number, b: number) => b - a);
-        let totalGap = 0;
-        for (let i = 0; i < sorted.length - 1; i++) {
-          totalGap += sorted[i] - sorted[i + 1];
-        }
-        const avgMs = totalGap / (sorted.length - 1);
-
-        if (avgMs < 60000) avgFrequency = `~${Math.round(avgMs / 1000)}s`;
-        else if (avgMs < 3600000) {
-          avgFrequency = `~${Math.round(avgMs / 60000)}m`;
-        } else avgFrequency = `~${(avgMs / 3600000).toFixed(1)}h`;
-      }
-
-      return {
-        type: stat.type,
-        totalRuns: stat.totalRuns ?? 0,
-        active: stat.active ?? 0,
-        staleActive: stat.staleActive ?? 0,
-        staleClaims: stat.type === "summarization" ? staleClaims : 0,
-        waiting: stat.waiting ?? 0,
-        delayed: stat.delayed ?? 0,
-        completed: stat.completed ?? 0,
-        failed: stat.failed ?? 0,
-        emptyRuns: stat.emptyRuns ?? 0,
-        idleAutoRuns: stat.idleAutoRuns ?? 0,
-        successRate: stat.successRate ?? 0,
-        avgFrequency,
-      };
-    });
+    const [runHistory, exactBacklog, timelineIntegrity, runtime] = await Promise
+      .all([
+        readDashboardSnapshot(mongo, RUN_HISTORY_SNAPSHOT_ID),
+        readDashboardSnapshot(mongo, EXACT_BACKLOG_SNAPSHOT_ID),
+        readDashboardSnapshot(mongo, TIMELINE_INTEGRITY_SNAPSHOT_ID),
+        this.getWorkerStatus(auth).catch((error) => {
+          console.warn(
+            "[jobs-dashboard] Live runtime status unavailable",
+            error,
+          );
+          return {
+            checkedAt: new Date().toISOString(),
+            state: "stale",
+            lastError: error instanceof Error ? error.message : String(error),
+            workers: {},
+          };
+        }),
+      ]);
 
     return {
-      stats: result,
-      totals: {
-        ...byStatus,
-        total,
+      checkedAt: new Date().toISOString(),
+      catalog: {
+        state: catalogState,
+        asOf: catalogAsOf ? new Date(catalogAsOf).toISOString() : undefined,
+        workers: catalog,
+        schemas: registeredTypes.length ? jobRegistry.getJobSchemas() : {},
+        ...(pythonCapabilitiesError
+          ? { lastError: pythonCapabilitiesError }
+          : {}),
       },
+      runtime,
+      snapshots: {
+        runHistory: serializeDashboardSnapshot(runHistory),
+        exactBacklog: serializeDashboardSnapshot(exactBacklog),
+        timelineIntegrity: serializeDashboardSnapshot(timelineIntegrity),
+      },
+    };
+  }
+
+  private async refreshRunHistory(auth: Auth) {
+    const operationId = new ObjectId().toString();
+    const mongo = await getMongoResource(auth);
+    const lease = await beginDashboardRefresh(
+      mongo,
+      RUN_HISTORY_SNAPSHOT_ID,
+      operationId,
+    );
+    if (!lease) {
+      const current = await readDashboardSnapshot(
+        mongo,
+        RUN_HISTORY_SNAPSHOT_ID,
+      );
+      return {
+        accepted: false,
+        operationId: current?.operationId,
+        state: "refreshing",
+      };
+    }
+    void refreshRunHistorySnapshot(mongo, operationId, lease).catch((error) => {
+      console.error(
+        `[jobs-dashboard] Run history ${operationId} failed`,
+        error,
+      );
+    });
+    return { accepted: true, operationId, state: "refreshing" };
+  }
+
+  private async stats(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const snapshot = await readDashboardSnapshot<any>(
+      mongo,
+      RUN_HISTORY_SNAPSHOT_ID,
+    );
+    const history = snapshot?.data ?? {
+      stats: [],
+      totals: {
+        active: 0,
+        waiting: 0,
+        completed: 0,
+        failed: 0,
+        delayed: 0,
+        cancelled: 0,
+        total: 0,
+      },
+    };
+    const live = await mongo({
+      action: "aggregate",
+      collection: "jobs",
+      pipeline: [
+        { $match: { state: { $in: ["active", "waiting", "delayed"] } } },
+        {
+          $group: {
+            _id: { type: "$type", state: "$state" },
+            count: { $sum: 1 },
+          },
+        },
+      ],
+      options: { maxTimeMS: 3_000 },
+    }) as any[];
+    const byType = new Map<string, Record<string, any>>(
+      (history.stats ?? []).map((row: any) => [row.type, { ...row }]),
+    );
+    const totals = { ...history.totals };
+    for (const row of live) {
+      const type = row._id.type;
+      const state = row._id.state as "active" | "waiting" | "delayed";
+      const current = byType.get(type) ?? {
+        type,
+        totalRuns: 0,
+        terminalRuns: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+        emptyRuns: 0,
+        idleAutoRuns: 0,
+        successRate: 0,
+        avgFrequency: "-",
+        staleActive: 0,
+        staleClaims: 0,
+        active: 0,
+        waiting: 0,
+        delayed: 0,
+      };
+      current[state] = Number(row.count ?? 0);
+      current.totalRuns += Number(row.count ?? 0);
+      byType.set(type, current);
+      totals[state] = Number(row.count ?? 0) + Number(totals[state] ?? 0);
+      totals.total += Number(row.count ?? 0);
+    }
+    return {
+      stats: [...byType.values()],
+      totals,
+      snapshot: serializeDashboardSnapshot(snapshot),
     };
   }
 

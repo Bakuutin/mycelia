@@ -23,6 +23,7 @@ import {
   applySummarizationDefaults,
   type SummarizationDefaults,
 } from "./summarization-defaults.ts";
+import { sanitizeEnqueueData } from "./enqueue-data.ts";
 import { TranscriptionResource } from "@/lib/transcription/resource.server.ts";
 import { selectTranscriptionProvider } from "@/lib/transcription/provider-routing.ts";
 import {
@@ -48,7 +49,6 @@ const queueEvents = new Map<string, QueueEvents>();
 
 const LLM_ROUTED_JOB_TYPES = new Set([
   "summarization",
-  "conversation_chunk_creator",
   "conversation_extractor_merged",
   "tagger",
   "entity_typing",
@@ -303,6 +303,13 @@ async function addQueueJobWithReconciliation(input: {
     return await input.queue.add(input.jobData.type, input.jobData, {
       priority: input.priority,
       jobId: input.jobId,
+      ...(input.jobData.type === "histRecalculation" &&
+          input.jobData.timelineRebuildCampaignId
+        ? {
+          attempts: 5,
+          backoff: { type: "exponential", delay: 30_000 },
+        }
+        : {}),
     });
   } catch (addError) {
     let existing: Job<JobData> | undefined;
@@ -720,8 +727,11 @@ export async function enqueueJob(
       }
     }
   }
+  mergedData = sanitizeEnqueueData(mergedData);
 
-  if (!mergedData.routingContext) {
+  const needsPrimaryRouting = data.type === "transcription" ||
+    LLM_ROUTED_JOB_TYPES.has(data.type);
+  if (!mergedData.routingContext && needsPrimaryRouting) {
     try {
       const configResource = await getConfigResource(auth);
       const config = await configResource({ action: "get" }) as any;
@@ -846,19 +856,9 @@ export async function enqueueJob(
       }
       mergedData.routingContext = routingContext;
     } catch (error) {
-      // STT jobs require a concrete provider reservation. Preserve the real
-      // health/slot error so TriggerManager can schedule a health retry instead
-      // of replacing it with a misleading missing-snapshot error.
-      if (
-        data.type === "transcription" || LLM_ROUTED_JOB_TYPES.has(data.type)
-      ) {
-        throw error;
-      }
-      console.warn(
-        `[queue] Could not snapshot routing context for ${data.type}:`,
-        error,
-      );
-      mergedData.routingContext = { resolvedAt: new Date().toISOString() };
+      // Routed jobs require a concrete provider reservation. Preserve the real
+      // health/slot error so TriggerManager can schedule a health retry.
+      throw error;
     }
   }
 

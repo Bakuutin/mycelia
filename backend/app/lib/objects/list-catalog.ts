@@ -1,12 +1,13 @@
 import { ObjectId } from "bson";
 import {
+  deriveEntityTypingPending,
   deriveObjectListCategories,
   OBJECT_LIST_CATEGORIES,
   OBJECT_LIST_TYPE_FLAGS,
 } from "./list-categories.ts";
 
 const CATALOG_STATE_ID = "catalog";
-const CATALOG_SCHEMA_VERSION = 1;
+const CATALOG_SCHEMA_VERSION = 2;
 const CATALOG_MAX_TIME_MS = 8_000;
 
 type MongoCall = (input: any) => Promise<any>;
@@ -173,6 +174,9 @@ export async function repairObjectListCatalog(
     options: {
       projection: {
         _listCategories: 1,
+        _entityTypingPending: 1,
+        name: 1,
+        metadata: 1,
         ...Object.fromEntries(
           OBJECT_LIST_TYPE_FLAGS.map(([flag]) => [flag, 1]),
         ),
@@ -185,10 +189,19 @@ export async function repairObjectListCatalog(
   });
   const operations = rows.flatMap((row: Record<string, any>) => {
     const expected = deriveObjectListCategories(row);
-    return sameStrings(row._listCategories, expected) ? [] : [{
+    const entityTypingPending = deriveEntityTypingPending(row);
+    return sameStrings(row._listCategories, expected) &&
+        row._entityTypingPending === entityTypingPending
+      ? []
+      : [{
       updateOne: {
         filter: { _id: row._id },
-        update: { $set: { _listCategories: expected } },
+        update: {
+          $set: {
+            _listCategories: expected,
+            _entityTypingPending: entityTypingPending,
+          },
+        },
       },
     }];
   });
@@ -211,6 +224,7 @@ export async function repairObjectListCatalog(
         $set: {
           schemaVersion: CATALOG_SCHEMA_VERSION,
           ready: false,
+          entityTypingReady: false,
           lastBackfilledId: lastId,
           backfilledAt: new Date(),
         },
@@ -235,6 +249,7 @@ export async function repairObjectListCatalog(
       $set: {
         schemaVersion: CATALOG_SCHEMA_VERSION,
         ready: validation.valid,
+        entityTypingReady: validation.valid,
         lastBackfilledId: validation.valid ? lastId : null,
         validatedAt: new Date(),
         validation,

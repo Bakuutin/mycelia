@@ -135,7 +135,15 @@ Deno.test(
       name: "fixture",
     });
 
-    const response = await admin.getResource("jobs")({ action: "stats" });
+    const jobs = admin.getResource("jobs");
+    await jobs({ action: "refresh_run_history" });
+    let response = await jobs({ action: "stats" });
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (response.snapshot?.state === "ready") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      response = await jobs({ action: "stats" });
+    }
+    expect(response.snapshot?.state).toBe("ready");
     const creator = response.stats.find((row: any) =>
       row.type === "transcription_sequence_creator"
     );

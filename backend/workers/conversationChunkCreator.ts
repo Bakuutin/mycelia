@@ -377,7 +377,6 @@ async function findOrCreateOpenChunk(
   mongo: MongoFn,
   originalId: ObjectId | undefined,
   policyVersion: string,
-  model: string,
 ): Promise<OpenChunk> {
   // Find existing open chunk for this recording
   const query: any = { state: "open" };
@@ -406,7 +405,7 @@ async function findOrCreateOpenChunk(
       lastActivityAt: now,
       createdAt: now,
       policyVersion,
-      params: { model, force: false },
+      params: { force: false },
     };
     if (originalId) {
       doc.original_id = originalId;
@@ -508,7 +507,6 @@ async function createBackfillChunk(
   chunk: PendingChunk,
   params: {
     policyVersion: string;
-    model: string;
     jobId?: string;
   },
 ): Promise<ObjectId> {
@@ -554,10 +552,7 @@ async function createBackfillChunk(
     totalTextLength: chunk.totalTextLength,
     state: "ready" as ChunkState,
     mode: "backfill" as ChunkMode,
-    params: {
-      model: params.model,
-      force: false,
-    },
+    params: { force: false },
     createdAt: new Date(),
     createdByJobId: params.jobId,
   };
@@ -629,7 +624,6 @@ async function processStreamingTranscriptions(
   gapThresholds: { sparse: number; normal: number; dense: number },
   charThresholds: { sparseMax: number; normalMax: number },
   policyVersion: string,
-  model: string,
 ): Promise<{ streamed: number; chunksFinalized: number }> {
   const transcriptions = await findRecentUnassignedTranscriptions(mongo);
   let streamed = 0;
@@ -667,7 +661,6 @@ async function processStreamingTranscriptions(
       mongo,
       originalId,
       policyVersion,
-      model,
     );
     console.log(
       `[ChunkCreator] Open chunk for ${originalKey}: id=${openChunk._id}, transcriptions=${openChunk.transcriptionIds.length}, end=${openChunk.end?.toISOString()}`,
@@ -692,7 +685,6 @@ async function processStreamingTranscriptions(
           mongo,
           originalId,
           policyVersion,
-          model,
         );
       }
     }
@@ -725,7 +717,6 @@ async function processStreamingTranscriptions(
             mongo,
             originalId,
             policyVersion,
-            model,
           );
         }
       }
@@ -746,7 +737,6 @@ async function processBackfillBatch(
   gapThresholds: { sparse: number; normal: number; dense: number },
   charThresholds: { sparseMax: number; normalMax: number },
   policyVersion: string,
-  model: string,
   jobId?: string,
 ): Promise<{ backfilled: number; chunksCreated: number }> {
   console.log(`[ChunkCreator] processBackfillBatch starting...`);
@@ -775,7 +765,6 @@ async function processBackfillBatch(
       );
       await createBackfillChunk(mongo, pendingChunk, {
         policyVersion,
-        model,
         jobId,
       });
       chunksCreated++;
@@ -793,7 +782,7 @@ async function processBackfillBatch(
     console.log(
       `[ChunkCreator] Final chunk created with ${final.transcriptionIds.length} transcriptions, textLen=${final.totalTextLength}`,
     );
-    await createBackfillChunk(mongo, final, { policyVersion, model, jobId });
+    await createBackfillChunk(mongo, final, { policyVersion, jobId });
     chunksCreated++;
   } else {
     console.log(
@@ -848,7 +837,6 @@ async function processManualRange(
   gapThresholds: { sparse: number; normal: number; dense: number },
   charThresholds: { sparseMax: number; normalMax: number },
   policyVersion: string,
-  model: string,
   force: boolean,
   maxChunks: number,
   jobId?: string,
@@ -890,7 +878,6 @@ async function processManualRange(
 
         await createBackfillChunk(mongo, chunk, {
           policyVersion,
-          model,
           jobId,
         });
         chunksCreated++;
@@ -921,7 +908,6 @@ async function processManualRange(
         }
         await createBackfillChunk(mongo, chunk, {
           policyVersion,
-          model,
           jobId,
         });
         chunksCreated++;
@@ -971,8 +957,8 @@ const capability: JobCapability = {
     const charThresholds = data.charThresholds ??
       { sparseMax: 500, normalMax: 20000 };
     const policyVersion = data.policyVersion ?? "v1";
-    // Model resolution: job data > BASE_MODEL > "medium" alias
-    const model = data.model ?? Deno.env.get("BASE_MODEL") ?? "medium";
+    // `model` remains accepted for historical job restart compatibility, but
+    // chunk creation performs no inference and intentionally ignores it.
     const mode = data.mode ?? "auto";
     const force = data.force ?? false;
 
@@ -990,7 +976,6 @@ const capability: JobCapability = {
         gapThresholds,
         charThresholds,
         policyVersion,
-        model,
         force,
         data.maxChunks ?? Infinity,
         job.id,
@@ -1036,7 +1021,6 @@ const capability: JobCapability = {
         gapThresholds,
         charThresholds,
         policyVersion,
-        model,
       );
       totalStreamed = streamResult.streamed;
       totalChunksCreated += streamResult.chunksFinalized;
@@ -1062,7 +1046,6 @@ const capability: JobCapability = {
         gapThresholds,
         charThresholds,
         policyVersion,
-        model,
         job.id,
       );
       totalBackfilled = backfillResult.backfilled;

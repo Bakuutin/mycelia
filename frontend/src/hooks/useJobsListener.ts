@@ -79,6 +79,7 @@ interface UseJobsListenerOptions {
   statuses?: JobListStatus[];
   limit?: number;
   providerProfileId?: string;
+  campaignId?: string;
   refetchInterval?: number | false;
   onJobFinished?: (job: {
     id: string;
@@ -105,6 +106,7 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
     options.providerProfileId
       ? `provider:${options.providerProfileId}`
       : "all-providers",
+    options.campaignId ? `campaign:${options.campaignId}` : "all-campaigns",
     `limit:${options.limit ?? 1000}`,
   ];
 
@@ -120,6 +122,7 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
             statuses: options.statuses,
             limit: options.limit,
             providerProfileId: options.providerProfileId,
+            campaignId: options.campaignId,
           },
         ),
       );

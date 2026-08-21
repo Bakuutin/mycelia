@@ -99,11 +99,11 @@ const MODEL_ROUTES = [
       "Automatic and manual conversation summaries, plus generated titles.",
   },
   {
-    workerType: "conversation_chunk_creator",
+    workerType: "conversation_extractor_merged",
     fallbackWorkerType: "conversation_extractor_merged",
     label: "Conversation extraction",
     description:
-      "Conversation segmentation and metadata extraction use the model stored on each new chunk.",
+      "Conversation extraction resolves the current model when the extractor job is dispatched; chunk creation does not call an LLM.",
   },
   {
     workerType: "tagger",
@@ -488,28 +488,12 @@ const InferenceSettingsPage = () => {
       const taskModel = taskModels[route.workerType]?.trim();
       const fallbackDefaults = updatedDefaults[route.fallbackWorkerType];
 
-      // A conversation chunk snapshots its model when it is created, then the
-      // extractor uses that snapshot later. Persist the effective configured
-      // route on both workers so a newly queued extractor also overrides any
-      // stale model snapshot on an older, still-ready chunk. Aliases stay
-      // aliases so provider failover can re-resolve them per route.
-      // A pin only accompanies an explicit task override; the global default
-      // keeps normal provider failover.
+      // Extraction settings belong only to the extractor. Chunk creation is a
+      // deterministic grouping step and carries no model/provider snapshot.
       const taskProvider = taskModel
         ? taskProviders[route.workerType]?.trim()
         : undefined;
-      if (route.workerType === "conversation_chunk_creator") {
-        const effectiveModel = taskModel || globalAlias;
-        defaults.model = effectiveModel;
-        fallbackDefaults.model = effectiveModel;
-        if (taskProvider) {
-          defaults.providerProfileId = taskProvider;
-          fallbackDefaults.providerProfileId = taskProvider;
-        } else {
-          delete defaults.providerProfileId;
-          delete fallbackDefaults.providerProfileId;
-        }
-      } else if (taskModel) {
+      if (taskModel) {
         defaults.model = taskModel;
         if (taskProvider) {
           defaults.providerProfileId = taskProvider;

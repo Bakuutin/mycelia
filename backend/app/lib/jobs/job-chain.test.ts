@@ -3,6 +3,7 @@ import {
   getContinuationJobData,
   getContinuationPriority,
   shouldContinueJobChain,
+  shouldScheduleGenericContinuation,
 } from "./job-chain.ts";
 
 Deno.test("job chaining continues only after measurable progress", () => {
@@ -65,6 +66,7 @@ Deno.test("timeline rebuild continuation advances the bounded range", () => {
     timelineRebuildBatchIndex: 0,
   };
   expect(getContinuationJobData(data, {
+    cursor: "2026-02-01T00:00:00.000Z",
     nextStart: "2026-02-01T00:00:00.000Z",
     nextEnd: "2026-03-04T00:00:00.000Z",
     timelineRebuildBatchIndex: 1,
@@ -74,6 +76,25 @@ Deno.test("timeline rebuild continuation advances the bounded range", () => {
     end: "2026-03-04T00:00:00.000Z",
     timelineRebuildBatchIndex: 1,
   });
+  expect(getContinuationJobData(data, {
+    cursor: "2026-02-01T00:00:00.000Z",
+    nextStart: "2026-02-01T00:00:00.000Z",
+    nextEnd: "2026-03-04T00:00:00.000Z",
+    timelineRebuildBatchIndex: 1,
+  })).not.toHaveProperty("cursor");
+});
+
+Deno.test("timeline campaign continuation is owned by the durable reconciler", () => {
+  const result = { hasMore: true, processed: 1 };
+  expect(
+    shouldScheduleGenericContinuation({
+      type: "histRecalculation",
+      timelineRebuildCampaignId: "legacy-campaign",
+    }, result),
+  ).toBe(false);
+  expect(
+    shouldScheduleGenericContinuation({ type: "histRecalculation" }, result),
+  ).toBe(true);
 });
 
 Deno.test("diarization continuation adopts the campaign created by the first batch", () => {

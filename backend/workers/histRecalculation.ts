@@ -44,9 +44,6 @@ const TARGET_COLLECTIONS: Record<string, AggregationConfig> = {
       },
     ],
   },
-  diarizations: {
-    count: true,
-  },
   transcriptions: {
     count: true,
   },
@@ -490,6 +487,7 @@ export async function updateAllHistogram(
   auth: Auth,
   start?: Date,
   end?: Date,
+  onResolution?: (resolution: Resolution, index: number) => Promise<void>,
 ): Promise<void> {
   const mongo = await getMongoResource(auth);
 
@@ -553,6 +551,7 @@ export async function updateAllHistogram(
 
   for (let i = 0; i < RESOLUTION_ORDER.length; i++) {
     const resolution = RESOLUTION_ORDER[i];
+    await onResolution?.(resolution, i);
     const progress = Math.round((i / RESOLUTION_ORDER.length) * 100);
 
     console.log(
@@ -775,8 +774,48 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
       // week boundary: otherwise adjacent 31-day jobs would each overwrite a
       // shared daily/weekly bucket using only their side of the boundary.
       const rebuildStart = alignTimelineCampaignStart(start);
+      const batchIndex = jobData.timelineRebuildBatchIndex ?? 0;
+      const batchCount = jobData.timelineRebuildBatchCount ?? 1;
+      const updateCampaignProgress = async (
+        phase: "delete" | Resolution,
+        phaseIndex: number,
+      ) => {
+        const batchPercent = Math.round(phaseIndex / 5 * 100);
+        const overallPercent = Math.min(
+          100,
+          Math.round((batchIndex + phaseIndex / 5) / batchCount * 100),
+        );
+        await job.updateProgress({
+          stage: phase,
+          phase,
+          batchIndex,
+          batchNumber: batchIndex + 1,
+          batchCount,
+          batchPercent,
+          overallPercent,
+          start: start.toISOString(),
+          end: end.toISOString(),
+        });
+      };
+      await updateCampaignProgress("delete", 0);
       await replaceHistogramRange(auth, rebuildStart, end);
-      await updateAllHistogram(auth, rebuildStart, end);
+      await updateAllHistogram(
+        auth,
+        rebuildStart,
+        end,
+        (resolution, index) => updateCampaignProgress(resolution, index + 1),
+      );
+      await job.updateProgress({
+        stage: "batch_complete",
+        phase: "batch_complete",
+        batchIndex,
+        batchNumber: batchIndex + 1,
+        batchCount,
+        batchPercent: 100,
+        overallPercent: Math.round((batchIndex + 1) / batchCount * 100),
+        start: start.toISOString(),
+        end: end.toISOString(),
+      });
     } else {
       await updateAllHistogram(auth, start, end);
     }
@@ -806,7 +845,6 @@ export async function use(job: Job<JobData>): Promise<JobResult> {
           timelineRebuildBatchCount: jobData.timelineRebuildBatchCount,
           ...(hasMore
             ? {
-              cursor: nextStart.toISOString(),
               nextStart: nextStart.toISOString(),
               nextEnd: nextEnd.toISOString(),
             }
@@ -843,14 +881,12 @@ const capability: JobCapability = {
       timelineRebuildCampaignId: z.string().optional(),
       timelineRebuildBatchIndex: z.number().optional(),
       timelineRebuildBatchCount: z.number().optional(),
-      cursor: z.string().optional(),
       nextStart: z.string().optional(),
       nextEnd: z.string().optional(),
     }),
   ),
   policies: [
     { resource: "db/audio_chunks", action: "*", effect: "allow" },
-    { resource: "db/diarizations", action: "*", effect: "allow" },
     { resource: "db/transcriptions", action: "*", effect: "allow" },
     { resource: "db/histogram_*", action: "*", effect: "allow" },
     { resource: "db/configs", action: "read", effect: "allow" },

@@ -79,6 +79,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
+import type { JobsDashboard } from "@/types/jobsDashboard";
 import type {
   TimelineBookkeepingRepair,
   TimelineIntegrityReport,
@@ -213,8 +214,15 @@ function DiarizatorReadinessStatusBadge({
 
 type PipelineBacklog = {
   ready: number | null;
-  readyStatus?: "exact" | "timeout";
+  readyStatus?:
+    | "exact"
+    | "timeout"
+    | "unavailable"
+    | "stale-timeout"
+    | "stale-unavailable";
   readyWarning?: string;
+  readyError?: string;
+  readyAsOf?: string;
   retryableErrors?: number;
   processing?: number;
   missingTotal?: number;
@@ -223,10 +231,13 @@ type PipelineBacklog = {
 };
 
 type PipelineHealth = {
-  checkedAt: string;
+  checkedAt: string | null;
   snapshot?: {
-    status: "fresh" | "cached" | "partial-timeout" | "stale-timeout";
-    asOf: string;
+    state?: "missing" | "ready" | "refreshing" | "stale" | "failed";
+    status?: "fresh" | "cached" | "partial-timeout" | "stale-timeout";
+    asOf?: string;
+    lastAttemptAt?: string;
+    lastError?: string;
     retryAfter?: string;
     warning?: string;
   };
@@ -282,7 +293,6 @@ type ModelAlias = "small" | "medium" | "large";
 // the provider and alias → model, mirroring the STT provider sub-line.
 const LLM_JOB_TYPES = new Set([
   "summarization",
-  "conversation_chunk_creator",
   "conversation_extractor",
   "conversation_extractor_merged",
   "tagger",
@@ -436,86 +446,7 @@ type VadJobFormData = {
   end?: Date;
 };
 
-/**
- * Worker pipeline configuration with display order and descriptions.
- * Used for displaying workers in logical pipeline order in the UI.
- */
-const WORKER_PIPELINE = [
-  {
-    type: "ingestion",
-    description: "Imports audio files and splits them into audio chunks",
-  },
-  {
-    type: "vad",
-    description:
-      "Voice activity detection — marks which audio chunks contain speech",
-  },
-  {
-    type: "transcription_sequence_creator",
-    description: "Groups speech chunks into sequences for STT batching",
-  },
-  {
-    type: "transcription",
-    description: "Transcribes sequences through the configured STT routes",
-  },
-  {
-    type: "diarization",
-    description:
-      "Automatically drains speech without diarization in resumable sequence batches",
-  },
-  {
-    type: "speakerMatching",
-    description: "Matches diarized speakers against known voice profiles",
-  },
-  {
-    type: "enrollment",
-    description: "Builds speaker voice profiles from enrollment samples",
-  },
-  {
-    type: "conversation_chunk_creator",
-    description:
-      "Groups transcriptions into conversation chunks and snapshots the LLM model — makes no LLM calls itself",
-  },
-  {
-    type: "conversation_extractor_merged",
-    description:
-      "Conversation extraction: one LLM call per chunk does segmentation + typed entities + tags + emoji + agreements",
-  },
-  {
-    type: "summarization",
-    description:
-      "One LLM call per conversation writes the summary and its title",
-  },
-  {
-    type: "tagger",
-    description:
-      "Backfill only: tags conversations that extraction did not tag (e.g. re-tagging after adding a new tag) — new conversations are tagged during extraction",
-  },
-  {
-    type: "entity_typing",
-    description:
-      "Backfill only: batch-classifies untyped objects into person / place / organization / product / project / event / animal / concept / media",
-  },
-  {
-    type: "histRecalculation",
-    description: "Recalculates timeline histograms",
-  },
-  {
-    type: "geonames_download",
-    description:
-      "One-time setup: downloads the GeoNames cities database (~13MB) for offline reverse geocoding of location tracks",
-  },
-  {
-    type: "location_processing",
-    description:
-      "Turns imported GPS points into stay/move/gap segments, labels places offline, and derives timezone periods for the timeline",
-  },
-  {
-    type: "testPythonIntegration",
-    description: "Health-check worker for the Python service bridge",
-  },
-] as const;
-
+/** Legacy ordering used only for critical-pipeline checks and old history. */
 // Removed workers whose historical jobs are still listed and openable.
 const LEGACY_JOB_TYPES = ["conversation_extractor"];
 const LEGACY_JOB_TYPE_DESCRIPTIONS: Record<string, string> = {
@@ -1587,18 +1518,10 @@ export default function JobsPage() {
     Record<string, string>
   >({});
   const [showRoutingDetails, setShowRoutingDetails] = useState(false);
-  const [timelineAuditRequested, setTimelineAuditRequested] = useState(
-    searchParams.get("timelineAudit") === "1",
-  );
+  const [showWorkerAdvanced, setShowWorkerAdvanced] = useState(false);
   const [timelineRepairPreview, setTimelineRepairPreview] = useState<
     TimelineBookkeepingRepair | null
   >(null);
-
-  useEffect(() => {
-    if (searchParams.get("timelineAudit") === "1") {
-      setTimelineAuditRequested(true);
-    }
-  }, [searchParams]);
 
   const setJobsView = (view: "operational" | "idle_auto") => {
     setSearchParams(withJobsListView(searchParams, view));
@@ -1628,19 +1551,38 @@ export default function JobsPage() {
     providerProfileId: inferenceFilter?.kind === "provider"
       ? inferenceFilter.providerProfileId
       : undefined,
+    campaignId: searchParams.get("campaignId") || undefined,
   });
 
-  const { data: schemas, isLoading: isLoadingSchemas } = useQuery({
-    queryKey: ["job-schemas"],
+  const {
+    data: jobsDashboard,
+    error: jobsDashboardError,
+    isLoading: isLoadingJobsDashboard,
+    refetch: refetchJobsDashboard,
+  } = useQuery({
+    queryKey: ["jobs-dashboard"],
     queryFn: async () => {
       const response = await api.callResource("jobs", {
-        action: "schemas",
+        action: "get_jobs_dashboard",
       });
-      return response as Record<string, any>;
+      return response as JobsDashboard;
+    },
+    placeholderData: (previous) => previous,
+    refetchInterval: (query) => {
+      const snapshots = (query.state.data as JobsDashboard | undefined)
+        ?.snapshots;
+      return snapshots &&
+          Object.values(snapshots).some((item) => item.state === "refreshing")
+        ? 2_000
+        : 30_000;
     },
   });
+  const schemas = jobsDashboard?.catalog.schemas;
+  const catalogWorkers = jobsDashboard?.catalog.workers ?? [];
+  const isLoadingSchemas = isLoadingJobsDashboard &&
+    catalogWorkers.length === 0;
 
-  const { data: backendReadiness } = useQuery<{
+  const { data: backendReadiness, error: backendReadinessError } = useQuery<{
     status: string;
     mode: string;
     reload: string;
@@ -1705,7 +1647,11 @@ export default function JobsPage() {
         action: "services_health",
       }) as ServicesHealth;
     },
-    refetchInterval: false,
+    refetchInterval: (query) =>
+      (query.state.data as PipelineHealth | undefined)?.snapshot?.state ===
+          "refreshing"
+        ? 2_000
+        : false,
     staleTime: 15_000,
   });
 
@@ -1721,8 +1667,27 @@ export default function JobsPage() {
         action: "pipeline_health",
       }) as PipelineHealth;
     },
-    enabled: false,
-    refetchInterval: false,
+    enabled: true,
+    refetchInterval: (query) =>
+      (query.state.data as PipelineHealth | undefined)?.snapshot?.state ===
+          "refreshing"
+        ? 2_000
+        : false,
+    placeholderData: (previous) => previous,
+  });
+
+  const refreshExactBacklogMutation = useMutation({
+    mutationFn: async () =>
+      await api.callResource("jobs", { action: "refresh_exact_backlog" }),
+    onSuccess: () => {
+      void refetchPipelineHealth();
+      void refetchJobsDashboard();
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Backlog update failed",
+      );
+    },
   });
 
   const services = servicesHealth?.services ?? pipelineHealth?.services ??
@@ -1735,7 +1700,6 @@ export default function JobsPage() {
 
   const {
     data: timelineIntegrity,
-    isFetching: isFetchingTimelineIntegrity,
     refetch: refetchTimelineIntegrity,
   } = useQuery({
     queryKey: ["timeline-integrity-report"],
@@ -1743,11 +1707,35 @@ export default function JobsPage() {
       await api.callResource("jobs", {
         action: "timeline_integrity_report",
       }) as TimelineIntegrityReport,
-    enabled: timelineAuditRequested,
+    enabled: true,
     refetchInterval: (query) => {
       const status = (query.state.data as TimelineIntegrityReport | undefined)
         ?.campaign?.status;
-      return status === "queued" || status === "running" ? 10_000 : false;
+      const snapshotState = (query.state.data as
+        | TimelineIntegrityReport & {
+          snapshot?: { state?: string };
+        }
+        | undefined)?.snapshot?.state;
+      return snapshotState === "refreshing"
+        ? 2_000
+        : status === "queued" || status === "running" ||
+            status === "recovering"
+        ? 10_000
+        : false;
+    },
+  });
+
+  const refreshTimelineIntegrityMutation = useMutation({
+    mutationFn: async () =>
+      await api.callResource("jobs", { action: "refresh_timeline_integrity" }),
+    onSuccess: () => {
+      void refetchTimelineIntegrity();
+      void refetchJobsDashboard();
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Timeline audit failed",
+      );
     },
   });
 
@@ -1830,7 +1818,6 @@ export default function JobsPage() {
   const {
     data: jobStatsResponse,
     error: jobStatsError,
-    isFetching: isFetchingJobStats,
     refetch: refetchJobStats,
   } = useQuery({
     queryKey: ["job-stats"],
@@ -1863,10 +1850,38 @@ export default function JobsPage() {
           cancelled: number;
           total: number;
         };
+        snapshot: {
+          state: "missing" | "ready" | "refreshing" | "stale" | "failed";
+          asOf?: string;
+          lastAttemptAt?: string;
+          lastError?: string;
+          operationId?: string;
+        };
       };
     },
-    enabled: false,
+    enabled: true,
     retry: false,
+    placeholderData: (previous) => previous,
+    refetchInterval: (query) =>
+      (query.state.data as any)?.snapshot?.state === "refreshing"
+        ? 2_000
+        : false,
+  });
+
+  const refreshRunHistoryMutation = useMutation({
+    mutationFn: async () =>
+      await api.callResource("jobs", { action: "refresh_run_history" }) as {
+        operationId: string;
+      },
+    onSuccess: () => {
+      void refetchJobStats();
+      void refetchJobsDashboard();
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "History update failed",
+      );
+    },
   });
 
   const refreshWorkerViews = () => {
@@ -2072,7 +2087,6 @@ export default function JobsPage() {
     queryFn: async () => {
       const routingWorkers = [
         "summarization",
-        "conversation_chunk_creator",
         "conversation_extractor_merged",
         "tagger",
         "entity_typing",
@@ -2299,7 +2313,6 @@ export default function JobsPage() {
       toast.success(
         `Repaired ${result.modifiedChunks} terminal transcription marker(s).`,
       );
-      setTimelineAuditRequested(true);
       void refetchTimelineIntegrity();
       void markPipelineHealthStale();
     },
@@ -2326,7 +2339,6 @@ export default function JobsPage() {
       toast.success(
         `Timeline rebuild ${result.campaignId} queued ${result.queuedJobs}/${result.plannedJobs} bounded jobs.`,
       );
-      setTimelineAuditRequested(true);
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job-stats"] });
       void refetchTimelineIntegrity();
@@ -2338,6 +2350,32 @@ export default function JobsPage() {
           : "Timeline rebuild failed to start",
       );
     },
+  });
+
+  const pauseTimelineRebuildMutation = useMutation({
+    mutationFn: async (campaignId: string) =>
+      await api.callResource("jobs", {
+        action: "pause_timeline_rebuild",
+        campaignId,
+      }),
+    onSuccess: () => void refetchTimelineIntegrity(),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Pause failed"),
+  });
+
+  const resumeTimelineRebuildMutation = useMutation({
+    mutationFn: async (campaignId: string) =>
+      await api.callResource("jobs", {
+        action: "resume_timeline_rebuild",
+        campaignId,
+      }),
+    onSuccess: () => {
+      toast.success("Timeline rebuild resumed with automatic recovery.");
+      void refetchTimelineIntegrity();
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Resume failed"),
   });
 
   const retryFailedMutation = useMutation({
@@ -3024,12 +3062,15 @@ export default function JobsPage() {
   // Removed workers whose historical jobs stay visible; the backend jobs
   // list includes them in its default type set.
   const legacyTypes = useMemo(
-    () => LEGACY_JOB_TYPES.filter((type) => !(schemas && type in schemas)),
-    [schemas],
+    () =>
+      LEGACY_JOB_TYPES.filter((type) =>
+        !catalogWorkers.some((worker) => worker.type === type)
+      ),
+    [catalogWorkers],
   );
   const allTypes = useMemo(
-    () => [...Object.keys(schemas || {}), ...legacyTypes],
-    [schemas, legacyTypes],
+    () => [...catalogWorkers.map((worker) => worker.type), ...legacyTypes],
+    [catalogWorkers, legacyTypes],
   );
 
   const allPaused = useMemo(() => {
@@ -3046,12 +3087,12 @@ export default function JobsPage() {
 
   const pausedPipelineWorkers = useMemo(() => {
     if (!workerStatus?.workers) return [];
-    return WORKER_PIPELINE
-      .filter((worker) =>
-        CRITICAL_PIPELINE_WORKERS.has(worker.type) &&
-        workerStatus.workers[worker.type]?.paused
+    return [...CRITICAL_PIPELINE_WORKERS]
+      .filter((workerType) =>
+        CRITICAL_PIPELINE_WORKERS.has(workerType) &&
+        workerStatus.workers[workerType]?.paused
       )
-      .map((worker) => worker.type);
+      .map((workerType) => workerType);
   }, [workerStatus]);
 
   // Job counts by status (respects type filter)
@@ -3200,42 +3241,24 @@ export default function JobsPage() {
 
   // Get workers sorted by pipeline order, with unknown workers at the end
   const sortedWorkers = useMemo(() => {
-    const pipelineOrder = new Map<string, number>(
-      WORKER_PIPELINE.map((w, i) => [w.type, i]),
+    return [...catalogWorkers].sort((a, b) =>
+      a.order - b.order || a.type.localeCompare(b.type)
     );
-    const pipelineDescriptions = new Map<string, string>(
-      WORKER_PIPELINE.map((w) => [w.type, w.description]),
-    );
-
-    // Legacy types have no live worker — they belong to the jobs filter and
-    // history, not to the workers table.
-    return [...allTypes]
-      .filter((type) => !legacyTypes.includes(type))
-      .sort((a, b) => {
-        const orderA = pipelineOrder.get(a) ?? 999;
-        const orderB = pipelineOrder.get(b) ?? 999;
-        return orderA - orderB;
-      }).map((type) => ({
-        type,
-        description: pipelineDescriptions.get(type) ||
-          LEGACY_JOB_TYPE_DESCRIPTIONS[type] || "Worker process",
-        order: pipelineOrder.get(type) ?? 999,
-      }));
-  }, [allTypes, legacyTypes]);
+  }, [catalogWorkers]);
 
   // Job type statistics from backend (aggregates ALL jobs in database)
   const jobTypeStats = useMemo(() => {
     if (!jobStatsResponse?.stats) return [];
 
-    const pipelineOrder = new Map<string, number>(
-      WORKER_PIPELINE.map((w, i) => [w.type, i]),
+    const catalogOrder = new Map<string, number>(
+      catalogWorkers.map((worker) => [worker.type, worker.order]),
     );
     return [...jobStatsResponse.stats].sort((a, b) => {
-      const orderA = pipelineOrder.get(a.type) ?? 999;
-      const orderB = pipelineOrder.get(b.type) ?? 999;
+      const orderA = catalogOrder.get(a.type) ?? 999;
+      const orderB = catalogOrder.get(b.type) ?? 999;
       return orderA - orderB;
     });
-  }, [jobStatsResponse]);
+  }, [catalogWorkers, jobStatsResponse]);
 
   const handleToggleWorker = (workerType: string, currentlyPaused: boolean) => {
     if (currentlyPaused) {
@@ -3673,7 +3696,12 @@ export default function JobsPage() {
   };
 
   const timelineCampaignBusy = timelineIntegrity?.campaign?.status ===
-      "queued" || timelineIntegrity?.campaign?.status === "running";
+      "queued" ||
+    timelineIntegrity?.campaign?.status === "running" ||
+    timelineIntegrity?.campaign?.status === "recovering" ||
+    timelineIntegrity?.campaign?.status === "verifying";
+  const hasTimelineSnapshot = timelineIntegrity?.status !== "not_checked" &&
+    timelineIntegrity?.checkedAt != null;
   const timelineRepairEligible = timelineRepairPreview?.eligibleChunks ??
     timelineIntegrity?.bookkeeping.eligibleChunks ?? 0;
   const formatTimelineAuditDate = (value: string | null | undefined) =>
@@ -3713,33 +3741,23 @@ export default function JobsPage() {
   };
 
   const handleClearCompleted = async () => {
-    const confirmText = "DELETE";
-    const userInput = await promptAction({
-      title: "Delete all finished job history?",
+    const confirmed = await confirmAction({
+      title: "Archive finished job history?",
       description:
-        "DEV ONLY — This permanently deletes every completed, failed, and cancelled job from the database. This cannot be undone.",
-      confirmationPhrase: confirmText,
-      inputLabel: `Type ${confirmText} to confirm`,
-      actionLabel: "Delete job history",
-      destructive: true,
+        "Completed, failed, and cancelled rows will be hidden from Jobs. The records remain in MongoDB and in run-history rollups.",
+      actionLabel: "Archive history",
     });
-
-    if (userInput !== confirmText) {
-      if (userInput !== null) {
-        toast.error("Deletion cancelled - confirmation text did not match.");
-      }
-      return;
-    }
+    if (!confirmed) return;
 
     try {
       const result = await api.callResource("jobs", {
         action: "clear_completed",
       });
-      console.log(`Deleted ${result.deletedCount} jobs`);
+      toast.success(`Archived ${result.archivedCount ?? 0} jobs`);
       refetch();
     } catch (error) {
-      console.error("Failed to clear completed jobs:", error);
-      toast.error("Failed to clear completed jobs");
+      console.error("Failed to archive completed jobs:", error);
+      toast.error("Failed to archive completed jobs");
     }
   };
 
@@ -3750,12 +3768,31 @@ export default function JobsPage() {
           <h1 className="text-xl font-bold tracking-tight">System Jobs</h1>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75">
-              </span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500">
+              {backendReadiness?.status === "ready" &&
+                jobsDashboard?.catalog.state === "ready" && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75">
+                </span>
+              )}
+              <span
+                className={`relative inline-flex h-2 w-2 rounded-full ${
+                  backendReadinessError || jobsDashboardError
+                    ? "bg-red-500"
+                    : backendReadiness?.status !== "ready" || !jobsDashboard
+                    ? "bg-amber-500"
+                    : jobsDashboard.catalog.state !== "ready"
+                    ? "bg-yellow-500"
+                    : "bg-green-500"
+                }`}
+              >
               </span>
             </span>
-            Live
+            {backendReadinessError || jobsDashboardError
+              ? "Offline"
+              : backendReadiness?.status !== "ready" || !jobsDashboard
+              ? "Starting"
+              : jobsDashboard.catalog.state !== "ready"
+              ? "Stale"
+              : "Live"}
           </div>
           <Badge
             variant="outline"
@@ -3848,10 +3885,10 @@ export default function JobsPage() {
               size="sm"
               className="h-8 px-2.5 text-xs"
               onClick={handleClearCompleted}
-              title="Dev only: Permanently delete completed jobs from database"
+              title="Hide terminal rows without deleting MongoDB records"
             >
               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-              Clear done
+              Archive done
             </Button>
           )}
           <Button
@@ -3866,334 +3903,103 @@ export default function JobsPage() {
         </div>
       </div>
 
-      {pausedPipelineWorkers.length > 0 && (
-        <Card className="border-amber-500/50 bg-amber-500/5">
-          <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
-              <div>
-                <div className="font-medium text-amber-500">
-                  Processing pipeline is paused
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  Waiting jobs will not start while these stages are paused:
-                  {" "}
-                  {pausedPipelineWorkers.join(", ")}.
+      <div className="flex flex-col gap-3">
+        {pausedPipelineWorkers.length > 0 && (
+          <Card className="order-4 border-amber-500/50 bg-amber-500/5">
+            <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex gap-3">
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+                <div>
+                  <div className="font-medium text-amber-500">
+                    Processing pipeline is paused
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Waiting jobs will not start while these stages are paused:
+                    {" "}
+                    {pausedPipelineWorkers.join(", ")}.
+                  </div>
                 </div>
               </div>
-            </div>
-            <Button
-              size="sm"
-              onClick={() =>
-                resumePipelineMutation.mutate(pausedPipelineWorkers)}
-              disabled={resumePipelineMutation.isPending}
-            >
-              <PlayCircle className="mr-2 h-4 w-4" />
-              {resumePipelineMutation.isPending
-                ? "Resuming…"
-                : "Resume processing pipeline"}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+              <Button
+                size="sm"
+                onClick={() =>
+                  resumePipelineMutation.mutate(pausedPipelineWorkers)}
+                disabled={resumePipelineMutation.isPending}
+              >
+                <PlayCircle className="mr-2 h-4 w-4" />
+                {resumePipelineMutation.isPending
+                  ? "Resuming…"
+                  : "Resume processing pipeline"}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
-      <Card>
-        <CardHeader className="px-3 py-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Server className="h-4 w-4" />
-                External services & routing
-              </CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Dependent jobs are held before execution while a provider is
-                unavailable or loading.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2.5 text-xs"
-                onClick={() => testServicesMutation.mutate()}
-                disabled={testServicesMutation.isPending ||
-                  isFetchingServicesHealth}
-              >
-                <RefreshCw
-                  className={`mr-2 h-4 w-4 ${
-                    testServicesMutation.isPending ? "animate-spin" : ""
-                  }`}
-                />
-                Refresh status
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2.5 text-xs"
-                asChild
-              >
-                <Link to="/settings/inference">Configure routing</Link>
-              </Button>
-              <Button
-                variant={showRoutingDetails ? "secondary" : "outline"}
-                size="sm"
-                className="h-8 px-2.5 text-xs"
-                onClick={() => setShowRoutingDetails((current) => !current)}
-                aria-expanded={showRoutingDetails}
-                aria-controls="routing-details"
-              >
-                Details
-                <ChevronDown
-                  className={`ml-1.5 h-3.5 w-3.5 transition-transform ${
-                    showRoutingDetails ? "rotate-180" : ""
-                  }`}
-                />
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="px-3 pb-3 pt-0">
-          {!servicesHealth && !pipelineHealth
-            ? (
-              <div className="text-sm text-muted-foreground">
-                Checking external services…
+        <Card className="order-1">
+          <CardHeader className="px-3 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Server className="h-4 w-4" />
+                  External services & routing
+                </CardTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Dependent jobs are held before execution while a provider is
+                  unavailable or loading.
+                </p>
               </div>
-            )
-            : (
-              <>
-                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {services.map((service) => {
-                    const allPausedForService = service.usedBy.every(
-                      (workerType) => workerStatus?.workers[workerType]?.paused,
-                    );
-                    const intentionallyPaused = allPausedForService &&
-                      service.status !== "healthy";
-                    const statusClass = intentionallyPaused
-                      ? "bg-amber-500/10 text-amber-600"
-                      : service.status === "healthy"
-                      ? "bg-green-500/10 text-green-600"
-                      : service.status === "loading"
-                      ? "bg-amber-500/10 text-amber-600"
-                      : "bg-red-500/10 text-red-600";
-                    const routeMutationPending =
-                      setAllServiceRoutesMutation.isPending ||
-                      (service.id === "llm" &&
-                        setLlmRouteEnabledMutation.isPending) ||
-                      (service.id === "stt" &&
-                        setSttRouteEnabledMutation.isPending) ||
-                      (service.id === "diarizator" &&
-                        updateDiarizationRouteMutation.isPending);
-                    const routes = service.routes ?? [];
-                    const diarizationConfig = service.id === "diarizator"
-                      ? inferenceRoutingConfig?.diarizationProfiles
-                      : null;
-                    const diarizationEnableTarget = diarizationConfig
-                      ? setDiarizationRoutesEnabledWithinLimit(
-                        {
-                          profiles: diarizationConfig.profiles,
-                          includeEnvironment:
-                            diarizationConfig.includeEnvironment ?? true,
-                          environmentPriority:
-                            diarizationConfig.environmentPriority ?? 50,
-                          environmentConcurrency:
-                            diarizationConfig.environmentConcurrency ?? 1,
-                        },
-                        routes.map((route) => route.providerProfileId),
-                        true,
-                      )
-                      : null;
-                    const diarizationTargetIds = new Set(
-                      diarizationEnableTarget?.enabledRouteIds ?? [],
-                    );
-                    const allRoutesEnabled = routes.length > 0 &&
-                      (diarizationEnableTarget
-                        ? routes.every((route) =>
-                          route.enabled ===
-                            diarizationTargetIds.has(route.providerProfileId)
-                        )
-                        : routes.every((route) => route.enabled));
-                    const allRoutesDisabled = routes.length > 0 &&
-                      routes.every((route) => !route.enabled);
-                    return (
-                      <div
-                        key={`summary-${service.id}`}
-                        className="min-w-0 rounded-md border bg-muted/10 p-2.5"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
-                            {intentionallyPaused
-                              ? (
-                                <PauseCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                              )
-                              : service.status === "healthy"
-                              ? (
-                                <Wifi className="h-3.5 w-3.5 shrink-0 text-green-500" />
-                              )
-                              : (
-                                <WifiOff className="h-3.5 w-3.5 shrink-0 text-red-500" />
-                              )}
-                            <span className="truncate">{service.label}</span>
-                          </div>
-                          <Badge
-                            variant="secondary"
-                            className={`${statusClass} shrink-0 px-1.5 py-0 text-[10px]`}
-                          >
-                            {intentionallyPaused ? "paused" : service.status}
-                          </Badge>
-                        </div>
-                        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
-                          <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-                            {service.model || service.models?.[0] ||
-                              "unknown model"}
-                          </span>
-                          <span className="shrink-0">
-                            {service.latencyMs != null
-                              ? `${service.latencyMs} ms`
-                              : "—"}
-                          </span>
-                        </div>
-                        <div
-                          className={`mt-1 line-clamp-2 text-[10px] leading-tight ${
-                            service.status === "healthy" || intentionallyPaused
-                              ? "text-muted-foreground"
-                              : "text-red-500"
-                          }`}
-                          title={service.message}
-                        >
-                          {intentionallyPaused
-                            ? "All routed workers are paused"
-                            : service.message}
-                        </div>
-                        {routes.length > 0 && (
-                          <div className="mt-2 border-t pt-2">
-                            <div className="mb-1.5 flex items-center justify-between gap-2">
-                              <span className="text-[10px] font-medium text-muted-foreground">
-                                Routes · {routes.filter((route) =>
-                                  route.enabled
-                                ).length}/
-                                {routes.length} on
-                              </span>
-                              <div className="flex gap-1">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-1.5 text-[10px]"
-                                  disabled={routeMutationPending ||
-                                    allRoutesEnabled}
-                                  onClick={() =>
-                                    setAllServiceRoutesMutation.mutate({
-                                      serviceId: service.id,
-                                      routeIds: routes.map((route) =>
-                                        route.providerProfileId
-                                      ),
-                                      enabled: true,
-                                    })}
-                                >
-                                  {service.id === "diarizator"
-                                    ? "First 8 on"
-                                    : "All on"}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-1.5 text-[10px]"
-                                  disabled={routeMutationPending ||
-                                    allRoutesDisabled}
-                                  onClick={() =>
-                                    setAllServiceRoutesMutation.mutate({
-                                      serviceId: service.id,
-                                      routeIds: routes.map((route) =>
-                                        route.providerProfileId
-                                      ),
-                                      enabled: false,
-                                    })}
-                                >
-                                  All off
-                                </Button>
-                              </div>
-                            </div>
-                            <p className="mb-1.5 text-[9px] leading-tight text-muted-foreground">
-                              {service.id === "diarizator"
-                                ? "8-slot limit: routes are enabled in this list order; routes that do not fit stay off."
-                                : "Availability reflects enabled routes only; disabled routes are not probed."}
-                            </p>
-                            <div className="space-y-1">
-                              {routes.map((route) => (
-                                <div
-                                  key={`summary-route-${service.id}-${route.providerProfileId}`}
-                                  className="flex min-w-0 items-center gap-1.5 rounded bg-background/70 px-1.5 py-1"
-                                  title={route.message}
-                                >
-                                  <Switch
-                                    checked={route.enabled}
-                                    disabled={routeMutationPending}
-                                    onCheckedChange={(enabled) => {
-                                      if (service.id === "llm") {
-                                        setLlmRouteEnabledMutation.mutate({
-                                          profileId: route.providerProfileId,
-                                          enabled,
-                                        });
-                                      } else if (service.id === "stt") {
-                                        setSttRouteEnabledMutation.mutate({
-                                          profileId: route.providerProfileId,
-                                          enabled,
-                                        });
-                                      } else {
-                                        updateDiarizationRouteMutation.mutate({
-                                          profileId: route.providerProfileId,
-                                          changes: { enabled },
-                                        });
-                                      }
-                                    }}
-                                    aria-label={`${
-                                      route.enabled ? "Disable" : "Enable"
-                                    } ${route.providerProfileName} ${service.label} route`}
-                                    className="scale-75"
-                                  />
-                                  <span className="min-w-0 flex-1 truncate text-[10px] font-medium">
-                                    {route.providerProfileName}
-                                  </span>
-                                  {service.id === "diarizator" && (
-                                    <DiarizatorReadinessStatusBadge
-                                      route={route}
-                                      compact
-                                    />
-                                  )}
-                                  <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
-                                    P{route.priority}
-                                    {route.concurrency
-                                      ? ` · ${route.concurrency} slot${
-                                        route.concurrency === 1 ? "" : "s"
-                                      }`
-                                      : ""}
-                                    {route.model ? ` · ${route.model}` : ""}
-                                  </span>
-                                  <span
-                                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                                      route.status === "healthy"
-                                        ? "bg-green-500"
-                                        : route.status === "disabled"
-                                        ? "bg-muted-foreground/40"
-                                        : "bg-red-500"
-                                    }`}
-                                    aria-label={route.status}
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2.5 text-xs"
+                  onClick={() => testServicesMutation.mutate()}
+                  disabled={testServicesMutation.isPending ||
+                    isFetchingServicesHealth}
+                >
+                  <RefreshCw
+                    className={`mr-2 h-4 w-4 ${
+                      testServicesMutation.isPending ? "animate-spin" : ""
+                    }`}
+                  />
+                  Refresh status
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2.5 text-xs"
+                  asChild
+                >
+                  <Link to="/settings/inference">Configure routing</Link>
+                </Button>
+                <Button
+                  variant={showRoutingDetails ? "secondary" : "outline"}
+                  size="sm"
+                  className="h-8 px-2.5 text-xs"
+                  onClick={() => setShowRoutingDetails((current) => !current)}
+                  aria-expanded={showRoutingDetails}
+                  aria-controls="routing-details"
+                >
+                  Details
+                  <ChevronDown
+                    className={`ml-1.5 h-3.5 w-3.5 transition-transform ${
+                      showRoutingDetails ? "rotate-180" : ""
+                    }`}
+                  />
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="px-3 pb-3 pt-0">
+            {!servicesHealth && !pipelineHealth
+              ? (
+                <div className="text-sm text-muted-foreground">
+                  Checking external services…
                 </div>
-                {showRoutingDetails && (
-                  <div
-                    id="routing-details"
-                    className="mt-3 grid gap-3 xl:grid-cols-2"
-                  >
+              )
+              : (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     {services.map((service) => {
                       const allPausedForService = service.usedBy.every(
                         (workerType) =>
@@ -4208,268 +4014,653 @@ export default function JobsPage() {
                         : service.status === "loading"
                         ? "bg-amber-500/10 text-amber-600"
                         : "bg-red-500/10 text-red-600";
+                      const routeMutationPending =
+                        setAllServiceRoutesMutation.isPending ||
+                        (service.id === "llm" &&
+                          setLlmRouteEnabledMutation.isPending) ||
+                        (service.id === "stt" &&
+                          setSttRouteEnabledMutation.isPending) ||
+                        (service.id === "diarizator" &&
+                          updateDiarizationRouteMutation.isPending);
+                      const routes = service.routes ?? [];
+                      const diarizationConfig = service.id === "diarizator"
+                        ? inferenceRoutingConfig?.diarizationProfiles
+                        : null;
+                      const diarizationEnableTarget = diarizationConfig
+                        ? setDiarizationRoutesEnabledWithinLimit(
+                          {
+                            profiles: diarizationConfig.profiles,
+                            includeEnvironment:
+                              diarizationConfig.includeEnvironment ?? true,
+                            environmentPriority:
+                              diarizationConfig.environmentPriority ?? 50,
+                            environmentConcurrency:
+                              diarizationConfig.environmentConcurrency ?? 1,
+                          },
+                          routes.map((route) => route.providerProfileId),
+                          true,
+                        )
+                        : null;
+                      const diarizationTargetIds = new Set(
+                        diarizationEnableTarget?.enabledRouteIds ?? [],
+                      );
+                      const allRoutesEnabled = routes.length > 0 &&
+                        (diarizationEnableTarget
+                          ? routes.every((route) =>
+                            route.enabled ===
+                              diarizationTargetIds.has(route.providerProfileId)
+                          )
+                          : routes.every((route) => route.enabled));
+                      const allRoutesDisabled = routes.length > 0 &&
+                        routes.every((route) => !route.enabled);
                       return (
                         <div
-                          key={service.id}
-                          className="space-y-2 rounded-lg border p-3"
+                          key={`summary-${service.id}`}
+                          className="min-w-0 rounded-md border bg-muted/10 p-2.5"
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-start gap-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
                               {intentionallyPaused
                                 ? (
-                                  <PauseCircle className="mt-0.5 h-5 w-5 text-amber-500" />
+                                  <PauseCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
                                 )
                                 : service.status === "healthy"
                                 ? (
-                                  <Wifi className="mt-0.5 h-5 w-5 text-green-500" />
+                                  <Wifi className="h-3.5 w-3.5 shrink-0 text-green-500" />
                                 )
                                 : (
-                                  <WifiOff className="mt-0.5 h-5 w-5 text-red-500" />
+                                  <WifiOff className="h-3.5 w-3.5 shrink-0 text-red-500" />
                                 )}
-                              <div>
-                                <div className="font-medium">
-                                  {service.label}
-                                </div>
-                                <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
-                                  {service.baseUrl || "Not configured"}
-                                </div>
-                              </div>
+                              <span className="truncate">{service.label}</span>
                             </div>
-                            <Badge variant="secondary" className={statusClass}>
-                              {intentionallyPaused
-                                ? "paused intentionally"
-                                : service.status}
-                              {service.httpStatus
-                                ? ` · HTTP ${service.httpStatus}`
-                                : ""}
+                            <Badge
+                              variant="secondary"
+                              className={`${statusClass} shrink-0 px-1.5 py-0 text-[10px]`}
+                            >
+                              {intentionallyPaused ? "paused" : service.status}
                             </Badge>
                           </div>
-
-                          <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-                            <div>
-                              Source:{" "}
-                              <span className="font-mono text-foreground">
-                                {service.source || "none"}
-                              </span>
-                            </div>
-                            {service.providerProfileName && (
-                              <div>
-                                Preset:{" "}
-                                <span className="font-mono text-foreground">
-                                  {service.providerProfileName}
-                                </span>
-                              </div>
-                            )}
-                            <div>
-                              Model:{" "}
-                              <span className="font-mono text-foreground">
-                                {service.model || service.models?.[0] ||
-                                  "unknown"}
-                              </span>
-                            </div>
-                            <div>
-                              Latency:{" "}
-                              <span className="text-foreground">
-                                {service.latencyMs != null
-                                  ? `${service.latencyMs} ms`
-                                  : "—"}
-                              </span>
-                            </div>
-                            <div>
-                              Checked:{" "}
-                              <span className="text-foreground">
-                                {format(
-                                  new Date(service.checkedAt),
-                                  "HH:mm:ss",
-                                )}
-                              </span>
-                            </div>
+                          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                            <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                              {service.model || service.models?.[0] ||
+                                "unknown model"}
+                            </span>
+                            <span className="shrink-0">
+                              {service.latencyMs != null
+                                ? `${service.latencyMs} ms`
+                                : "—"}
+                            </span>
                           </div>
-
                           <div
-                            className={`rounded p-2 text-xs ${
-                              service.status === "healthy"
-                                ? "bg-green-500/5"
-                                : intentionallyPaused
-                                ? "bg-amber-500/5 text-amber-700"
-                                : "bg-red-500/5 text-red-500"
+                            className={`mt-1 line-clamp-2 text-[10px] leading-tight ${
+                              service.status === "healthy" ||
+                                intentionallyPaused
+                                ? "text-muted-foreground"
+                                : "text-red-500"
                             }`}
+                            title={service.message}
                           >
                             {intentionallyPaused
-                              ? `Expected while all routed workers are paused. Last probe: ${service.message}`
+                              ? "All routed workers are paused"
                               : service.message}
                           </div>
-
-                          {service.id === "diarizator" && (
-                            <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                              <div className="flex items-center justify-between gap-2">
-                                <div>
-                                  <p className="text-xs font-medium">
-                                    Diarizator routes
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    New jobs use the first healthy enabled route
-                                    by priority.
-                                  </p>
+                          {showRoutingDetails && routes.length > 0 && (
+                            <div className="mt-2 border-t pt-2">
+                              <div className="mb-1.5 flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-medium text-muted-foreground">
+                                  Routes ·{" "}
+                                  {routes.filter((route) => route.enabled)
+                                    .length}/
+                                  {routes.length} on
+                                </span>
+                                <div className="flex gap-1">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-1.5 text-[10px]"
+                                    disabled={routeMutationPending ||
+                                      allRoutesEnabled}
+                                    onClick={() =>
+                                      setAllServiceRoutesMutation.mutate({
+                                        serviceId: service.id,
+                                        routeIds: routes.map((route) =>
+                                          route.providerProfileId
+                                        ),
+                                        enabled: true,
+                                      })}
+                                  >
+                                    {service.id === "diarizator"
+                                      ? "First 8 on"
+                                      : "All on"}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-1.5 text-[10px]"
+                                    disabled={routeMutationPending ||
+                                      allRoutesDisabled}
+                                    onClick={() =>
+                                      setAllServiceRoutesMutation.mutate({
+                                        serviceId: service.id,
+                                        routeIds: routes.map((route) =>
+                                          route.providerProfileId
+                                        ),
+                                        enabled: false,
+                                      })}
+                                  >
+                                    All off
+                                  </Button>
                                 </div>
-                                <Button size="sm" variant="outline" asChild>
-                                  <Link to="/settings/diarization">
-                                    Configure
-                                  </Link>
-                                </Button>
                               </div>
-                              {service.routes?.map((route) => {
-                                const priorityDraft = diarizationPriorityDrafts[
-                                  route.providerProfileId
-                                ] ?? String(route.priority);
-                                const parsedPriority = Number(priorityDraft);
-                                const validPriority = Number.isInteger(
-                                  parsedPriority,
-                                ) && parsedPriority >= 1 &&
-                                  parsedPriority <= 100;
-                                return (
+                              <p className="mb-1.5 text-[9px] leading-tight text-muted-foreground">
+                                {service.id === "diarizator"
+                                  ? "8-slot limit: routes are enabled in this list order; routes that do not fit stay off."
+                                  : "Availability reflects enabled routes only; disabled routes are not probed."}
+                              </p>
+                              <div className="space-y-1">
+                                {routes.map((route) => (
                                   <div
-                                    key={route.providerProfileId}
-                                    className="flex flex-wrap items-center gap-2 rounded border bg-background p-2 text-xs md:flex-nowrap"
+                                    key={`summary-route-${service.id}-${route.providerProfileId}`}
+                                    className="flex min-w-0 items-center gap-1.5 rounded bg-background/70 px-1.5 py-1"
                                     title={route.message}
                                   >
-                                    <div className="flex shrink-0 items-center gap-1.5">
-                                      <Switch
-                                        checked={route.enabled}
-                                        disabled={updateDiarizationRouteMutation
-                                          .isPending}
-                                        onCheckedChange={(enabled) =>
+                                    <Switch
+                                      checked={route.enabled}
+                                      disabled={routeMutationPending}
+                                      onCheckedChange={(enabled) => {
+                                        if (service.id === "llm") {
+                                          setLlmRouteEnabledMutation.mutate({
+                                            profileId: route.providerProfileId,
+                                            enabled,
+                                          });
+                                        } else if (service.id === "stt") {
+                                          setSttRouteEnabledMutation.mutate({
+                                            profileId: route.providerProfileId,
+                                            enabled,
+                                          });
+                                        } else {
                                           updateDiarizationRouteMutation.mutate(
                                             {
                                               profileId:
                                                 route.providerProfileId,
                                               changes: { enabled },
                                             },
-                                          )}
-                                        aria-label={`Enable ${route.providerProfileName}`}
-                                      />
-                                      <span className="w-6 text-muted-foreground">
-                                        {route.enabled ? "On" : "Off"}
-                                      </span>
-                                    </div>
-                                    <div className="flex min-w-[9rem] flex-wrap items-center gap-1.5">
-                                      <span className="truncate font-medium">
-                                        {route.providerProfileName}
-                                      </span>
+                                          );
+                                        }
+                                      }}
+                                      aria-label={`${
+                                        route.enabled ? "Disable" : "Enable"
+                                      } ${route.providerProfileName} ${service.label} route`}
+                                      className="scale-75"
+                                    />
+                                    <span className="min-w-0 flex-1 truncate text-[10px] font-medium">
+                                      {route.providerProfileName}
+                                    </span>
+                                    {service.id === "diarizator" && (
                                       <DiarizatorReadinessStatusBadge
                                         route={route}
+                                        compact
                                       />
-                                      <span className="text-muted-foreground">
-                                        {` · ${route.concurrency ?? 1} slot${
-                                          (route.concurrency ?? 1) === 1
-                                            ? ""
-                                            : "s"
-                                        }`}
-                                      </span>
-                                    </div>
-                                    <div
-                                      className="min-w-[11rem] flex-1 truncate font-mono text-muted-foreground"
-                                      title={route.baseUrl}
-                                    >
-                                      {route.baseUrl}
-                                    </div>
-                                    <div className="flex shrink-0 items-center gap-1.5">
-                                      <Label
-                                        htmlFor={`diar-priority-${route.providerProfileId}`}
-                                        className="text-[11px] text-muted-foreground"
-                                      >
-                                        Priority
-                                      </Label>
-                                      <Input
-                                        id={`diar-priority-${route.providerProfileId}`}
-                                        type="number"
-                                        min={1}
-                                        max={100}
-                                        step={1}
-                                        value={priorityDraft}
-                                        onChange={(event) =>
-                                          setDiarizationPriorityDrafts((
-                                            current,
-                                          ) => ({
-                                            ...current,
-                                            [route.providerProfileId]:
-                                              event.target.value,
-                                          }))}
-                                        className="h-8 w-16"
-                                        aria-label={`Priority for ${route.providerProfileName}`}
-                                      />
-                                      <Button
-                                        size="icon"
-                                        variant="outline"
-                                        className="h-8 w-8"
-                                        disabled={!validPriority ||
-                                          updateDiarizationRouteMutation
-                                            .isPending ||
-                                          parsedPriority === route.priority}
-                                        onClick={() =>
-                                          updateDiarizationRouteMutation.mutate(
-                                            {
-                                              profileId:
-                                                route.providerProfileId,
-                                              changes: {
-                                                priority: parsedPriority,
-                                              },
-                                            },
-                                          )}
-                                        aria-label={`Save priority for ${route.providerProfileName}`}
-                                        title="Save priority"
-                                      >
-                                        <Save className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </div>
-                                    <Badge
-                                      variant={route.status === "healthy"
-                                        ? "secondary"
-                                        : route.status === "disabled"
-                                        ? "outline"
-                                        : "destructive"}
-                                      className="shrink-0"
-                                      aria-label={`${
+                                    )}
+                                    <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
+                                      P{route.priority}
+                                      {route.concurrency
+                                        ? ` · ${route.concurrency} slot${
+                                          route.concurrency === 1 ? "" : "s"
+                                        }`
+                                        : ""}
+                                      {route.model ? ` · ${route.model}` : ""}
+                                    </span>
+                                    <span
+                                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                                         route.status === "healthy"
-                                          ? "running"
-                                          : route.status
-                                      }: ${route.message}`}
-                                      title={route.message}
-                                    >
-                                      {route.status === "healthy"
-                                        ? "running"
-                                        : route.status}
-                                    </Badge>
+                                          ? "bg-green-500"
+                                          : route.status === "disabled"
+                                          ? "bg-muted-foreground/40"
+                                          : "bg-red-500"
+                                      }`}
+                                      aria-label={route.status}
+                                    />
                                   </div>
-                                );
-                              })}
+                                ))}
+                              </div>
                             </div>
                           )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {showRoutingDetails && (
+                    <div
+                      id="routing-details"
+                      className="mt-3 grid gap-3 xl:grid-cols-2"
+                    >
+                      {services.map((service) => {
+                        const allPausedForService = service.usedBy.every(
+                          (workerType) =>
+                            workerStatus?.workers[workerType]?.paused,
+                        );
+                        const intentionallyPaused = allPausedForService &&
+                          service.status !== "healthy";
+                        const statusClass = intentionallyPaused
+                          ? "bg-amber-500/10 text-amber-600"
+                          : service.status === "healthy"
+                          ? "bg-green-500/10 text-green-600"
+                          : service.status === "loading"
+                          ? "bg-amber-500/10 text-amber-600"
+                          : "bg-red-500/10 text-red-600";
+                        return (
+                          <div
+                            key={service.id}
+                            className="space-y-2 rounded-lg border p-3"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                {intentionallyPaused
+                                  ? (
+                                    <PauseCircle className="mt-0.5 h-5 w-5 text-amber-500" />
+                                  )
+                                  : service.status === "healthy"
+                                  ? (
+                                    <Wifi className="mt-0.5 h-5 w-5 text-green-500" />
+                                  )
+                                  : (
+                                    <WifiOff className="mt-0.5 h-5 w-5 text-red-500" />
+                                  )}
+                                <div>
+                                  <div className="font-medium">
+                                    {service.label}
+                                  </div>
+                                  <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
+                                    {service.baseUrl || "Not configured"}
+                                  </div>
+                                </div>
+                              </div>
+                              <Badge
+                                variant="secondary"
+                                className={statusClass}
+                              >
+                                {intentionallyPaused
+                                  ? "paused intentionally"
+                                  : service.status}
+                                {service.httpStatus
+                                  ? ` · HTTP ${service.httpStatus}`
+                                  : ""}
+                              </Badge>
+                            </div>
 
-                          {service.id === "llm" && (
-                            <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                              {service.routes?.length
-                                ? (
-                                  <>
-                                    <Label className="text-xs">
-                                      Provider-aware LLM routes
-                                    </Label>
-                                    <p className="text-xs text-muted-foreground">
-                                      Requests use the highest-priority enabled
-                                      route and fail over down the list on
-                                      errors.
+                            <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                              <div>
+                                Source:{" "}
+                                <span className="font-mono text-foreground">
+                                  {service.source || "none"}
+                                </span>
+                              </div>
+                              {service.providerProfileName && (
+                                <div>
+                                  Preset:{" "}
+                                  <span className="font-mono text-foreground">
+                                    {service.providerProfileName}
+                                  </span>
+                                </div>
+                              )}
+                              <div>
+                                Model:{" "}
+                                <span className="font-mono text-foreground">
+                                  {service.model || service.models?.[0] ||
+                                    "unknown"}
+                                </span>
+                              </div>
+                              <div>
+                                Latency:{" "}
+                                <span className="text-foreground">
+                                  {service.latencyMs != null
+                                    ? `${service.latencyMs} ms`
+                                    : "—"}
+                                </span>
+                              </div>
+                              <div>
+                                Checked:{" "}
+                                <span className="text-foreground">
+                                  {format(
+                                    new Date(service.checkedAt),
+                                    "HH:mm:ss",
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div
+                              className={`rounded p-2 text-xs ${
+                                service.status === "healthy"
+                                  ? "bg-green-500/5"
+                                  : intentionallyPaused
+                                  ? "bg-amber-500/5 text-amber-700"
+                                  : "bg-red-500/5 text-red-500"
+                              }`}
+                            >
+                              {intentionallyPaused
+                                ? `Expected while all routed workers are paused. Last probe: ${service.message}`
+                                : service.message}
+                            </div>
+
+                            {service.id === "diarizator" && (
+                              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-xs font-medium">
+                                      Diarizator routes
                                     </p>
-                                    <div className="space-y-1">
-                                      {service.routes.map((route) => {
-                                        const pinnedWorkers = Object.entries(
-                                          pinnedTaskRoutes ?? {},
-                                        )
-                                          .filter(([, providerId]) =>
-                                            providerId ===
-                                              route.providerProfileId
+                                    <p className="text-xs text-muted-foreground">
+                                      New jobs use the first healthy enabled
+                                      route by priority.
+                                    </p>
+                                  </div>
+                                  <Button size="sm" variant="outline" asChild>
+                                    <Link to="/settings/diarization">
+                                      Configure
+                                    </Link>
+                                  </Button>
+                                </div>
+                                {service.routes?.map((route) => {
+                                  const priorityDraft =
+                                    diarizationPriorityDrafts[
+                                      route.providerProfileId
+                                    ] ?? String(route.priority);
+                                  const parsedPriority = Number(priorityDraft);
+                                  const validPriority = Number.isInteger(
+                                    parsedPriority,
+                                  ) && parsedPriority >= 1 &&
+                                    parsedPriority <= 100;
+                                  return (
+                                    <div
+                                      key={route.providerProfileId}
+                                      className="flex flex-wrap items-center gap-2 rounded border bg-background p-2 text-xs md:flex-nowrap"
+                                      title={route.message}
+                                    >
+                                      <div className="flex shrink-0 items-center gap-1.5">
+                                        <Switch
+                                          checked={route.enabled}
+                                          disabled={updateDiarizationRouteMutation
+                                            .isPending}
+                                          onCheckedChange={(enabled) =>
+                                            updateDiarizationRouteMutation
+                                              .mutate(
+                                                {
+                                                  profileId:
+                                                    route.providerProfileId,
+                                                  changes: { enabled },
+                                                },
+                                              )}
+                                          aria-label={`Enable ${route.providerProfileName}`}
+                                        />
+                                        <span className="w-6 text-muted-foreground">
+                                          {route.enabled ? "On" : "Off"}
+                                        </span>
+                                      </div>
+                                      <div className="flex min-w-[9rem] flex-wrap items-center gap-1.5">
+                                        <span className="truncate font-medium">
+                                          {route.providerProfileName}
+                                        </span>
+                                        <DiarizatorReadinessStatusBadge
+                                          route={route}
+                                        />
+                                        <span className="text-muted-foreground">
+                                          {` · ${route.concurrency ?? 1} slot${
+                                            (route.concurrency ?? 1) === 1
+                                              ? ""
+                                              : "s"
+                                          }`}
+                                        </span>
+                                      </div>
+                                      <div
+                                        className="min-w-[11rem] flex-1 truncate font-mono text-muted-foreground"
+                                        title={route.baseUrl}
+                                      >
+                                        {route.baseUrl}
+                                      </div>
+                                      <div className="flex shrink-0 items-center gap-1.5">
+                                        <Label
+                                          htmlFor={`diar-priority-${route.providerProfileId}`}
+                                          className="text-[11px] text-muted-foreground"
+                                        >
+                                          Priority
+                                        </Label>
+                                        <Input
+                                          id={`diar-priority-${route.providerProfileId}`}
+                                          type="number"
+                                          min={1}
+                                          max={100}
+                                          step={1}
+                                          value={priorityDraft}
+                                          onChange={(event) =>
+                                            setDiarizationPriorityDrafts((
+                                              current,
+                                            ) => ({
+                                              ...current,
+                                              [route.providerProfileId]:
+                                                event.target.value,
+                                            }))}
+                                          className="h-8 w-16"
+                                          aria-label={`Priority for ${route.providerProfileName}`}
+                                        />
+                                        <Button
+                                          size="icon"
+                                          variant="outline"
+                                          className="h-8 w-8"
+                                          disabled={!validPriority ||
+                                            updateDiarizationRouteMutation
+                                              .isPending ||
+                                            parsedPriority === route.priority}
+                                          onClick={() =>
+                                            updateDiarizationRouteMutation
+                                              .mutate(
+                                                {
+                                                  profileId:
+                                                    route.providerProfileId,
+                                                  changes: {
+                                                    priority: parsedPriority,
+                                                  },
+                                                },
+                                              )}
+                                          aria-label={`Save priority for ${route.providerProfileName}`}
+                                          title="Save priority"
+                                        >
+                                          <Save className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </div>
+                                      <Badge
+                                        variant={route.status === "healthy"
+                                          ? "secondary"
+                                          : route.status === "disabled"
+                                          ? "outline"
+                                          : "destructive"}
+                                        className="shrink-0"
+                                        aria-label={`${
+                                          route.status === "healthy"
+                                            ? "running"
+                                            : route.status
+                                        }: ${route.message}`}
+                                        title={route.message}
+                                      >
+                                        {route.status === "healthy"
+                                          ? "running"
+                                          : route.status}
+                                      </Badge>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {service.id === "llm" && (
+                              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                                {service.routes?.length
+                                  ? (
+                                    <>
+                                      <Label className="text-xs">
+                                        Provider-aware LLM routes
+                                      </Label>
+                                      <p className="text-xs text-muted-foreground">
+                                        Requests use the highest-priority
+                                        enabled route and fail over down the
+                                        list on errors.
+                                      </p>
+                                      <div className="space-y-1">
+                                        {service.routes.map((route) => {
+                                          const pinnedWorkers = Object.entries(
+                                            pinnedTaskRoutes ?? {},
                                           )
-                                          .map(([workerType]) => workerType);
-                                        return (
+                                            .filter(([, providerId]) =>
+                                              providerId ===
+                                                route.providerProfileId
+                                            )
+                                            .map(([workerType]) => workerType);
+                                          return (
+                                            <div
+                                              key={route.providerProfileId}
+                                              className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
+                                            >
+                                              <div className="flex min-w-0 items-center gap-2">
+                                                <Switch
+                                                  checked={route.enabled}
+                                                  disabled={setLlmRouteEnabledMutation
+                                                    .isPending}
+                                                  onCheckedChange={(enabled) =>
+                                                    setLlmRouteEnabledMutation
+                                                      .mutate(
+                                                        {
+                                                          profileId: route
+                                                            .providerProfileId,
+                                                          enabled,
+                                                        },
+                                                      )}
+                                                  aria-label={`Enable ${route.providerProfileName} LLM route`}
+                                                />
+                                                <div className="min-w-0">
+                                                  <div className="truncate font-medium">
+                                                    {route.providerProfileName}
+                                                  </div>
+                                                  <div className="text-muted-foreground">
+                                                    {route.enabled
+                                                      ? "Enabled for new requests"
+                                                      : "Disabled for new requests"}
+                                                  </div>
+                                                  {!route.enabled &&
+                                                    pinnedWorkers.length > 0 &&
+                                                    (
+                                                      <div className="text-red-500">
+                                                        {pinnedWorkers.length}
+                                                        {" "}
+                                                        task route(s) pinned to
+                                                        this provider will fail:
+                                                        {" "}
+                                                        {pinnedWorkers.join(
+                                                          ", ",
+                                                        )} —{" "}
+                                                        <Link
+                                                          to="/settings/inference"
+                                                          className="underline"
+                                                        >
+                                                          Configure routing
+                                                        </Link>
+                                                      </div>
+                                                    )}
+                                                </div>
+                                              </div>
+                                              <span className="font-mono text-muted-foreground">
+                                                P{route.priority} ·{" "}
+                                                {route.model || "unknown"}
+                                                {typeof route.concurrency ===
+                                                    "number"
+                                                  ? ` · ${route.concurrency} req${
+                                                    route.concurrency === 1
+                                                      ? ""
+                                                      : "s"
+                                                  }`
+                                                  : ""}
+                                              </span>
+                                              <div className="flex items-center gap-2">
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  onClick={() =>
+                                                    makeLlmPrimaryMutation
+                                                      .mutate(
+                                                        route.providerProfileId,
+                                                      )}
+                                                  disabled={makeLlmPrimaryMutation
+                                                    .isPending}
+                                                  title="Give this route the highest priority"
+                                                >
+                                                  Make primary
+                                                </Button>
+                                                <Badge
+                                                  variant="secondary"
+                                                  className={route.status ===
+                                                      "disabled"
+                                                    ? "bg-muted text-muted-foreground"
+                                                    : undefined}
+                                                >
+                                                  {route.status}
+                                                </Badge>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </>
+                                  )
+                                  : (
+                                    <p className="text-xs text-muted-foreground">
+                                      No LLM provider routes are configured yet.
+                                    </p>
+                                  )}
+                                <div className="flex flex-wrap gap-2">
+                                  <Button asChild size="sm" variant="outline">
+                                    <Link to="/settings/inference">
+                                      Configure LLM providers
+                                    </Link>
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      testServiceMutation.mutate("llm")}
+                                    disabled={testServiceMutation.isPending}
+                                  >
+                                    <RefreshCw
+                                      className={`mr-2 h-3.5 w-3.5 ${
+                                        testServiceMutation.isPending &&
+                                          testServiceMutation.variables ===
+                                            "llm"
+                                          ? "animate-spin"
+                                          : ""
+                                      }`}
+                                    />
+                                    Test LLM
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+
+                            {service.id === "stt" && (
+                              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                                {service.routes?.length
+                                  ? (
+                                    <>
+                                      <Label className="text-xs">
+                                        Provider-aware transcription routes
+                                      </Label>
+                                      <p className="text-xs text-muted-foreground">
+                                        The toggle controls Mycelia routing for
+                                        new jobs; it does not stop the server
+                                        process.
+                                      </p>
+                                      <div className="space-y-1">
+                                        {service.routes.map((route) => (
                                           <div
                                             key={route.providerProfileId}
                                             className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
@@ -4477,18 +4668,16 @@ export default function JobsPage() {
                                             <div className="flex min-w-0 items-center gap-2">
                                               <Switch
                                                 checked={route.enabled}
-                                                disabled={setLlmRouteEnabledMutation
+                                                disabled={setSttRouteEnabledMutation
                                                   .isPending}
                                                 onCheckedChange={(enabled) =>
-                                                  setLlmRouteEnabledMutation
-                                                    .mutate(
-                                                      {
-                                                        profileId: route
-                                                          .providerProfileId,
-                                                        enabled,
-                                                      },
-                                                    )}
-                                                aria-label={`Enable ${route.providerProfileName} LLM route`}
+                                                  setSttRouteEnabledMutation
+                                                    .mutate({
+                                                      profileId:
+                                                        route.providerProfileId,
+                                                      enabled,
+                                                    })}
+                                                aria-label={`Enable ${route.providerProfileName} STT route`}
                                               />
                                               <div className="min-w-0">
                                                 <div className="truncate font-medium">
@@ -4496,2263 +4685,2403 @@ export default function JobsPage() {
                                                 </div>
                                                 <div className="text-muted-foreground">
                                                   {route.enabled
-                                                    ? "Enabled for new requests"
-                                                    : "Disabled for new requests"}
+                                                    ? "Enabled for new jobs"
+                                                    : "Disabled for new jobs"}
                                                 </div>
-                                                {!route.enabled &&
-                                                  pinnedWorkers.length > 0 && (
-                                                  <div className="text-red-500">
-                                                    {pinnedWorkers.length}{" "}
-                                                    task route(s) pinned to this
-                                                    provider will fail:{" "}
-                                                    {pinnedWorkers.join(", ")} —
-                                                    {" "}
-                                                    <Link
-                                                      to="/settings/inference"
-                                                      className="underline"
-                                                    >
-                                                      Configure routing
-                                                    </Link>
-                                                  </div>
-                                                )}
                                               </div>
                                             </div>
                                             <span className="font-mono text-muted-foreground">
                                               P{route.priority} ·{" "}
-                                              {route.model || "unknown"}
-                                              {typeof route.concurrency ===
-                                                  "number"
-                                                ? ` · ${route.concurrency} req${
-                                                  route.concurrency === 1
-                                                    ? ""
-                                                    : "s"
-                                                }`
-                                                : ""}
+                                              {route.model || "unknown"} ·{" "}
+                                              {route.concurrency}{" "}
+                                              slot{route.concurrency ===
+                                                  1
+                                                ? ""
+                                                : "s"}
                                             </span>
-                                            <div className="flex items-center gap-2">
-                                              <Button
-                                                size="sm"
-                                                variant="outline"
-                                                onClick={() =>
-                                                  makeLlmPrimaryMutation.mutate(
-                                                    route.providerProfileId,
-                                                  )}
-                                                disabled={makeLlmPrimaryMutation
-                                                  .isPending}
-                                                title="Give this route the highest priority"
-                                              >
-                                                Make primary
-                                              </Button>
-                                              <Badge
-                                                variant="secondary"
-                                                className={route.status ===
-                                                    "disabled"
-                                                  ? "bg-muted text-muted-foreground"
-                                                  : undefined}
-                                              >
-                                                {route.status}
-                                              </Badge>
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  </>
-                                )
-                                : (
-                                  <p className="text-xs text-muted-foreground">
-                                    No LLM provider routes are configured yet.
-                                  </p>
-                                )}
-                              <div className="flex flex-wrap gap-2">
-                                <Button asChild size="sm" variant="outline">
-                                  <Link to="/settings/inference">
-                                    Configure LLM providers
-                                  </Link>
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    testServiceMutation.mutate("llm")}
-                                  disabled={testServiceMutation.isPending}
-                                >
-                                  <RefreshCw
-                                    className={`mr-2 h-3.5 w-3.5 ${
-                                      testServiceMutation.isPending &&
-                                        testServiceMutation.variables === "llm"
-                                        ? "animate-spin"
-                                        : ""
-                                    }`}
-                                  />
-                                  Test LLM
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-
-                          {service.id === "stt" && (
-                            <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                              {service.routes?.length
-                                ? (
-                                  <>
-                                    <Label className="text-xs">
-                                      Provider-aware transcription routes
-                                    </Label>
-                                    <p className="text-xs text-muted-foreground">
-                                      The toggle controls Mycelia routing for
-                                      new jobs; it does not stop the server
-                                      process.
-                                    </p>
-                                    <div className="space-y-1">
-                                      {service.routes.map((route) => (
-                                        <div
-                                          key={route.providerProfileId}
-                                          className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
-                                        >
-                                          <div className="flex min-w-0 items-center gap-2">
-                                            <Switch
-                                              checked={route.enabled}
-                                              disabled={setSttRouteEnabledMutation
-                                                .isPending}
-                                              onCheckedChange={(enabled) =>
-                                                setSttRouteEnabledMutation
-                                                  .mutate({
-                                                    profileId:
-                                                      route.providerProfileId,
-                                                    enabled,
-                                                  })}
-                                              aria-label={`Enable ${route.providerProfileName} STT route`}
-                                            />
-                                            <div className="min-w-0">
-                                              <div className="truncate font-medium">
-                                                {route.providerProfileName}
-                                              </div>
-                                              <div className="text-muted-foreground">
-                                                {route.enabled
-                                                  ? "Enabled for new jobs"
-                                                  : "Disabled for new jobs"}
-                                              </div>
-                                            </div>
-                                          </div>
-                                          <span className="font-mono text-muted-foreground">
-                                            P{route.priority} ·{" "}
-                                            {route.model || "unknown"} ·{" "}
-                                            {route.concurrency}{" "}
-                                            slot{route.concurrency ===
-                                                1
-                                              ? ""
-                                              : "s"}
-                                          </span>
-                                          <Badge
-                                            variant="secondary"
-                                            className={route.status ===
-                                                "disabled"
-                                              ? "bg-muted text-muted-foreground"
-                                              : undefined}
-                                          >
-                                            {route.status}
-                                          </Badge>
-                                        </div>
-                                      ))}
-                                    </div>
-                                    <Button asChild size="sm" variant="outline">
-                                      <Link to="/settings/speech-to-text">
-                                        Configure STT providers
-                                      </Link>
-                                    </Button>
-                                  </>
-                                )
-                                : (
-                                  <>
-                                    <Label className="text-xs">
-                                      Model for transcription jobs
-                                    </Label>
-                                    <div className="flex flex-wrap gap-2">
-                                      <Select
-                                        value={selectedSttModel}
-                                        onValueChange={setSelectedSttModel}
-                                        disabled={!service.models?.length}
-                                      >
-                                        <SelectTrigger className="min-w-52 flex-1">
-                                          <SelectValue placeholder="Load STT models first" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {[
-                                            ...new Set([
-                                              ...(service.models || []),
-                                              ...(selectedSttModel
-                                                ? [selectedSttModel]
-                                                : []),
-                                            ]),
-                                          ].map((model) => (
-                                            <SelectItem
-                                              key={model}
-                                              value={model}
+                                            <Badge
+                                              variant="secondary"
+                                              className={route.status ===
+                                                  "disabled"
+                                                ? "bg-muted text-muted-foreground"
+                                                : undefined}
                                             >
-                                              {model}
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
+                                              {route.status}
+                                            </Badge>
+                                          </div>
+                                        ))}
+                                      </div>
                                       <Button
+                                        asChild
                                         size="sm"
-                                        onClick={() =>
-                                          saveSttModelMutation.mutate(
-                                            selectedSttModel,
-                                          )}
-                                        disabled={!selectedSttModel ||
-                                          saveSttModelMutation.isPending}
-                                      >
-                                        <Save className="mr-2 h-3.5 w-3.5" />
-                                        Save model
-                                      </Button>
-                                      <Button
                                         variant="outline"
-                                        size="sm"
-                                        onClick={() =>
-                                          testServiceMutation.mutate("stt")}
-                                        disabled={testServiceMutation.isPending}
                                       >
-                                        <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                                        Test & load models
+                                        <Link to="/settings/speech-to-text">
+                                          Configure STT providers
+                                        </Link>
                                       </Button>
-                                    </div>
-                                  </>
+                                    </>
+                                  )
+                                  : (
+                                    <>
+                                      <Label className="text-xs">
+                                        Model for transcription jobs
+                                      </Label>
+                                      <div className="flex flex-wrap gap-2">
+                                        <Select
+                                          value={selectedSttModel}
+                                          onValueChange={setSelectedSttModel}
+                                          disabled={!service.models?.length}
+                                        >
+                                          <SelectTrigger className="min-w-52 flex-1">
+                                            <SelectValue placeholder="Load STT models first" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {[
+                                              ...new Set([
+                                                ...(service.models || []),
+                                                ...(selectedSttModel
+                                                  ? [selectedSttModel]
+                                                  : []),
+                                              ]),
+                                            ].map((model) => (
+                                              <SelectItem
+                                                key={model}
+                                                value={model}
+                                              >
+                                                {model}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                        <Button
+                                          size="sm"
+                                          onClick={() =>
+                                            saveSttModelMutation.mutate(
+                                              selectedSttModel,
+                                            )}
+                                          disabled={!selectedSttModel ||
+                                            saveSttModelMutation.isPending}
+                                        >
+                                          <Save className="mr-2 h-3.5 w-3.5" />
+                                          Save model
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() =>
+                                            testServiceMutation.mutate("stt")}
+                                          disabled={testServiceMutation
+                                            .isPending}
+                                        >
+                                          <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                                          Test & load models
+                                        </Button>
+                                      </div>
+                                    </>
+                                  )}
+                              </div>
+                            )}
+
+                            {serviceTestResults[service.id] && (
+                              <div className="text-xs text-muted-foreground">
+                                {serviceTestResults[service.id]}
+                              </div>
+                            )}
+
+                            <div className="space-y-2">
+                              <div className="text-xs text-muted-foreground">
+                                Routed workers: {service.usedBy.join(", ")}
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  setServiceWorkersPausedMutation.mutate({
+                                    workerTypes: service.usedBy,
+                                    paused: !allPausedForService,
+                                  })}
+                                disabled={setServiceWorkersPausedMutation
+                                  .isPending}
+                              >
+                                {allPausedForService
+                                  ? <PlayCircle className="mr-2 h-4 w-4" />
+                                  : <PauseCircle className="mr-2 h-4 w-4" />}
+                                {allPausedForService
+                                  ? "Resume affected workers"
+                                  : "Pause affected workers"}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+          </CardContent>
+        </Card>
+
+        <Card className="order-2">
+          <CardHeader className="px-3 py-2.5">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <CardTitle className="text-base">Work ready now</CardTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Last persisted exact counts. Updating is manual and keeps the
+                  previous values visible.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2.5 text-xs"
+                onClick={() => refreshExactBacklogMutation.mutate()}
+                disabled={refreshExactBacklogMutation.isPending ||
+                  pipelineHealth?.snapshot?.state === "refreshing"}
+              >
+                <RefreshCw
+                  className={`mr-2 h-4 w-4 ${
+                    refreshExactBacklogMutation.isPending ||
+                      pipelineHealth?.snapshot?.state === "refreshing"
+                      ? "animate-spin"
+                      : ""
+                  }`}
+                />
+                {pipelineHealth?.snapshot?.state === "refreshing"
+                  ? "Updating backlog…"
+                  : pipelineHealth?.snapshot?.asOf
+                  ? "Update backlog"
+                  : "Calculate exact backlog"}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="px-3 pb-3 pt-0">
+            {!pipelineHealth
+              ? (
+                <div
+                  className={`text-sm ${
+                    pipelineHealthError
+                      ? "text-red-500"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {isFetchingPipelineHealth
+                    ? "Calculating exact backlog…"
+                    : pipelineHealthError instanceof Error
+                    ? pipelineHealthError.message
+                    : "Exact backlog has not been calculated yet."}
+                </div>
+              )
+              : (
+                <>
+                  <div className="mb-2 text-[10px] text-muted-foreground">
+                    {pipelineHealth.snapshot?.state === "stale"
+                      ? "Stale snapshot"
+                      : "Persisted snapshot"}
+                    {pipelineHealth.snapshot?.asOf
+                      ? ` as of ${
+                        new Date(pipelineHealth.snapshot.asOf).toLocaleString()
+                      }`
+                      : " · not calculated"}
+                    {pipelineHealth.snapshot?.lastError
+                      ? ` · refresh failed: ${pipelineHealth.snapshot.lastError}`
+                      : ""}
+                    {pipelineHealth.snapshot?.status === "cached"
+                      ? " · cached"
+                      : pipelineHealth.snapshot?.status === "stale-timeout"
+                      ? " · last successful snapshot; refresh timed out"
+                      : pipelineHealth.snapshot?.status === "partial-timeout"
+                      ? " · timed-out counts are marked below"
+                      : ""}
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                    {([
+                      ["transcription", "Ready for transcription", "stt"],
+                      [
+                        "conversation_extractor_merged",
+                        "Ready for conversation extraction",
+                        "llm",
+                      ],
+                      ["summarization", "Summary candidates", "llm"],
+                      ["tagger", "Untagged conversations", "llm"],
+                      ["entity_typing", "Untyped objects", "llm"],
+                    ] as const).map(([workerType, label, serviceId]) => {
+                      const backlog = pipelineHealth.backlogs[workerType] ?? {
+                        ready: null,
+                        readyStatus: "unavailable",
+                        readyWarning:
+                          "Calculate the exact backlog to populate this metric.",
+                        failedJobsUnretried: 0,
+                      };
+                      const service = services.find((item) =>
+                        item.id === serviceId
+                      );
+                      const stats = jobTypeStats.find((item) =>
+                        item.type === workerType
+                      );
+                      const busy = (stats?.active ?? 0) +
+                          (stats?.waiting ?? 0) >
+                        0;
+                      const workerPaused =
+                        workerStatus?.workers[workerType]?.paused ?? false;
+                      const countUnavailable = backlog.readyStatus != null &&
+                        backlog.readyStatus !== "exact";
+                      const runnable = service?.status === "healthy" &&
+                        !workerPaused && !busy && !countUnavailable;
+                      const availableWork = (backlog.ready ?? 0) +
+                        (backlog.retryableErrors ?? 0);
+                      const blockedReason = workerPaused
+                        ? "Worker is paused"
+                        : service?.status !== "healthy"
+                        ? `${service?.label ?? serviceId} is ${
+                          service?.status ?? "unavailable"
+                        }; enable a healthy route`
+                        : busy
+                        ? "A job is already active or waiting"
+                        : countUnavailable
+                        ? "Exact source count timed out; retry the snapshot later"
+                        : availableWork === 0
+                        ? "No new or retryable source work"
+                        : null;
+                      return (
+                        <div
+                          key={workerType}
+                          className="space-y-2 rounded-md border p-2.5"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="text-xs font-medium leading-tight">
+                              {label}
+                            </div>
+                            <div className="text-xl font-semibold leading-none">
+                              {backlog.ready == null ? "—" : backlog.ready}
+                            </div>
+                          </div>
+                          <div className="space-y-0.5 text-[10px] leading-tight text-muted-foreground">
+                            {backlog.processing != null && (
+                              <div>Processing: {backlog.processing}</div>
+                            )}
+                            {backlog.retryableErrors != null && (
+                              <div>
+                                Retryable source errors:{" "}
+                                {backlog.retryableErrors}
+                              </div>
+                            )}
+                            {backlog.missingTotal != null && (
+                              <div>
+                                Conversations missing summaries:{" "}
+                                {backlog.missingTotal}
+                              </div>
+                            )}
+                            {backlog.blockedWithoutTranscripts != null && (
+                              <div>
+                                Blocked without transcript:{" "}
+                                {backlog.blockedWithoutTranscripts}
+                              </div>
+                            )}
+                            <div>
+                              Unretried failed jobs:{" "}
+                              {backlog.failedJobsUnretried}
+                            </div>
+                            {backlog.readyAsOf && (
+                              <div>
+                                Count updated {formatLifecycleTimestamp(
+                                  backlog.readyAsOf,
                                 )}
-                            </div>
-                          )}
-
-                          {serviceTestResults[service.id] && (
-                            <div className="text-xs text-muted-foreground">
-                              {serviceTestResults[service.id]}
-                            </div>
-                          )}
-
-                          <div className="space-y-2">
-                            <div className="text-xs text-muted-foreground">
-                              Routed workers: {service.usedBy.join(", ")}
-                            </div>
+                                {backlog.readyStatus?.startsWith("stale-")
+                                  ? " · stale"
+                                  : ""}
+                              </div>
+                            )}
+                            {backlog.readyWarning && (
+                              <div className="text-amber-500">
+                                {backlog.readyWarning}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <Button
+                              size="sm"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() =>
+                                runBacklogMutation.mutate(workerType)}
+                              disabled={!runnable || availableWork === 0 ||
+                                runBacklogMutation.isPending}
+                              title={blockedReason ?? undefined}
+                            >
+                              <Play className="mr-1 h-3 w-3" />
+                              Run now
+                            </Button>
+                            {workerType === "entity_typing" &&
+                              backlog.readyStatus?.includes("unavailable") && (
+                              <Button
+                                asChild
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2 text-[11px]"
+                              >
+                                <Link to="/jobs/new?type=objectListCatalogBackfill">
+                                  Prepare catalog
+                                </Link>
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() =>
-                                setServiceWorkersPausedMutation.mutate({
-                                  workerTypes: service.usedBy,
-                                  paused: !allPausedForService,
-                                })}
-                              disabled={setServiceWorkersPausedMutation
-                                .isPending}
+                              className="h-7 px-2 text-[11px]"
+                              onClick={async () => {
+                                if (
+                                  await confirmAction({
+                                    title: `Retry failed ${workerType} jobs?`,
+                                    description:
+                                      `Retry all ${backlog.failedJobsUnretried} failed ${workerType} job(s)? Completed sources will be dismissed; unfinished sources will be queued with the current configuration.`,
+                                    actionLabel: "Retry failed jobs",
+                                  })
+                                ) {
+                                  retryFailedMutation.mutate({
+                                    workerType,
+                                    failedCount: backlog.failedJobsUnretried,
+                                  });
+                                }
+                              }}
+                              disabled={service?.status !== "healthy" ||
+                                backlog.failedJobsUnretried === 0 ||
+                                retryFailedMutation.isPending}
+                              title={service?.status !== "healthy"
+                                ? `${
+                                  service?.label ?? serviceId
+                                } must have a healthy route`
+                                : undefined}
                             >
-                              {allPausedForService
-                                ? <PlayCircle className="mr-2 h-4 w-4" />
-                                : <PauseCircle className="mr-2 h-4 w-4" />}
-                              {allPausedForService
-                                ? "Resume affected workers"
-                                : "Pause affected workers"}
+                              <RefreshCw className="mr-1 h-3 w-3" />
+                              Retry ({backlog.failedJobsUnretried})
                             </Button>
                           </div>
+                          {blockedReason && (
+                            <div
+                              className={`text-[10px] leading-tight ${
+                                service?.status !== "healthy"
+                                  ? "text-red-500"
+                                  : workerPaused
+                                  ? "text-amber-500"
+                                  : "text-blue-500"
+                              }`}
+                              title={service?.status !== "healthy"
+                                ? service?.message
+                                : blockedReason}
+                            >
+                              {blockedReason}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
-                )}
-              </>
-            )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="px-3 py-2.5">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">Work ready now</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Exact corpus-wide counts run only on request. Failed job history
-                is retained.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-2.5 text-xs"
-              onClick={() => void refetchPipelineHealth()}
-              disabled={isFetchingPipelineHealth}
-            >
-              <RefreshCw
-                className={`mr-2 h-4 w-4 ${
-                  isFetchingPipelineHealth ? "animate-spin" : ""
-                }`}
-              />
-              {pipelineHealth
-                ? "Refresh exact snapshot"
-                : "Calculate exact backlog"}
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="px-3 pb-3 pt-0">
-          {!pipelineHealth
-            ? (
-              <div
-                className={`text-sm ${
-                  pipelineHealthError ? "text-red-500" : "text-muted-foreground"
-                }`}
-              >
-                {isFetchingPipelineHealth
-                  ? "Calculating exact backlog…"
-                  : pipelineHealthError instanceof Error
-                  ? pipelineHealthError.message
-                  : "Exact backlog has not been calculated in this session."}
-              </div>
-            )
-            : (
-              <>
-                <div className="mb-2 text-[10px] text-muted-foreground">
-                  {pipelineHealth.snapshot?.status === "partial-timeout"
-                    ? "Partial snapshot"
-                    : "Exact snapshot"} as of {new Date(
-                    pipelineHealth.snapshot?.asOf ?? pipelineHealth.checkedAt,
-                  ).toLocaleString()}
-                  {pipelineHealth.snapshot?.status === "cached"
-                    ? " · cached"
-                    : pipelineHealth.snapshot?.status === "stale-timeout"
-                    ? " · last successful snapshot; refresh timed out"
-                    : pipelineHealth.snapshot?.status === "partial-timeout"
-                    ? " · timed-out counts are marked below"
-                    : ""}
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-                  {([
-                    ["transcription", "Ready for transcription", "stt"],
-                    [
-                      "conversation_extractor_merged",
-                      "Ready for conversation extraction",
-                      "llm",
-                    ],
-                    ["summarization", "Summary candidates", "llm"],
-                    ["tagger", "Untagged conversations", "llm"],
-                    ["entity_typing", "Untyped objects", "llm"],
-                  ] as const).map(([workerType, label, serviceId]) => {
-                    const backlog = pipelineHealth.backlogs[workerType];
-                    if (!backlog) return null;
-                    const service = services.find((item) =>
-                      item.id === serviceId
-                    );
-                    const stats = jobTypeStats.find((item) =>
-                      item.type === workerType
-                    );
-                    const busy = (stats?.active ?? 0) +
-                        (stats?.waiting ?? 0) >
-                      0;
-                    const workerPaused =
-                      workerStatus?.workers[workerType]?.paused ?? false;
-                    const countUnavailable = backlog.readyStatus === "timeout";
-                    const runnable = service?.status === "healthy" &&
-                      !workerPaused && !busy && !countUnavailable;
-                    const availableWork = (backlog.ready ?? 0) +
-                      (backlog.retryableErrors ?? 0);
-                    const blockedReason = workerPaused
-                      ? "Worker is paused"
-                      : service?.status !== "healthy"
-                      ? `${service?.label ?? serviceId} is ${
-                        service?.status ?? "unavailable"
-                      }; enable a healthy route`
-                      : busy
-                      ? "A job is already active or waiting"
-                      : countUnavailable
-                      ? "Exact source count timed out; retry the snapshot later"
-                      : availableWork === 0
-                      ? "No new or retryable source work"
-                      : null;
-                    return (
-                      <div
-                        key={workerType}
-                        className="space-y-2 rounded-md border p-2.5"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="text-xs font-medium leading-tight">
-                            {label}
-                          </div>
-                          <div className="text-xl font-semibold leading-none">
-                            {backlog.ready == null ? "—" : backlog.ready}
-                          </div>
-                        </div>
-                        <div className="space-y-0.5 text-[10px] leading-tight text-muted-foreground">
-                          {backlog.processing != null && (
-                            <div>Processing: {backlog.processing}</div>
-                          )}
-                          {backlog.retryableErrors != null && (
-                            <div>
-                              Retryable source errors: {backlog.retryableErrors}
-                            </div>
-                          )}
-                          {backlog.missingTotal != null && (
-                            <div>
-                              Conversations missing summaries:{" "}
-                              {backlog.missingTotal}
-                            </div>
-                          )}
-                          {backlog.blockedWithoutTranscripts != null && (
-                            <div>
-                              Blocked without transcript:{" "}
-                              {backlog.blockedWithoutTranscripts}
-                            </div>
-                          )}
-                          <div>
-                            Unretried failed jobs: {backlog.failedJobsUnretried}
-                          </div>
-                          {backlog.readyWarning && (
-                            <div className="text-amber-500">
-                              {backlog.readyWarning}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          <Button
-                            size="sm"
-                            className="h-7 px-2 text-[11px]"
-                            onClick={() =>
-                              runBacklogMutation.mutate(workerType)}
-                            disabled={!runnable || availableWork === 0 ||
-                              runBacklogMutation.isPending}
-                            title={blockedReason ?? undefined}
-                          >
-                            <Play className="mr-1 h-3 w-3" />
-                            Run now
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 px-2 text-[11px]"
-                            onClick={async () => {
-                              if (
-                                await confirmAction({
-                                  title: `Retry failed ${workerType} jobs?`,
-                                  description:
-                                    `Retry all ${backlog.failedJobsUnretried} failed ${workerType} job(s)? Completed sources will be dismissed; unfinished sources will be queued with the current configuration.`,
-                                  actionLabel: "Retry failed jobs",
-                                })
-                              ) {
-                                retryFailedMutation.mutate({
-                                  workerType,
-                                  failedCount: backlog.failedJobsUnretried,
-                                });
-                              }
-                            }}
-                            disabled={service?.status !== "healthy" ||
-                              backlog.failedJobsUnretried === 0 ||
-                              retryFailedMutation.isPending}
-                            title={service?.status !== "healthy"
-                              ? `${
-                                service?.label ?? serviceId
-                              } must have a healthy route`
-                              : undefined}
-                          >
-                            <RefreshCw className="mr-1 h-3 w-3" />
-                            Retry ({backlog.failedJobsUnretried})
-                          </Button>
-                        </div>
-                        {blockedReason && (
-                          <div
-                            className={`text-[10px] leading-tight ${
-                              service?.status !== "healthy"
-                                ? "text-red-500"
-                                : workerPaused
-                                ? "text-amber-500"
-                                : "text-blue-500"
-                            }`}
-                            title={service?.status !== "healthy"
-                              ? service?.message
-                              : blockedReason}
-                          >
-                            {blockedReason}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          {pipelineHealth?.recovery && (
-            <div className="mt-4 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
-              {pipelineHealth.recovery.note}
-            </div>
-          )}
-          {pipelineHealth && pipelineHealthError instanceof Error && (
-            <div className="mt-3 text-xs text-red-500">
-              Refresh failed:{" "}
-              {pipelineHealthError.message}. Showing the last successful
-              snapshot.
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card id="timeline-integrity" className="scroll-mt-4">
-        <CardHeader className="pb-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-base">
-                Timeline integrity & recovery
-              </CardTitle>
-              <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
-                Audit raw timeline sources against persisted histograms, repair
-                terminal transcription bookkeeping, and run a bounded full
-                histogram rebuild with a persistent campaign report.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (!timelineAuditRequested) {
-                  setTimelineAuditRequested(true);
-                } else {
-                  void refetchTimelineIntegrity();
-                }
-              }}
-              disabled={isFetchingTimelineIntegrity}
-            >
-              <RefreshCw
-                className={`mr-2 h-3.5 w-3.5 ${
-                  isFetchingTimelineIntegrity ? "animate-spin" : ""
-                }`}
-              />
-              {timelineIntegrity ? "Refresh audit" : "Run audit"}
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {!timelineAuditRequested && !timelineIntegrity && (
-            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-              The audit is explicit because it scans historical source and
-              histogram metadata. It does not write anything.
-            </div>
-          )}
-          {timelineAuditRequested && !timelineIntegrity && (
-            <div className="text-sm text-muted-foreground">
-              Checking timeline sources, histogram totals, stale buckets, and
-              the latest rebuild campaign…
-            </div>
-          )}
-          {timelineIntegrity && (
-            <>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <Badge
-                  variant="secondary"
-                  className={timelineIntegrity.status === "healthy"
-                    ? "bg-green-500/10 text-green-500"
-                    : "bg-amber-500/10 text-amber-500"}
-                >
-                  {timelineIntegrity.status === "healthy"
-                    ? "Histogram audit passed"
-                    : "Needs attention"}
-                </Badge>
-                <span className="text-muted-foreground">
-                  Checked {formatTimelineAuditDate(timelineIntegrity.checkedAt)}
-                </span>
-                <span className="text-muted-foreground">
-                  · totals use the 1-day histogram
-                </span>
-                <span className="text-muted-foreground">
-                  · loaded in {timelineIntegrity.performance.totalMs} ms (
-                  {Object.entries(timelineIntegrity.performance.stages).map(
-                    ([stage, duration]) => `${stage} ${duration} ms`,
-                  ).join(" · ")})
-                </span>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-3">
-                {timelineIntegrity.sources.map((source) => (
-                  <div
-                    key={source.collection}
-                    className="rounded-lg border p-3"
-                  >
-                    <div className="text-sm font-medium">{source.label}</div>
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <div className="text-muted-foreground">
-                          Raw documents
-                        </div>
-                        <div className="font-mono text-sm">
-                          {source.documents}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-muted-foreground">
-                          Histogram total
-                        </div>
-                        <div className="font-mono text-sm">
-                          {source.histogramDocuments}
-                        </div>
-                      </div>
-                    </div>
-                    <div
-                      className={`mt-2 text-xs ${
-                        source.difference === 0
-                          ? "text-green-500"
-                          : "text-red-500"
-                      }`}
-                    >
-                      Difference: {source.difference > 0 ? "+" : ""}
-                      {source.difference}
-                    </div>
-                    <div className="mt-2 text-[11px] text-muted-foreground">
-                      {formatTimelineAuditDate(source.firstStart)} —{"  "}
-                      {formatTimelineAuditDate(source.lastEnd)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="overflow-x-auto rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Resolution</TableHead>
-                      <TableHead className="text-right">Buckets</TableHead>
-                      <TableHead className="text-right">Stale</TableHead>
-                      <TableHead>Coverage</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {timelineIntegrity.histograms.map((histogram) => (
-                      <TableRow key={histogram.resolution}>
-                        <TableCell className="font-mono text-xs">
-                          {histogram.resolution}
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-xs">
-                          {histogram.buckets}
-                        </TableCell>
-                        <TableCell
-                          className={`text-right font-mono text-xs ${
-                            histogram.stale > 0 ? "text-amber-500" : ""
-                          }`}
-                        >
-                          {histogram.stale}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {formatTimelineAuditDate(histogram.firstStart)} —{" "}
-                          {formatTimelineAuditDate(histogram.lastStart)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {timelineIntegrity.issues.length > 0 && (
-                <div className="space-y-2">
-                  {timelineIntegrity.issues.map((issue) => (
-                    <div
-                      key={issue.code}
-                      className={`flex gap-2 rounded-md border p-3 text-xs ${
-                        issue.severity === "error"
-                          ? "border-red-500/30 bg-red-500/5 text-red-500"
-                          : "border-amber-500/30 bg-amber-500/5 text-amber-500"
-                      }`}
-                    >
-                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      <span>{issue.message}</span>
-                    </div>
-                  ))}
-                </div>
+                </>
               )}
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-3 rounded-lg border p-4">
-                  <div>
-                    <div className="text-sm font-medium">
-                      Terminal transcription bookkeeping
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {timelineIntegrity.bookkeeping.checked
-                        ? `${
-                          timelineIntegrity.bookkeeping.eligibleChunks ?? 0
-                        } chunk(s) still have transcribed_at=null although their owning sequence is completed or empty.`
-                        : "The exact marker check is separate from the fast histogram audit. Run Preview repair to scan it."}
-                      {" "}
-                      This repair never creates or changes transcript text.
-                    </p>
-                  </div>
-                  {timelineRepairPreview && (
-                    <div className="rounded bg-muted/50 p-2 text-xs">
-                      Preview: {timelineRepairPreview.eligibleChunks} eligible ·
-                      {timelineRepairPreview.applied
-                        ? ` ${timelineRepairPreview.modifiedChunks} repaired`
-                        : " no writes applied"}
-                    </div>
-                  )}
-                  {!timelineRepairPreview &&
-                    timelineIntegrity.lastBookkeepingRepair && (
-                    <div className="rounded bg-muted/50 p-2 text-xs">
-                      Last applied repair: {timelineIntegrity
-                        .lastBookkeepingRepair.modifiedChunks} marker(s) ·{" "}
-                      {formatTimelineAuditDate(
-                        timelineIntegrity.lastBookkeepingRepair.checkedAt,
-                      )} · {timelineIntegrity.lastBookkeepingRepair.durationMs}
-                      {" "}
-                      ms
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        previewTimelineBookkeepingMutation.mutate()}
-                      disabled={previewTimelineBookkeepingMutation.isPending ||
-                        applyTimelineBookkeepingMutation.isPending}
-                    >
-                      <Search className="mr-2 h-3.5 w-3.5" />
-                      Preview repair
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={async () => {
-                        if (
-                          await confirmAction({
-                            title: "Repair terminal transcription markers?",
-                            description:
-                              `Update transcribed_at for ${timelineRepairEligible} audio chunk(s) whose transcription sequence is already completed or empty. Transcript text and sequence state will not be changed.`,
-                            actionLabel: "Apply marker repair",
-                          })
-                        ) {
-                          applyTimelineBookkeepingMutation.mutate();
-                        }
-                      }}
-                      disabled={timelineRepairEligible === 0 ||
-                        applyTimelineBookkeepingMutation.isPending ||
-                        previewTimelineBookkeepingMutation.isPending}
-                    >
-                      <Check className="mr-2 h-3.5 w-3.5" />
-                      Apply repair ({timelineRepairEligible})
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-3 rounded-lg border p-4">
-                  <div>
-                    <div className="text-sm font-medium">
-                      Full histogram rebuild
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Enqueues contiguous 31-day histRecalculation jobs with
-                      staleOnly=false over the complete raw source range. The
-                      shared campaign ID makes progress and failures auditable.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      onClick={async () => {
-                        if (
-                          await confirmAction({
-                            title: "Rebuild the complete timeline histogram?",
-                            description:
-                              "This writes every histogram resolution across the full raw source range in bounded 31-day jobs. Existing audio, transcripts, and diarization documents are read only.",
-                            actionLabel: "Queue full rebuild",
-                          })
-                        ) {
-                          startTimelineRebuildMutation.mutate();
-                        }
-                      }}
-                      disabled={timelineCampaignBusy ||
-                        startTimelineRebuildMutation.isPending}
-                    >
-                      <Play className="mr-2 h-3.5 w-3.5" />
-                      {timelineCampaignBusy
-                        ? "Rebuild in progress"
-                        : "Queue full rebuild"}
-                    </Button>
-                    <Button asChild variant="outline" size="sm">
-                      <Link to="/jobs?type=histRecalculation">
-                        View histogram jobs
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
+            {pipelineHealth?.recovery && (
+              <div className="mt-4 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
+                {pipelineHealth.recovery.note}
               </div>
+            )}
+            {pipelineHealth && pipelineHealthError instanceof Error && (
+              <div className="mt-3 text-xs text-red-500">
+                Refresh failed:{" "}
+                {pipelineHealthError.message}. Showing the last successful
+                snapshot.
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-              {timelineIntegrity.campaign && (
-                <div className="rounded-lg border p-4 text-xs">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <span className="font-medium">
-                        Latest rebuild campaign
-                      </span>
-                      <span className="ml-2 font-mono text-muted-foreground">
-                        {timelineIntegrity.campaign.campaignId}
-                      </span>
-                    </div>
-                    <Badge variant="secondary">
-                      {timelineIntegrity.campaign.status.replaceAll("_", " ")}
-                    </Badge>
-                  </div>
-                  <div className="mt-3 space-y-1">
-                    <Progress
-                      value={timelineIntegrity.campaign.plannedJobs > 0
-                        ? timelineIntegrity.campaign.completed /
-                          timelineIntegrity.campaign.plannedJobs * 100
-                        : 0}
-                      className="h-2"
-                    />
-                    <div className="text-muted-foreground">
-                      {timelineIntegrity.campaign.plannedJobs > 0
-                        ? Math.round(
-                          timelineIntegrity.campaign.completed /
-                            timelineIntegrity.campaign.plannedJobs * 100,
-                        )
-                        : 0}% complete
-                    </div>
-                  </div>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                    <div>Completed: {timelineIntegrity.campaign.completed}</div>
-                    <div>Active: {timelineIntegrity.campaign.active}</div>
-                    <div>Waiting: {timelineIntegrity.campaign.waiting}</div>
-                    <div>Failed: {timelineIntegrity.campaign.failed}</div>
-                    <div>Cancelled: {timelineIntegrity.campaign.cancelled}</div>
-                    <div>
-                      Queued: {timelineIntegrity.campaign.queuedJobs}/
-                      {timelineIntegrity.campaign.plannedJobs}
-                    </div>
-                  </div>
-                  <div className="mt-2 text-muted-foreground">
-                    {formatTimelineAuditDate(timelineIntegrity.campaign.start)}
-                    {" "}
-                    —{"  "}
-                    {formatTimelineAuditDate(timelineIntegrity.campaign.end)}
-                  </div>
-                  {timelineIntegrity.campaign.finishedAt && (
-                    <div className="mt-2 text-muted-foreground">
-                      Finished {formatTimelineAuditDate(
-                        timelineIntegrity.campaign.finishedAt,
-                      )}
-                    </div>
-                  )}
-                  {timelineIntegrity.campaign.failures.map((failure) => (
-                    <div
-                      key={failure.jobId ?? failure.batchIndex}
-                      className="mt-2 rounded bg-red-500/5 p-2 text-red-500"
-                    >
-                      Batch {(failure.batchIndex ?? 0) + 1}: {failure.reason}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <p className="text-[11px] text-muted-foreground">
-                {timelineIntegrity.scope.note}
-              </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Workers & Statistics */}
-      <Card>
-        <CardHeader className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Workers</CardTitle>
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <Card id="timeline-integrity" className="order-5 scroll-mt-4">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">
+                  Timeline integrity & recovery
+                </CardTitle>
+                <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+                  Audit raw timeline sources against persisted histograms,
+                  repair terminal transcription bookkeeping, and run a bounded
+                  full histogram rebuild with a persistent campaign report.
+                </p>
+              </div>
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 px-2 text-[11px]"
-                onClick={() => void refetchJobStats()}
-                disabled={isFetchingJobStats}
+                onClick={() => refreshTimelineIntegrityMutation.mutate()}
+                disabled={refreshTimelineIntegrityMutation.isPending ||
+                  timelineIntegrity?.snapshot?.state === "refreshing"}
               >
                 <RefreshCw
-                  className={`mr-1.5 h-3.5 w-3.5 ${
-                    isFetchingJobStats ? "animate-spin" : ""
+                  className={`mr-2 h-3.5 w-3.5 ${
+                    refreshTimelineIntegrityMutation.isPending ||
+                      timelineIntegrity?.snapshot?.state === "refreshing"
+                      ? "animate-spin"
+                      : ""
                   }`}
                 />
-                {jobStatsResponse
-                  ? "Refresh run history"
-                  : "Calculate run history"}
+                {timelineIntegrity?.snapshot?.state === "refreshing"
+                  ? "Checking…"
+                  : hasTimelineSnapshot
+                  ? "Refresh audit"
+                  : "Run audit"}
               </Button>
-              {jobStatsError && (
-                <span
-                  className="text-red-500"
-                  title={jobStatsError instanceof Error
-                    ? jobStatsError.message
-                    : "Run history calculation failed"}
-                >
-                  Run history failed
-                </span>
-              )}
-              <span>{sortedWorkers.length} configured</span>
-              {somePaused && (
-                <Badge
-                  variant="secondary"
-                  className="bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-500"
-                >
-                  {sortedWorkers.filter((w) =>
-                    workerStatus?.workers[w.type]?.paused
-                  ).length} paused
-                </Badge>
-              )}
             </div>
-          </div>
-        </CardHeader>
-        <CardContent className="overflow-x-auto p-0">
-          {isLoadingSchemas
-            ? (
-              <div className="p-4 text-muted-foreground text-sm">
-                Loading workers...
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!hasTimelineSnapshot && (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                No persisted integrity snapshot yet. Run audit manually; the
+                previous successful result will remain visible after failures.
               </div>
-            )
-            : (
-              <Table className="min-w-[1050px] text-xs">
-                <TableHeader>
-                  <TableRow className="h-8">
-                    <TableHead className="w-[40px] pl-4">On</TableHead>
-                    <TableHead className="w-[105px]">Actions</TableHead>
-                    <TableHead>Worker</TableHead>
-                    <TableHead className="w-[150px] text-center">
-                      Concurrency
-                    </TableHead>
-                    <TableHead className="w-[150px] text-center">
-                      Batch
-                    </TableHead>
-                    <TableHead className="w-[170px] text-center">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="cursor-help leading-tight">
-                            <div>Current queue</div>
-                            <div className="text-[9px] font-normal text-muted-foreground">
-                              active · queued · stale
-                            </div>
+            )}
+            {timelineIntegrity?.snapshot?.lastError && (
+              <div className="text-xs text-red-500">
+                Refresh failed:{" "}
+                {timelineIntegrity.snapshot.lastError}. Showing the snapshot
+                from {formatTimelineAuditDate(
+                  timelineIntegrity.snapshot.asOf,
+                )}.
+              </div>
+            )}
+            {timelineIntegrity &&
+              (hasTimelineSnapshot || Boolean(timelineIntegrity.campaign)) && (
+              <>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge
+                    variant="secondary"
+                    className={!hasTimelineSnapshot
+                      ? "bg-muted text-muted-foreground"
+                      : timelineIntegrity.status === "healthy"
+                      ? "bg-green-500/10 text-green-500"
+                      : "bg-amber-500/10 text-amber-500"}
+                  >
+                    {!hasTimelineSnapshot
+                      ? "Audit not checked"
+                      : timelineIntegrity.status === "healthy"
+                      ? "Histogram audit passed"
+                      : "Needs attention"}
+                  </Badge>
+                  {hasTimelineSnapshot && (
+                    <>
+                      <span className="text-muted-foreground">
+                        Checked {formatTimelineAuditDate(
+                          timelineIntegrity.checkedAt,
+                        )}
+                      </span>
+                      <span className="text-muted-foreground">
+                        · totals use the 1-day histogram
+                      </span>
+                      <span className="text-muted-foreground">
+                        · loaded in {timelineIntegrity.performance.totalMs} ms (
+                        {Object.entries(timelineIntegrity.performance.stages)
+                          .map(
+                            ([stage, duration]) => `${stage} ${duration} ms`,
+                          ).join(" · ")})
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  {timelineIntegrity.sources.map((source) => (
+                    <div
+                      key={source.collection}
+                      className="rounded-lg border p-3"
+                    >
+                      <div className="text-sm font-medium">{source.label}</div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <div className="text-muted-foreground">
+                            Raw documents
                           </div>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-72">
-                          Jobs running now, jobs waiting to start, and jobs or
-                          claims that may be stuck.
-                        </TooltipContent>
-                      </Tooltip>
-                    </TableHead>
-                    <TableHead className="w-[225px] text-center">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="cursor-help leading-tight">
-                            <div>Run history</div>
-                            <div className="text-[9px] font-normal text-muted-foreground">
-                              failed · total · success · empty
-                            </div>
+                          <div className="font-mono text-sm">
+                            {source.documents}
                           </div>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-72">
-                          Completed-run totals. Empty means a successful run
-                          that found no work to process.
-                        </TooltipContent>
-                      </Tooltip>
-                    </TableHead>
-                    <TableHead className="w-[150px] text-center">
-                      Schedule
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedWorkers.map((worker) => {
-                    const isPaused =
-                      workerStatus?.workers[worker.type]?.paused ?? false;
-                    // Only the row being toggled waits; a slow pause request
-                    // must not freeze the other workers' checkboxes.
-                    const isMutating = (pauseWorkerMutation.isPending &&
-                      pauseWorkerMutation.variables === worker.type) ||
-                      (resumeWorkerMutation.isPending &&
-                        resumeWorkerMutation.variables === worker.type);
-                    const stats = jobTypeStats.find((s) =>
-                      s.type === worker.type
-                    );
-                    const runtime = workerStatus?.workers[worker.type];
-                    const routedCapacity = routedWorkerCapacities.get(
-                      worker.type,
-                    );
-                    const routeManaged = routedCapacity != null;
-                    const liveJobs = (runtime?.active ?? 0) +
-                      (runtime?.waiting ?? 0) + (runtime?.delayed ?? 0);
-                    const forceStartSlots = isPaused ? 0 : Math.max(
-                      0,
-                      (runtime?.effectiveConcurrency ?? 1) - liveJobs,
-                    );
-                    return (
-                      <TableRow
-                        key={worker.type}
-                        className={`h-9 ${isPaused ? "bg-amber-500/5" : ""} ${
-                          !allTypesSelected && filterTypes.size === 1 &&
-                            filterTypes.has(worker.type)
-                            ? "ring-1 ring-inset ring-primary/30"
-                            : ""
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">
+                            Histogram total
+                          </div>
+                          <div className="font-mono text-sm">
+                            {source.histogramDocuments}
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        className={`mt-2 text-xs ${
+                          source.difference === 0
+                            ? "text-green-500"
+                            : "text-red-500"
                         }`}
                       >
-                        <TableCell className="pl-4 py-1">
-                          <Checkbox
-                            checked={!isPaused}
-                            onCheckedChange={() =>
-                              handleToggleWorker(worker.type, isPaused)}
-                            disabled={isMutating}
-                            className="cursor-pointer"
-                            aria-label={`${worker.type} enabled`}
-                          />
-                        </TableCell>
-                        <TableCell className="py-1">
-                          <div className="flex items-center">
-                            {worker.type === "diarization"
-                              ? <DiarizationLaunchDialog />
-                              : (
+                        Difference: {source.difference > 0 ? "+" : ""}
+                        {source.difference}
+                      </div>
+                      <div className="mt-2 text-[11px] text-muted-foreground">
+                        {formatTimelineAuditDate(source.firstStart)} —{"  "}
+                        {formatTimelineAuditDate(source.lastEnd)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {hasTimelineSnapshot && (
+                  <div className="overflow-x-auto rounded-lg border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Resolution</TableHead>
+                          <TableHead className="text-right">Buckets</TableHead>
+                          <TableHead className="text-right">Stale</TableHead>
+                          <TableHead>Coverage</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {timelineIntegrity.histograms.map((histogram) => (
+                          <TableRow key={histogram.resolution}>
+                            <TableCell className="font-mono text-xs">
+                              {histogram.resolution}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">
+                              {histogram.buckets}
+                            </TableCell>
+                            <TableCell
+                              className={`text-right font-mono text-xs ${
+                                histogram.stale > 0 ? "text-amber-500" : ""
+                              }`}
+                            >
+                              {histogram.stale}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {formatTimelineAuditDate(histogram.firstStart)} —
+                              {" "}
+                              {formatTimelineAuditDate(histogram.lastStart)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                {timelineIntegrity.issues.length > 0 && (
+                  <div className="space-y-2">
+                    {timelineIntegrity.issues.map((issue) => (
+                      <div
+                        key={issue.code}
+                        className={`flex gap-2 rounded-md border p-3 text-xs ${
+                          issue.severity === "error"
+                            ? "border-red-500/30 bg-red-500/5 text-red-500"
+                            : "border-amber-500/30 bg-amber-500/5 text-amber-500"
+                        }`}
+                      >
+                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          {issue.message}
+                          {issue.actionLabel && (
+                            <span className="ml-2 font-medium">
+                              Action: {issue.actionLabel}.
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-3 rounded-lg border p-4">
+                    <div>
+                      <div className="text-sm font-medium">
+                        Terminal transcription bookkeeping
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {timelineIntegrity.bookkeeping.checked
+                          ? `${
+                            timelineIntegrity.bookkeeping.eligibleChunks ?? 0
+                          } chunk(s) still have transcribed_at=null although their owning sequence is completed or empty.`
+                          : "The exact marker check is separate from the fast histogram audit. Run Preview repair to scan it."}
+                        {" "}
+                        This repair never creates or changes transcript text.
+                      </p>
+                    </div>
+                    {timelineRepairPreview && (
+                      <div className="rounded bg-muted/50 p-2 text-xs">
+                        Preview: {timelineRepairPreview.eligibleChunks}{" "}
+                        eligible ·
+                        {timelineRepairPreview.applied
+                          ? ` ${timelineRepairPreview.modifiedChunks} repaired`
+                          : " no writes applied"}
+                      </div>
+                    )}
+                    {!timelineRepairPreview &&
+                      timelineIntegrity.lastBookkeepingRepair && (
+                      <div className="rounded bg-muted/50 p-2 text-xs">
+                        Last applied repair: {timelineIntegrity
+                          .lastBookkeepingRepair.modifiedChunks} marker(s) ·
+                        {" "}
+                        {formatTimelineAuditDate(
+                          timelineIntegrity.lastBookkeepingRepair.checkedAt,
+                        )} ·{" "}
+                        {timelineIntegrity.lastBookkeepingRepair.durationMs} ms
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          previewTimelineBookkeepingMutation.mutate()}
+                        disabled={previewTimelineBookkeepingMutation
+                          .isPending ||
+                          applyTimelineBookkeepingMutation.isPending}
+                      >
+                        <Search className="mr-2 h-3.5 w-3.5" />
+                        Preview repair
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={async () => {
+                          if (
+                            await confirmAction({
+                              title: "Repair terminal transcription markers?",
+                              description:
+                                `Update transcribed_at for ${timelineRepairEligible} audio chunk(s) whose transcription sequence is already completed or empty. Transcript text and sequence state will not be changed.`,
+                              actionLabel: "Apply marker repair",
+                            })
+                          ) {
+                            applyTimelineBookkeepingMutation.mutate();
+                          }
+                        }}
+                        disabled={timelineRepairEligible === 0 ||
+                          applyTimelineBookkeepingMutation.isPending ||
+                          previewTimelineBookkeepingMutation.isPending}
+                      >
+                        <Check className="mr-2 h-3.5 w-3.5" />
+                        Apply repair ({timelineRepairEligible})
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 rounded-lg border p-4">
+                    <div>
+                      <div className="text-sm font-medium">
+                        Full histogram rebuild
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Deletes and regenerates only derived audio/transcript
+                        density buckets in sequential 31-day batches. Raw audio
+                        and transcripts are untouched; this does not repair
+                        terminal markers or speaker identity.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={async () => {
+                          if (
+                            await confirmAction({
+                              title: "Rebuild the complete timeline histogram?",
+                              description:
+                                "This deletes and rebuilds derived audio/transcript histogram buckets across the full source range. Raw audio and transcripts are read only.",
+                              actionLabel: "Queue full rebuild",
+                            })
+                          ) {
+                            startTimelineRebuildMutation.mutate();
+                          }
+                        }}
+                        disabled={timelineCampaignBusy ||
+                          startTimelineRebuildMutation.isPending}
+                      >
+                        <Play className="mr-2 h-3.5 w-3.5" />
+                        {timelineCampaignBusy
+                          ? "Rebuild in progress"
+                          : "Queue full rebuild"}
+                      </Button>
+                      <Button asChild variant="outline" size="sm">
+                        <Link
+                          to={timelineIntegrity.campaign
+                            ? `/jobs?type=histRecalculation&campaignId=${timelineIntegrity.campaign.campaignId}`
+                            : "/jobs?type=histRecalculation"}
+                        >
+                          View histogram jobs
+                        </Link>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {timelineIntegrity.campaign && (
+                  <div className="rounded-lg border p-4 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <span className="font-medium">
+                          Latest rebuild campaign
+                        </span>
+                        <Link
+                          className="ml-2 font-mono text-primary hover:underline"
+                          to={`/jobs?type=histRecalculation&campaignId=${timelineIntegrity.campaign.campaignId}`}
+                        >
+                          {timelineIntegrity.campaign.campaignId}
+                        </Link>
+                      </div>
+                      <Badge variant="secondary">
+                        {timelineIntegrity.campaign.status === "paused_legacy"
+                          ? "Stopped"
+                          : timelineIntegrity.campaign.status.replaceAll(
+                            "_",
+                            " ",
+                          )}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 text-muted-foreground">
+                      Worker {timelineIntegrity.campaign.workerType ??
+                        "histRecalculation"} · queue{" "}
+                      {timelineIntegrity.campaign.queue ??
+                        "jobs-histRecalculation"}
+                      {timelineIntegrity.campaign.activeJobId
+                        ? ` · job ${timelineIntegrity.campaign.activeJobId}`
+                        : ""}
+                    </div>
+                    <div className="mt-3 space-y-1">
+                      <Progress
+                        value={timelineIntegrity.campaign.plannedJobs > 0
+                          ? timelineIntegrity.campaign.completed /
+                            timelineIntegrity.campaign.plannedJobs * 100
+                          : 0}
+                        className="h-2"
+                      />
+                      <div className="text-muted-foreground">
+                        {timelineIntegrity.campaign.status === "paused_legacy"
+                          ? `${timelineIntegrity.campaign.queuedJobs}/${timelineIntegrity.campaign.plannedJobs} batches · ${timelineIntegrity.campaign.missingJobs} not queued`
+                          : timelineIntegrity.campaign.plannedJobs > 0
+                          ? `${
+                            Math.round(
+                              timelineIntegrity.campaign.completed /
+                                timelineIntegrity.campaign.plannedJobs * 100,
+                            )
+                          }% complete`
+                          : "0% complete"}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                      <div>
+                        Completed: {timelineIntegrity.campaign.completed}
+                      </div>
+                      <div>Active: {timelineIntegrity.campaign.active}</div>
+                      <div>Waiting: {timelineIntegrity.campaign.waiting}</div>
+                      <div>Failed: {timelineIntegrity.campaign.failed}</div>
+                      <div>
+                        Cancelled: {timelineIntegrity.campaign.cancelled}
+                      </div>
+                      <div>
+                        Queued: {timelineIntegrity.campaign.queuedJobs}/
+                        {timelineIntegrity.campaign.plannedJobs}
+                      </div>
+                      <div
+                        className={timelineIntegrity.campaign.missingJobs > 0
+                          ? "text-red-500"
+                          : ""}
+                      >
+                        Missing: {timelineIntegrity.campaign.missingJobs}
+                      </div>
+                    </div>
+                    {typeof timelineIntegrity.campaign.progress?.phase ===
+                        "string" && (
+                      <div className="mt-2 text-muted-foreground">
+                        Current phase: {String(
+                          timelineIntegrity.campaign.progress.phase,
+                        )} · batch {Number(
+                          timelineIntegrity.campaign.progress.batchNumber ?? 1,
+                        )}/{timelineIntegrity.campaign.plannedJobs}
+                      </div>
+                    )}
+                    {timelineIntegrity.campaign.processedThrough && (
+                      <div className="mt-2 text-muted-foreground">
+                        Processed through {formatTimelineAuditDate(
+                          timelineIntegrity.campaign.processedThrough,
+                        )}
+                      </div>
+                    )}
+                    {timelineIntegrity.campaign.blockingReason && (
+                      <div className="mt-2 rounded bg-red-500/5 p-2 text-red-500">
+                        {timelineIntegrity.campaign.blockingReason}
+                      </div>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {timelineIntegrity.campaign.canResume && (
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            if (
+                              await confirmAction({
+                                title: "Resume Timeline rebuild?",
+                                description: `Resume from batch index ${
+                                  timelineIntegrity.campaign?.nextBatchIndex ??
+                                    0
+                                }. Missing continuations will recover automatically after this confirmation.`,
+                                actionLabel: "Resume campaign",
+                              })
+                            ) {
+                              resumeTimelineRebuildMutation.mutate(
+                                timelineIntegrity.campaign!.campaignId,
+                              );
+                            }
+                          }}
+                          disabled={resumeTimelineRebuildMutation.isPending}
+                        >
+                          <Play className="mr-2 h-3.5 w-3.5" />
+                          Resume from batch {timelineIntegrity.campaign
+                            .nextBatchIndex ?? 0}
+                        </Button>
+                      )}
+                      {timelineIntegrity.campaign.canPause && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            pauseTimelineRebuildMutation.mutate(
+                              timelineIntegrity.campaign!.campaignId,
+                            )}
+                          disabled={pauseTimelineRebuildMutation.isPending}
+                        >
+                          Pause auto-recovery
+                        </Button>
+                      )}
+                    </div>
+                    <div className="mt-2 text-muted-foreground">
+                      {formatTimelineAuditDate(
+                        timelineIntegrity.campaign.start,
+                      )} —{"  "}
+                      {formatTimelineAuditDate(timelineIntegrity.campaign.end)}
+                    </div>
+                    {timelineIntegrity.campaign.finishedAt && (
+                      <div className="mt-2 text-muted-foreground">
+                        Finished {formatTimelineAuditDate(
+                          timelineIntegrity.campaign.finishedAt,
+                        )}
+                      </div>
+                    )}
+                    {timelineIntegrity.campaign.failures.map((failure) => (
+                      <div
+                        key={failure.jobId ?? failure.batchIndex}
+                        className="mt-2 rounded bg-red-500/5 p-2 text-red-500"
+                      >
+                        Batch {(failure.batchIndex ?? 0) + 1}: {failure.reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <p className="text-[11px] text-muted-foreground">
+                  {timelineIntegrity.scope.note}
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Workers & Statistics */}
+        <Card className="order-3">
+          <CardHeader className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Workers</CardTitle>
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => setShowWorkerAdvanced((current) => !current)}
+                >
+                  {showWorkerAdvanced ? "Hide advanced" : "Advanced columns"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => refreshRunHistoryMutation.mutate()}
+                  disabled={refreshRunHistoryMutation.isPending ||
+                    jobStatsResponse?.snapshot?.state === "refreshing"}
+                >
+                  <RefreshCw
+                    className={`mr-1.5 h-3.5 w-3.5 ${
+                      refreshRunHistoryMutation.isPending ||
+                        jobStatsResponse?.snapshot?.state === "refreshing"
+                        ? "animate-spin"
+                        : ""
+                    }`}
+                  />
+                  {jobStatsResponse?.snapshot?.state === "refreshing"
+                    ? "Updating history…"
+                    : jobStatsResponse?.snapshot?.asOf
+                    ? "Update history"
+                    : "Build history"}
+                </Button>
+                {jobStatsResponse?.snapshot?.asOf && (
+                  <span>
+                    Updated {formatLifecycleTimestamp(
+                      jobStatsResponse.snapshot.asOf,
+                    )}
+                  </span>
+                )}
+                {(jobStatsError || jobStatsResponse?.snapshot?.lastError) && (
+                  <span
+                    className="text-red-500"
+                    title={jobStatsResponse?.snapshot?.lastError ||
+                      (jobStatsError instanceof Error
+                        ? jobStatsError.message
+                        : "Run history calculation failed")}
+                  >
+                    Showing stale history
+                  </span>
+                )}
+                <span>
+                  {sortedWorkers.filter((worker) =>
+                    worker.availability === "ready"
+                  ).length} ready · {sortedWorkers.length} known
+                </span>
+                {jobsDashboard?.catalog.state !== "ready" && (
+                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                    catalog {jobsDashboard?.catalog.state ?? "starting"}
+                  </Badge>
+                )}
+                {somePaused && (
+                  <Badge
+                    variant="secondary"
+                    className="bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-500"
+                  >
+                    {sortedWorkers.filter((w) =>
+                      workerStatus?.workers[w.type]?.paused
+                    ).length} paused
+                  </Badge>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="overflow-x-auto p-0">
+            {isLoadingSchemas
+              ? (
+                <div className="p-4 text-muted-foreground text-sm">
+                  Loading workers...
+                </div>
+              )
+              : (
+                <Table
+                  className={`${
+                    showWorkerAdvanced ? "min-w-[1050px]" : "min-w-[760px]"
+                  } text-xs`}
+                >
+                  <TableHeader>
+                    <TableRow className="h-8">
+                      <TableHead className="w-[40px] pl-4">On</TableHead>
+                      <TableHead className="w-[105px]">Actions</TableHead>
+                      <TableHead>Worker</TableHead>
+                      {showWorkerAdvanced && (
+                        <>
+                          <TableHead className="w-[150px] text-center">
+                            Concurrency
+                          </TableHead>
+                          <TableHead className="w-[150px] text-center">
+                            Batch
+                          </TableHead>
+                        </>
+                      )}
+                      <TableHead className="w-[170px] text-center">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="cursor-help leading-tight">
+                              <div>Current queue</div>
+                              <div className="text-[9px] font-normal text-muted-foreground">
+                                active · queued · stale
+                              </div>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-72">
+                            Jobs running now, jobs waiting to start, and jobs or
+                            claims that may be stuck.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TableHead>
+                      <TableHead className="w-[225px] text-center">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="cursor-help leading-tight">
+                              <div>Run history</div>
+                              <div className="text-[9px] font-normal text-muted-foreground">
+                                failed · total · success · empty
+                              </div>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-72">
+                            Completed-run totals. Empty means a successful run
+                            that found no work to process.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TableHead>
+                      {showWorkerAdvanced && (
+                        <TableHead className="w-[150px] text-center">
+                          Schedule
+                        </TableHead>
+                      )}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedWorkers.map((worker) => {
+                      const isPaused =
+                        workerStatus?.workers[worker.type]?.paused ?? false;
+                      // Only the row being toggled waits; a slow pause request
+                      // must not freeze the other workers' checkboxes.
+                      const isMutating = (pauseWorkerMutation.isPending &&
+                        pauseWorkerMutation.variables === worker.type) ||
+                        (resumeWorkerMutation.isPending &&
+                          resumeWorkerMutation.variables === worker.type);
+                      const stats = jobTypeStats.find((s) =>
+                        s.type === worker.type
+                      );
+                      const runtime = workerStatus?.workers[worker.type];
+                      const routedCapacity = routedWorkerCapacities.get(
+                        worker.type,
+                      );
+                      const routeManaged = routedCapacity != null;
+                      const liveJobs = (runtime?.active ?? 0) +
+                        (runtime?.waiting ?? 0) + (runtime?.delayed ?? 0);
+                      const forceStartSlots = isPaused ? 0 : Math.max(
+                        0,
+                        (runtime?.effectiveConcurrency ?? 1) - liveJobs,
+                      );
+                      return (
+                        <TableRow
+                          key={worker.type}
+                          className={`h-9 ${isPaused ? "bg-amber-500/5" : ""} ${
+                            !allTypesSelected && filterTypes.size === 1 &&
+                              filterTypes.has(worker.type)
+                              ? "ring-1 ring-inset ring-primary/30"
+                              : ""
+                          }`}
+                        >
+                          <TableCell className="pl-4 py-1">
+                            <Checkbox
+                              checked={!isPaused}
+                              onCheckedChange={() =>
+                                handleToggleWorker(worker.type, isPaused)}
+                              disabled={isMutating ||
+                                !worker.capabilities.pause}
+                              className="cursor-pointer"
+                              aria-label={`${worker.type} enabled`}
+                            />
+                          </TableCell>
+                          <TableCell className="py-1">
+                            <div className="flex items-center">
+                              {!worker.capabilities.manualRun
+                                ? (
+                                  <Button
+                                    asChild
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 px-2 text-[10px]"
+                                  >
+                                    <Link to="/pipeline">Pipeline</Link>
+                                  </Button>
+                                )
+                                : worker.type === "diarization"
+                                ? <DiarizationLaunchDialog />
+                                : (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Link
+                                        to={`/jobs/new?type=${worker.type}`}
+                                      >
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-7 w-7"
+                                          aria-label={`Run ${worker.type} job`}
+                                        >
+                                          <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                                        </Button>
+                                      </Link>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      Run {worker.type} job
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    aria-label={`Clear ${worker.type} queue`}
+                                    disabled={clearQueueMutation.isPending ||
+                                      !worker.capabilities.pause ||
+                                      ((runtime?.waiting ?? 0) +
+                                          (runtime?.delayed ?? 0) === 0)}
+                                    onClick={() =>
+                                      handleClearWorkerQueue(
+                                        worker.type,
+                                        runtime?.active ?? 0,
+                                        runtime?.waiting ?? 0,
+                                        runtime?.delayed ?? 0,
+                                      )}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Clear {worker.type} queue
+                                </TooltipContent>
+                              </Tooltip>
+                              <DropdownMenu>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <Link to={`/jobs/new?type=${worker.type}`}>
+                                    <DropdownMenuTrigger asChild>
                                       <Button
                                         variant="ghost"
                                         size="icon"
                                         className="h-7 w-7"
-                                        aria-label={`Run ${worker.type} job`}
+                                        disabled={restartJobMutation
+                                          .isPending ||
+                                          forceStartMutation.isPending ||
+                                          resetWorkerMutation.isPending ||
+                                          !worker.capabilities.manualRun}
+                                        aria-label={`Recovery actions for ${worker.type}`}
                                       >
-                                        <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                                        <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
                                       </Button>
-                                    </Link>
+                                    </DropdownMenuTrigger>
                                   </TooltipTrigger>
                                   <TooltipContent>
-                                    Run {worker.type} job
+                                    Restart stale or force start
                                   </TooltipContent>
                                 </Tooltip>
-                              )}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
+                                <DropdownMenuContent
+                                  align="end"
+                                  className="w-72"
+                                >
+                                  {runtime?.staleJobs?.length
+                                    ? runtime.staleJobs.map((staleJob) => (
+                                      <DropdownMenuItem
+                                        key={staleJob.id}
+                                        onClick={async () => {
+                                          if (
+                                            await confirmAction({
+                                              title:
+                                                `Restart stale ${worker.type} job?`,
+                                              description:
+                                                `Restart job ${staleJob.id}. The original job will remain in history.`,
+                                              actionLabel: "Restart job",
+                                            })
+                                          ) {
+                                            restartJobMutation.mutate(
+                                              staleJob.id,
+                                            );
+                                          }
+                                        }}
+                                      >
+                                        <RotateCcw className="mr-2 h-4 w-4" />
+                                        Restart stale job …{staleJob.id.slice(
+                                          -6,
+                                        )}
+                                      </DropdownMenuItem>
+                                    ))
+                                    : (
+                                      <DropdownMenuItem disabled>
+                                        No stale active jobs
+                                      </DropdownMenuItem>
+                                    )}
+                                  <DropdownMenuSeparator />
+                                  {forceStartSlots > 0
+                                    ? Array.from(
+                                      { length: forceStartSlots },
+                                      (_, index) => index + 1,
+                                    ).map((count) => (
+                                      <DropdownMenuItem
+                                        key={count}
+                                        onClick={() =>
+                                          forceStartMutation.mutate({
+                                            workerType: worker.type,
+                                            count,
+                                          })}
+                                      >
+                                        <PlayCircle className="mr-2 h-4 w-4" />
+                                        Force start {count}{" "}
+                                        job{count > 1 ? "s" : ""}
+                                      </DropdownMenuItem>
+                                    ))
+                                    : (
+                                      <DropdownMenuItem disabled>
+                                        {isPaused
+                                          ? "Resume worker before force start"
+                                          : "No free concurrency slots"}
+                                      </DropdownMenuItem>
+                                    )}
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() =>
+                                      handleResetWorker(
+                                        worker.type,
+                                        runtime?.active ?? 0,
+                                        runtime?.waiting ?? 0,
+                                        runtime?.delayed ?? 0,
+                                        runtime?.staleClaims ?? 0,
+                                      )}
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Danger: reset entire worker
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-1">
+                            <button
+                              type="button"
+                              className="flex items-start gap-1.5 text-left hover:text-primary"
+                              onClick={() => toggleOnlyType(worker.type)}
+                              title={!allTypesSelected &&
+                                  filterTypes.size === 1 &&
+                                  filterTypes.has(worker.type)
+                                ? "Show all workers"
+                                : `Show only ${worker.type} jobs`}
+                            >
+                              <span className="min-w-0 max-w-[42rem]">
+                                <span
+                                  className={`flex items-center gap-1.5 text-sm ${
+                                    isPaused ? "text-muted-foreground" : ""
+                                  }`}
+                                >
+                                  <span>{worker.label}</span>
+                                  <Badge
+                                    variant="outline"
+                                    className="px-1 py-0 text-[9px] font-normal"
+                                  >
+                                    {worker.availability.replaceAll("_", " ")}
+                                  </Badge>
+                                  <span className="text-[9px] uppercase text-muted-foreground">
+                                    {worker.section}
+                                  </span>
+                                </span>
+                                <span
+                                  className="block truncate text-xs text-muted-foreground"
+                                  title={worker.description}
+                                >
+                                  {worker.description}
+                                </span>
+                              </span>
+                            </button>
+                          </TableCell>
+                          {showWorkerAdvanced && (
+                            <TableCell className="py-1">
+                              <div className="flex items-center justify-center gap-1">
+                                <Input
+                                  type="number"
+                                  min={runtime?.minConcurrency ?? 1}
+                                  max={runtime?.maxConcurrency ?? 8}
+                                  value={routeManaged
+                                    ? String(routedCapacity)
+                                    : concurrencyDrafts[worker.type] ??
+                                      String(runtime?.desiredConcurrency ?? 1)}
+                                  onChange={(event) =>
+                                    setConcurrencyDrafts((current) => ({
+                                      ...current,
+                                      [worker.type]: event.target.value,
+                                    }))}
+                                  className="h-7 w-16 px-2 text-center"
+                                  aria-label={`${worker.type} desired concurrency`}
+                                  disabled={routeManaged ||
+                                    !worker.capabilities.concurrency}
+                                  title={routeManaged
+                                    ? "Managed by enabled inference-route slots"
+                                    : undefined}
+                                />
                                 <Button
                                   variant="ghost"
                                   size="icon"
                                   className="h-7 w-7"
-                                  aria-label={`Clear ${worker.type} queue`}
-                                  disabled={clearQueueMutation.isPending ||
-                                    ((runtime?.waiting ?? 0) +
-                                        (runtime?.delayed ?? 0) === 0)}
+                                  disabled={setWorkerConcurrencyMutation
+                                    .isPending ||
+                                    (routeManaged
+                                      ? runtime?.desiredConcurrency ===
+                                          routedCapacity &&
+                                        runtime?.effectiveConcurrency ===
+                                          routedCapacity
+                                      : Number(
+                                        concurrencyDrafts[worker.type] ??
+                                          runtime?.desiredConcurrency ?? 1,
+                                      ) ===
+                                        (runtime?.desiredConcurrency ?? 1))}
                                   onClick={() =>
-                                    handleClearWorkerQueue(
-                                      worker.type,
-                                      runtime?.active ?? 0,
-                                      runtime?.waiting ?? 0,
-                                      runtime?.delayed ?? 0,
-                                    )}
+                                    setWorkerConcurrencyMutation.mutate({
+                                      workerType: worker.type,
+                                      concurrency: routeManaged
+                                        ? routedCapacity
+                                        : Number(
+                                          concurrencyDrafts[worker.type],
+                                        ),
+                                    })}
+                                  title={routeManaged
+                                    ? `Sync to ${routedCapacity} enabled route slots`
+                                    : "Save and apply concurrency"}
                                 >
-                                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                                  <Save className="h-3.5 w-3.5" />
                                 </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Clear {worker.type} queue
-                              </TooltipContent>
-                            </Tooltip>
-                            <DropdownMenu>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7"
-                                      disabled={restartJobMutation.isPending ||
-                                        forceStartMutation.isPending ||
-                                        resetWorkerMutation.isPending}
-                                      aria-label={`Recovery actions for ${worker.type}`}
-                                    >
-                                      <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  Restart stale or force start
-                                </TooltipContent>
-                              </Tooltip>
-                              <DropdownMenuContent align="end" className="w-72">
-                                {runtime?.staleJobs?.length
-                                  ? runtime.staleJobs.map((staleJob) => (
-                                    <DropdownMenuItem
-                                      key={staleJob.id}
-                                      onClick={async () => {
-                                        if (
-                                          await confirmAction({
-                                            title:
-                                              `Restart stale ${worker.type} job?`,
-                                            description:
-                                              `Restart job ${staleJob.id}. The original job will remain in history.`,
-                                            actionLabel: "Restart job",
-                                          })
-                                        ) {
-                                          restartJobMutation.mutate(
-                                            staleJob.id,
-                                          );
-                                        }
-                                      }}
-                                    >
-                                      <RotateCcw className="mr-2 h-4 w-4" />
-                                      Restart stale job …{staleJob.id.slice(-6)}
-                                    </DropdownMenuItem>
-                                  ))
-                                  : (
-                                    <DropdownMenuItem disabled>
-                                      No stale active jobs
-                                    </DropdownMenuItem>
-                                  )}
-                                <DropdownMenuSeparator />
-                                {forceStartSlots > 0
-                                  ? Array.from(
-                                    { length: forceStartSlots },
-                                    (_, index) => index + 1,
-                                  ).map((count) => (
-                                    <DropdownMenuItem
-                                      key={count}
-                                      onClick={() =>
-                                        forceStartMutation.mutate({
-                                          workerType: worker.type,
-                                          count,
-                                        })}
-                                    >
-                                      <PlayCircle className="mr-2 h-4 w-4" />
-                                      Force start {count}{" "}
-                                      job{count > 1 ? "s" : ""}
-                                    </DropdownMenuItem>
-                                  ))
-                                  : (
-                                    <DropdownMenuItem disabled>
-                                      {isPaused
-                                        ? "Resume worker before force start"
-                                        : "No free concurrency slots"}
-                                    </DropdownMenuItem>
-                                  )}
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  className="text-destructive focus:text-destructive"
-                                  onClick={() =>
-                                    handleResetWorker(
-                                      worker.type,
-                                      runtime?.active ?? 0,
-                                      runtime?.waiting ?? 0,
-                                      runtime?.delayed ?? 0,
-                                      runtime?.staleClaims ?? 0,
-                                    )}
-                                >
-                                  <Trash2 className="mr-2 h-4 w-4" />
-                                  Danger: reset entire worker
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </TableCell>
-                        <TableCell className="py-1">
-                          <button
-                            type="button"
-                            className="flex items-start gap-1.5 text-left hover:text-primary"
-                            onClick={() => toggleOnlyType(worker.type)}
-                            title={!allTypesSelected &&
-                                filterTypes.size === 1 &&
-                                filterTypes.has(worker.type)
-                              ? "Show all workers"
-                              : `Show only ${worker.type} jobs`}
-                          >
-                            <span className="text-xs text-muted-foreground w-4 pt-0.5">
-                              {worker.order < 999 ? worker.order + 1 : ""}
-                            </span>
-                            <span className="min-w-0">
-                              <span
-                                className={`block text-sm ${
-                                  isPaused ? "text-muted-foreground" : ""
-                                }`}
-                              >
-                                {worker.type}
-                              </span>
-                              <span
-                                className="block text-xs text-muted-foreground max-w-[42rem]"
-                                title={worker.description}
-                              >
-                                {worker.description}
-                              </span>
-                            </span>
-                          </button>
-                          {worker.type === "conversation_extractor_merged" && (
-                            <div className="mt-1 ml-5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                              <span>also tags new conversations —</span>
-                              <Badge variant="outline" className="px-1.5 py-0">
-                                tagger
-                              </Badge>
-                              <span>is only needed as a backfill</span>
-                            </div>
+                              </div>
+                              <div className="text-center text-[10px] text-muted-foreground">
+                                {setWorkerConcurrencyMutation.isPending &&
+                                    setWorkerConcurrencyMutation.variables
+                                        ?.workerType === worker.type
+                                  ? "applying…"
+                                  : `effective ${
+                                    runtime?.effectiveConcurrency ?? "—"
+                                  }`}
+                                {runtime && runtime.desiredConcurrency !==
+                                    runtime.effectiveConcurrency &&
+                                  ` · desired ${runtime.desiredConcurrency}`}
+                                {runtime &&
+                                  ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
+                                {routeManaged &&
+                                  ` · route slots ${routedCapacity}`}
+                              </div>
+                            </TableCell>
                           )}
-                        </TableCell>
-                        <TableCell className="py-1">
-                          <div className="flex items-center justify-center gap-1">
-                            <Input
-                              type="number"
-                              min={runtime?.minConcurrency ?? 1}
-                              max={runtime?.maxConcurrency ?? 8}
-                              value={routeManaged
-                                ? String(routedCapacity)
-                                : concurrencyDrafts[worker.type] ??
-                                  String(runtime?.desiredConcurrency ?? 1)}
-                              onChange={(event) =>
-                                setConcurrencyDrafts((current) => ({
-                                  ...current,
-                                  [worker.type]: event.target.value,
-                                }))}
-                              className="h-7 w-16 px-2 text-center"
-                              aria-label={`${worker.type} desired concurrency`}
-                              disabled={routeManaged}
-                              title={routeManaged
-                                ? "Managed by enabled inference-route slots"
-                                : undefined}
-                            />
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              disabled={setWorkerConcurrencyMutation
-                                .isPending ||
-                                (routeManaged
-                                  ? runtime?.desiredConcurrency ===
-                                      routedCapacity &&
-                                    runtime?.effectiveConcurrency ===
-                                      routedCapacity
-                                  : Number(
-                                    concurrencyDrafts[worker.type] ??
-                                      runtime?.desiredConcurrency ?? 1,
-                                  ) ===
-                                    (runtime?.desiredConcurrency ?? 1))}
-                              onClick={() =>
-                                setWorkerConcurrencyMutation.mutate({
-                                  workerType: worker.type,
-                                  concurrency: routeManaged
-                                    ? routedCapacity
-                                    : Number(concurrencyDrafts[worker.type]),
-                                })}
-                              title={routeManaged
-                                ? `Sync to ${routedCapacity} enabled route slots`
-                                : "Save and apply concurrency"}
-                            >
-                              <Save className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                          <div className="text-center text-[10px] text-muted-foreground">
-                            {setWorkerConcurrencyMutation.isPending &&
-                                setWorkerConcurrencyMutation.variables
-                                    ?.workerType === worker.type
-                              ? "applying…"
-                              : `effective ${
-                                runtime?.effectiveConcurrency ?? "—"
-                              }`}
-                            {runtime && runtime.desiredConcurrency !==
-                                runtime.effectiveConcurrency &&
-                              ` · desired ${runtime.desiredConcurrency}`}
-                            {runtime &&
-                              ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
-                            {routeManaged && ` · route slots ${routedCapacity}`}
-                          </div>
-                        </TableCell>
-                        <TableCell className="py-1 text-center">
-                          {batchCapableWorkers[worker.type]
-                            ? (
-                              <>
-                                <div className="flex items-center justify-center gap-1">
-                                  <Input
-                                    type="number"
-                                    min={batchCapableWorkers[worker.type].min}
-                                    max={batchCapableWorkers[worker.type].max}
-                                    value={batchDrafts[worker.type] ??
-                                      String(
-                                        getEffectiveBatchSize(worker.type) ??
-                                          "",
-                                      )}
-                                    onChange={(event) =>
-                                      setBatchDrafts((current) => ({
-                                        ...current,
-                                        [worker.type]: event.target.value,
-                                      }))}
-                                    className="h-7 w-16 px-2 text-center"
-                                    aria-label={`${worker.type} batch size`}
-                                    title={worker.type === "transcription"
-                                      ? "Audio sequences per STT request"
-                                      : worker.type === "diarization"
-                                      ? "Speech sequences processed per diarization job"
-                                      : "Items per LLM call"}
-                                  />
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    disabled={setWorkerBatchMutation
-                                      .isPending ||
-                                      Number(
-                                          batchDrafts[worker.type] ??
-                                            getEffectiveBatchSize(worker.type),
-                                        ) ===
-                                        getEffectiveBatchSize(worker.type)}
-                                    onClick={() =>
-                                      setWorkerBatchMutation.mutate({
-                                        workerType: worker.type,
-                                        batchSize: Number(
-                                          batchDrafts[worker.type] ??
-                                            getEffectiveBatchSize(worker.type),
-                                        ),
-                                      })}
-                                    title="Save batch size (applies to newly enqueued jobs)"
-                                  >
-                                    <Save className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                                <div className="text-center text-[10px] text-muted-foreground">
-                                  {setWorkerBatchMutation.isPending &&
-                                      setWorkerBatchMutation.variables
-                                          ?.workerType === worker.type
-                                    ? "applying…"
-                                    : `${
-                                      worker.type === "diarization"
-                                        ? "sequences/job"
-                                        : "batch"
-                                    } ${
-                                      getEffectiveBatchSize(worker.type) ?? "—"
-                                    }`}
-                                  {` · allowed ${
-                                    batchCapableWorkers[worker.type].min
-                                  }–${batchCapableWorkers[worker.type].max}`}
-                                </div>
-                              </>
-                            )
-                            : (
-                              <span className="text-sm text-muted-foreground">
-                                —
-                              </span>
-                            )}
-                        </TableCell>
-                        <TableCell className="py-1 text-center">
-                          <div className="flex items-center justify-center gap-2 text-[10px]">
-                            <span
-                              className={(runtime?.active ?? 0) > 0
-                                ? "text-blue-500"
-                                : "text-muted-foreground"}
-                              title="Jobs running now"
-                            >
-                              Active {runtime?.active ?? 0}
-                            </span>
-                            <span
-                              className={(runtime?.waiting ?? 0) +
-                                    (runtime?.delayed ?? 0) > 0
-                                ? "text-yellow-500"
-                                : "text-muted-foreground"}
-                              title="Waiting and delayed jobs"
-                            >
-                              Queued {(runtime?.waiting ?? 0) +
-                                (runtime?.delayed ?? 0)}
-                            </span>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span
-                                  className={((runtime?.staleActive ?? 0) +
-                                      (runtime?.staleClaims ?? 0)) > 0
-                                    ? "cursor-help text-amber-500"
-                                    : "text-muted-foreground"}
-                                >
-                                  Stale {(runtime?.staleActive ?? 0) +
-                                    (runtime?.staleClaims ?? 0)}
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {runtime?.staleActive ?? 0} stale active job(s),
-                                {" "}
-                                {runtime?.staleClaims ?? 0} stale claim(s)
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
-                        </TableCell>
-                        <TableCell className="py-1 text-center">
-                          <div className="flex items-center justify-center gap-2 text-[10px]">
-                            <span
-                              className={(stats?.failed ?? 0) > 0
-                                ? "text-red-500"
-                                : "text-muted-foreground"}
-                              title="Failed runs"
-                            >
-                              Failed {stats?.failed ?? "—"}
-                            </span>
-                            <span
-                              className="text-muted-foreground"
-                              title="Total runs"
-                            >
-                              Runs {stats?.totalRuns ?? "—"}
-                            </span>
-                            <Badge
-                              variant="secondary"
-                              className={`${
-                                !stats
-                                  ? "text-muted-foreground"
-                                  : stats.successRate >= 95
-                                  ? "bg-green-500/10 text-green-600"
-                                  : stats.successRate >= 80
-                                  ? "bg-yellow-500/10 text-yellow-600"
-                                  : "bg-red-500/10 text-red-600"
-                              } px-1.5 py-0 font-mono text-[10px]`}
-                              title="Success rate"
-                            >
-                              {stats
-                                ? `${stats.successRate.toFixed(0)}% ok`
-                                : "—"}
-                            </Badge>
-                            <span
-                              className="text-muted-foreground"
-                              title="Empty runs"
-                            >
-                              Empty {stats?.emptyRuns ?? "—"}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="py-1 text-center">
-                          {typeof runtime?.defaultTriggerIntervalSeconds ===
-                              "number"
-                            ? (
-                              <>
-                                <div className="flex items-center justify-center gap-1">
-                                  <Input
-                                    type="number"
-                                    min={0}
-                                    max={86400}
-                                    value={intervalDrafts[worker.type] ??
-                                      String(
-                                        runtime?.triggerIntervalSeconds ?? "",
-                                      )}
-                                    onChange={(event) =>
-                                      setIntervalDrafts((current) => ({
-                                        ...current,
-                                        [worker.type]: event.target.value,
-                                      }))}
-                                    className="h-7 w-16 px-2 text-center"
-                                    aria-label={`${worker.type} scheduled-run interval in seconds`}
-                                    title="Scheduled-run interval in seconds; 0 disables scheduled runs (event triggers still fire)"
-                                  />
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    disabled={setWorkerIntervalMutation
-                                      .isPending ||
-                                      Number(
-                                          intervalDrafts[worker.type] ??
-                                            runtime?.triggerIntervalSeconds ??
-                                            NaN,
-                                        ) ===
-                                        (runtime?.triggerIntervalSeconds ??
-                                          NaN)}
-                                    onClick={() =>
-                                      setWorkerIntervalMutation.mutate({
-                                        workerType: worker.type,
-                                        seconds: Number(
-                                          intervalDrafts[worker.type],
-                                        ),
-                                      })}
-                                    title="Save schedule interval"
-                                  >
-                                    <Save className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                                <div className="text-center text-[10px] text-muted-foreground">
-                                  {Number(
-                                      intervalDrafts[worker.type] ??
-                                        runtime?.triggerIntervalSeconds ?? 1,
-                                    ) === 0
-                                    ? "schedule off"
-                                    : `every ${
-                                      intervalDrafts[worker.type] ??
-                                        runtime?.triggerIntervalSeconds
-                                    }s`}
-                                  {` · runs ${stats?.avgFrequency ?? "-"}`}
-                                </div>
-                              </>
-                            )
-                            : (
-                              <span className="text-sm text-muted-foreground">
-                                {stats?.avgFrequency ?? "-"}
-                              </span>
-                            )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            )}
-        </CardContent>
-      </Card>
-
-      <div className="flex flex-wrap items-center gap-1">
-        <Button
-          variant={!isEmptyView ? "default" : "outline"}
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={() => setJobsView("operational")}
-        >
-          Jobs ({operationalViewCount})
-        </Button>
-        <Button
-          variant={isEmptyView ? "default" : "outline"}
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={() => setJobsView("idle_auto")}
-          title="Completed automatic checks that found no work"
-        >
-          Empty ({idleViewCount})
-        </Button>
-        {isEmptyView && (
-          <span className="text-xs text-muted-foreground">
-            Automatic checks that found no work. History is retained for
-            diagnostics.
-          </span>
-        )}
-      </div>
-
-      {!isEmptyView && (
-        <div className="flex flex-wrap gap-1">
-          <Button
-            variant={quickFilter === "all" ? "default" : "outline"}
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={() => setQuickFilter("all")}
-          >
-            All ({displayCounts.total})
-          </Button>
-          <Button
-            variant={quickFilter === "active" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setQuickFilter("active")}
-            className={quickFilter !== "active"
-              ? "h-7 px-2 text-xs text-blue-500 hover:text-blue-600"
-              : "h-7 px-2 text-xs"}
-          >
-            <Activity className="h-3.5 w-3.5 mr-1" />
-            Active ({displayCounts.active})
-          </Button>
-          <Button
-            variant={quickFilter === "waiting" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setQuickFilter("waiting")}
-            className={quickFilter !== "waiting"
-              ? "h-7 px-2 text-xs text-yellow-500 hover:text-yellow-600"
-              : "h-7 px-2 text-xs"}
-          >
-            <Clock className="h-3.5 w-3.5 mr-1" />
-            Waiting ({displayCounts.waiting})
-          </Button>
-          <Button
-            variant={quickFilter === "failed" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setQuickFilter("failed")}
-            className={quickFilter !== "failed"
-              ? "h-7 border-red-500/30 px-2 text-xs text-red-500 hover:text-red-600"
-              : "h-7 px-2 text-xs"}
-          >
-            <AlertCircle className="h-3.5 w-3.5 mr-1" />
-            Errors ({displayCounts.failed})
-          </Button>
-          <Button
-            variant={quickFilter === "completed" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setQuickFilter("completed")}
-            className={quickFilter !== "completed"
-              ? "h-7 px-2 text-xs text-green-500 hover:text-green-600"
-              : "h-7 px-2 text-xs"}
-          >
-            <CheckCircle className="h-3.5 w-3.5 mr-1" />
-            Completed ({displayCounts.completed})
-          </Button>
-        </div>
-      )}
-
-      {!isEmptyView && <JobErrorStats />}
-
-      <Card>
-        <CardContent className="space-y-2 p-2.5 [&_button]:h-8 [&_input]:h-8">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative w-[220px]">
-              <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="search"
-                placeholder="Search by ID or worker..."
-                className="h-8 pl-8 text-xs"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[200px] justify-between">
-                  {getTypesLabel()}
-                  <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[200px]">
-                <DropdownMenuItem
-                  onSelect={(e) => e.preventDefault()}
-                  onClick={selectAllTypes}
-                >
-                  <Checkbox
-                    checked={allTypesSelected}
-                    className="mr-2"
-                    onClick={(e) => e.stopPropagation()}
-                    onCheckedChange={(checked) =>
-                      checked ? selectAllTypes() : selectNoTypes()}
-                  />
-                  All workers
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                {isLoadingSchemas
-                  ? <DropdownMenuItem disabled>Loading...</DropdownMenuItem>
-                  : (
-                    allTypes.map((type) => (
-                      <DropdownMenuItem
-                        key={type}
-                        onSelect={(e) => e.preventDefault()}
-                        onClick={() => toggleType(type)}
-                        className="cursor-pointer"
-                      >
-                        <Checkbox
-                          checked={allTypesSelected || filterTypes.has(type)}
-                          className="mr-2"
-                          onClick={(e) => e.stopPropagation()}
-                          onCheckedChange={() => toggleType(type)}
-                        />
-                        {type}
-                        {legacyTypes.includes(type) && (
-                          <Badge
-                            variant="outline"
-                            className="ml-1 px-1 py-0 text-[10px]"
-                          >
-                            legacy
-                          </Badge>
-                        )}
-                      </DropdownMenuItem>
-                    ))
-                  )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <Popover
-              open={inferenceFilterOpen}
-              onOpenChange={setInferenceFilterOpen}
-            >
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="w-[230px] justify-between"
-                  title="Filter jobs by LLM provider, model or alias"
-                >
-                  <span className="truncate">
-                    {inferenceFilter
-                      ? `${inferenceFilter.kind}: ${inferenceFilter.value}`
-                      : "Provider / model"}
-                  </span>
-                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[320px] p-0" align="start">
-                <Command>
-                  <CommandInput placeholder="Search provider, model or alias…" />
-                  <CommandList>
-                    <CommandEmpty>Nothing matches.</CommandEmpty>
-                    {inferenceFilter && (
-                      <CommandGroup>
-                        <CommandItem
-                          value="__clear"
-                          onSelect={() => {
-                            setInferenceFilter(null);
-                            setInferenceFilterOpen(false);
-                          }}
-                        >
-                          Clear filter ({inferenceFilter.kind}:{" "}
-                          {inferenceFilter.value})
-                        </CommandItem>
-                      </CommandGroup>
-                    )}
-                    {inferenceFilterOptions.providers.length > 0 && (
-                      <CommandGroup heading="Providers">
-                        {inferenceFilterOptions.providers.map((
-                          [name, count],
-                        ) => (
-                          <CommandItem
-                            key={`provider-${name}`}
-                            value={`provider ${name}`}
-                            onSelect={() => {
-                              toggleInferenceFilter("provider", name);
-                              setInferenceFilterOpen(false);
-                            }}
-                          >
-                            <span className="truncate">{name}</span>
-                            <span className="ml-auto text-xs text-muted-foreground">
-                              {count}
-                            </span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    )}
-                    {inferenceFilterOptions.aliases.length > 0 && (
-                      <CommandGroup heading="Aliases">
-                        {inferenceFilterOptions.aliases.map(([name, count]) => (
-                          <CommandItem
-                            key={`alias-${name}`}
-                            value={`alias ${name}`}
-                            onSelect={() => {
-                              toggleInferenceFilter("alias", name);
-                              setInferenceFilterOpen(false);
-                            }}
-                          >
-                            <span className="truncate">{name}</span>
-                            <span className="ml-auto text-xs text-muted-foreground">
-                              {count}
-                            </span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    )}
-                    {inferenceFilterOptions.models.length > 0 && (
-                      <CommandGroup heading="Models">
-                        {inferenceFilterOptions.models.map(([name, count]) => (
-                          <CommandItem
-                            key={`model-${name}`}
-                            value={`model ${name}`}
-                            onSelect={() => {
-                              toggleInferenceFilter("model", name);
-                              setInferenceFilterOpen(false);
-                            }}
-                          >
-                            <span className="truncate">{name}</span>
-                            <span className="ml-auto text-xs text-muted-foreground">
-                              {count}
-                            </span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    )}
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-
-            <Select
-              value={errorFilter ?? "__all"}
-              onValueChange={(v) => setErrorFilter(v === "__all" ? null : v)}
-            >
-              <SelectTrigger
-                className="w-[190px]"
-                title="Filter failed jobs by error type"
-              >
-                <SelectValue placeholder="Error type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all">All errors</SelectItem>
-                {errorFilterOptions.map(([key, count]) => (
-                  <SelectItem key={key} value={key}>
-                    {key} ({count})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="w-[200px] justify-between capitalize"
-                >
-                  {getStatusesLabel()}
-                  <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[200px]">
-                <DropdownMenuItem
-                  onSelect={(e) => e.preventDefault()}
-                  onClick={selectAllStatuses}
-                >
-                  <Checkbox
-                    checked={filterStatuses.size === ALL_STATUSES.length}
-                    className="mr-2"
-                    onClick={(e) => e.stopPropagation()}
-                    onCheckedChange={(checked) =>
-                      checked ? selectAllStatuses() : selectNoStatuses()}
-                  />
-                  All Statuses
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                {ALL_STATUSES.map((status) => (
-                  <DropdownMenuItem
-                    key={status}
-                    onSelect={(e) => e.preventDefault()}
-                    onClick={() => selectOnlyStatus(status)}
-                    className="cursor-pointer capitalize"
-                  >
-                    <Checkbox
-                      checked={filterStatuses.has(status)}
-                      className="mr-2"
-                      onClick={(e) => e.stopPropagation()}
-                      onCheckedChange={() => toggleStatus(status)}
-                    />
-                    {status}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <div className="w-[120px]">
-              <Select
-                value={limit.toString()}
-                onValueChange={(v) => setLimit(parseInt(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Limit" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="20">20</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
-                  <SelectItem value="500">500</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {hasActiveFilters && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={clearFilters}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4 mr-1" />
-                Clear filters
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="overflow-x-auto p-0">
-          <Table className="min-w-[760px] text-xs">
-            <TableHeader>
-              <TableRow className="h-8 [&>th]:h-8 [&>th]:px-2">
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort("state")}
-                >
-                  <div className="flex items-center">
-                    Status
-                    <SortIcon column="state" />
-                  </div>
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort("type")}
-                >
-                  <div className="flex items-center">
-                    Type
-                    <SortIcon column="type" />
-                  </div>
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort("timestamp")}
-                >
-                  <div className="flex items-center">
-                    Created
-                    <SortIcon column="timestamp" />
-                  </div>
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort("duration")}
-                >
-                  <div className="flex items-center">
-                    Duration
-                    <SortIcon column="duration" />
-                  </div>
-                </TableHead>
-                <TableHead>Progress</TableHead>
-                <TableHead className="w-[80px] text-right">ID</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading
-                ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8">
-                      Loading jobs...
-                    </TableCell>
-                  </TableRow>
-                )
-                : filteredJobs.length === 0
-                ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8">
-                      No jobs found
-                    </TableCell>
-                  </TableRow>
-                )
-                : (
-                  filteredJobs.map((job) => (
-                    <TableRow
-                      key={job.id}
-                      className={`text-xs [&>td]:px-2 [&>td]:py-1.5 ${
-                        job.state === "failed"
-                          ? "border-l-2 border-l-red-500 bg-red-500/5"
-                          : ""
-                      }`}
-                    >
-                      <TableCell>
-                        <Link
-                          to={`/jobs/${job.id}`}
-                        >
-                          <Badge
-                            variant="secondary"
-                            className={getStatusColor(job.state)}
-                          >
-                            {job.state}
-                          </Badge>
-                        </Link>
-                      </TableCell>
-                      <TableCell
-                        className="font-medium cursor-pointer hover:text-primary hover:underline"
-                        onClick={() => toggleOnlyType(job.type)}
-                        title={!allTypesSelected && filterTypes.size === 1 &&
-                            filterTypes.has(job.type)
-                          ? "Show all workers"
-                          : `Filter by ${job.type}`}
-                      >
-                        <div>
-                          {job.type === "summarization" &&
-                              (Array.isArray(job.result?.summaries) &&
-                                  job.result.summaries.length > 0 ||
-                                (job.result?.skipped ?? 0) > 0)
-                            ? `Batch summarization · ${
-                              job.result?.summaries?.length ?? 0
-                            }${
-                              (job.result?.skipped ?? 0) > 0
-                                ? ` (+${job.result.skipped} skipped)`
-                                : ""
-                            }`
-                            : job.type}
-                        </div>
-                        {job.type === "transcription" &&
-                          job.routingContext?.providerProfileName && (
-                          <div className="text-[10px] font-normal text-muted-foreground">
-                            {inferenceChip(
-                              "provider",
-                              (job.result?.providerProfileName as string) ||
-                                job.routingContext.providerProfileName,
-                            )}
-                            {(() => {
-                              const sttModel = job.routingContext.model ||
-                                transcriptionModelByProfileId.get(
-                                  job.routingContext.providerProfileId || "",
-                                );
-                              return sttModel
+                          {showWorkerAdvanced && (
+                            <TableCell className="py-1 text-center">
+                              {batchCapableWorkers[worker.type]
                                 ? (
                                   <>
-                                    {" · "}
-                                    {inferenceChip("model", sttModel)}
+                                    <div className="flex items-center justify-center gap-1">
+                                      <Input
+                                        type="number"
+                                        min={batchCapableWorkers[worker.type]
+                                          .min}
+                                        max={batchCapableWorkers[worker.type]
+                                          .max}
+                                        value={batchDrafts[worker.type] ??
+                                          String(
+                                            getEffectiveBatchSize(
+                                              worker.type,
+                                            ) ??
+                                              "",
+                                          )}
+                                        onChange={(event) =>
+                                          setBatchDrafts((current) => ({
+                                            ...current,
+                                            [worker.type]: event.target.value,
+                                          }))}
+                                        className="h-7 w-16 px-2 text-center"
+                                        aria-label={`${worker.type} batch size`}
+                                        title={worker.type === "transcription"
+                                          ? "Audio sequences per STT request"
+                                          : worker.type === "diarization"
+                                          ? "Speech sequences processed per diarization job"
+                                          : "Items per LLM call"}
+                                      />
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        disabled={setWorkerBatchMutation
+                                          .isPending ||
+                                          Number(
+                                              batchDrafts[worker.type] ??
+                                                getEffectiveBatchSize(
+                                                  worker.type,
+                                                ),
+                                            ) ===
+                                            getEffectiveBatchSize(worker.type)}
+                                        onClick={() =>
+                                          setWorkerBatchMutation.mutate({
+                                            workerType: worker.type,
+                                            batchSize: Number(
+                                              batchDrafts[worker.type] ??
+                                                getEffectiveBatchSize(
+                                                  worker.type,
+                                                ),
+                                            ),
+                                          })}
+                                        title="Save batch size (applies to newly enqueued jobs)"
+                                      >
+                                        <Save className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </div>
+                                    <div className="text-center text-[10px] text-muted-foreground">
+                                      {setWorkerBatchMutation.isPending &&
+                                          setWorkerBatchMutation.variables
+                                              ?.workerType === worker.type
+                                        ? "applying…"
+                                        : `${
+                                          worker.type === "diarization"
+                                            ? "sequences/job"
+                                            : "batch"
+                                        } ${
+                                          getEffectiveBatchSize(worker.type) ??
+                                            "—"
+                                        }`}
+                                      {` · allowed ${
+                                        batchCapableWorkers[worker.type].min
+                                      }–${
+                                        batchCapableWorkers[worker.type].max
+                                      }`}
+                                    </div>
                                   </>
+                                )
+                                : (
+                                  <span className="text-sm text-muted-foreground">
+                                    —
+                                  </span>
+                                )}
+                            </TableCell>
+                          )}
+                          <TableCell className="py-1 text-center">
+                            <div className="flex items-center justify-center gap-2 text-[10px]">
+                              <span
+                                className={(runtime?.active ?? 0) > 0
+                                  ? "text-blue-500"
+                                  : "text-muted-foreground"}
+                                title="Jobs running now"
+                              >
+                                Active {runtime?.active ?? 0}
+                              </span>
+                              <span
+                                className={(runtime?.waiting ?? 0) +
+                                      (runtime?.delayed ?? 0) > 0
+                                  ? "text-yellow-500"
+                                  : "text-muted-foreground"}
+                                title="Waiting and delayed jobs"
+                              >
+                                Queued {(runtime?.waiting ?? 0) +
+                                  (runtime?.delayed ?? 0)}
+                              </span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span
+                                    className={((runtime?.staleActive ?? 0) +
+                                        (runtime?.staleClaims ?? 0)) > 0
+                                      ? "cursor-help text-amber-500"
+                                      : "text-muted-foreground"}
+                                  >
+                                    Stale {(runtime?.staleActive ?? 0) +
+                                      (runtime?.staleClaims ?? 0)}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {runtime?.staleActive ?? 0}{" "}
+                                  stale active job(s),{" "}
+                                  {runtime?.staleClaims ?? 0} stale claim(s)
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-1 text-center">
+                            <div className="flex items-center justify-center gap-2 text-[10px]">
+                              <span
+                                className={(stats?.failed ?? 0) > 0
+                                  ? "text-red-500"
+                                  : "text-muted-foreground"}
+                                title="Failed runs"
+                              >
+                                Failed {stats?.failed ?? "—"}
+                              </span>
+                              <span
+                                className="text-muted-foreground"
+                                title="Total runs"
+                              >
+                                Runs {stats?.totalRuns ?? "—"}
+                              </span>
+                              <Badge
+                                variant="secondary"
+                                className={`${
+                                  !stats
+                                    ? "text-muted-foreground"
+                                    : stats.successRate >= 95
+                                    ? "bg-green-500/10 text-green-600"
+                                    : stats.successRate >= 80
+                                    ? "bg-yellow-500/10 text-yellow-600"
+                                    : "bg-red-500/10 text-red-600"
+                                } px-1.5 py-0 font-mono text-[10px]`}
+                                title="Success rate"
+                              >
+                                {stats
+                                  ? `${stats.successRate.toFixed(0)}% ok`
+                                  : "—"}
+                              </Badge>
+                              <span
+                                className="text-muted-foreground"
+                                title="Empty runs"
+                              >
+                                Empty {stats?.emptyRuns ?? "—"}
+                              </span>
+                            </div>
+                          </TableCell>
+                          {showWorkerAdvanced && (
+                            <TableCell className="py-1 text-center">
+                              {typeof runtime?.defaultTriggerIntervalSeconds ===
+                                  "number"
+                                ? (
+                                  <>
+                                    <div className="flex items-center justify-center gap-1">
+                                      <Input
+                                        type="number"
+                                        min={0}
+                                        max={86400}
+                                        value={intervalDrafts[worker.type] ??
+                                          String(
+                                            runtime?.triggerIntervalSeconds ??
+                                              "",
+                                          )}
+                                        onChange={(event) =>
+                                          setIntervalDrafts((current) => ({
+                                            ...current,
+                                            [worker.type]: event.target.value,
+                                          }))}
+                                        className="h-7 w-16 px-2 text-center"
+                                        aria-label={`${worker.type} scheduled-run interval in seconds`}
+                                        title="Scheduled-run interval in seconds; 0 disables scheduled runs (event triggers still fire)"
+                                      />
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        disabled={setWorkerIntervalMutation
+                                          .isPending ||
+                                          Number(
+                                              intervalDrafts[worker.type] ??
+                                                runtime
+                                                  ?.triggerIntervalSeconds ??
+                                                NaN,
+                                            ) ===
+                                            (runtime?.triggerIntervalSeconds ??
+                                              NaN)}
+                                        onClick={() =>
+                                          setWorkerIntervalMutation.mutate({
+                                            workerType: worker.type,
+                                            seconds: Number(
+                                              intervalDrafts[worker.type],
+                                            ),
+                                          })}
+                                        title="Save schedule interval"
+                                      >
+                                        <Save className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </div>
+                                    <div className="text-center text-[10px] text-muted-foreground">
+                                      {Number(
+                                          intervalDrafts[worker.type] ??
+                                            runtime?.triggerIntervalSeconds ??
+                                            1,
+                                        ) === 0
+                                        ? "schedule off"
+                                        : `every ${
+                                          intervalDrafts[worker.type] ??
+                                            runtime?.triggerIntervalSeconds
+                                        }s`}
+                                      {` · runs ${stats?.avgFrequency ?? "-"}`}
+                                    </div>
+                                  </>
+                                )
+                                : (
+                                  <span className="text-sm text-muted-foreground">
+                                    {stats?.avgFrequency ?? "-"}
+                                  </span>
+                                )}
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+          </CardContent>
+        </Card>
+
+        <div className="order-6 space-y-3">
+          <div className="flex flex-wrap items-center gap-1">
+            <Button
+              variant={!isEmptyView ? "default" : "outline"}
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => setJobsView("operational")}
+            >
+              Jobs ({operationalViewCount})
+            </Button>
+            <Button
+              variant={isEmptyView ? "default" : "outline"}
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => setJobsView("idle_auto")}
+              title="Completed automatic checks that found no work"
+            >
+              Empty ({idleViewCount})
+            </Button>
+            {isEmptyView && (
+              <span className="text-xs text-muted-foreground">
+                Automatic checks that found no work. History is retained for
+                diagnostics.
+              </span>
+            )}
+          </div>
+
+          {!isEmptyView && (
+            <div className="flex flex-wrap gap-1">
+              <Button
+                variant={quickFilter === "all" ? "default" : "outline"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setQuickFilter("all")}
+              >
+                All ({displayCounts.total})
+              </Button>
+              <Button
+                variant={quickFilter === "active" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setQuickFilter("active")}
+                className={quickFilter !== "active"
+                  ? "h-7 px-2 text-xs text-blue-500 hover:text-blue-600"
+                  : "h-7 px-2 text-xs"}
+              >
+                <Activity className="h-3.5 w-3.5 mr-1" />
+                Active ({displayCounts.active})
+              </Button>
+              <Button
+                variant={quickFilter === "waiting" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setQuickFilter("waiting")}
+                className={quickFilter !== "waiting"
+                  ? "h-7 px-2 text-xs text-yellow-500 hover:text-yellow-600"
+                  : "h-7 px-2 text-xs"}
+              >
+                <Clock className="h-3.5 w-3.5 mr-1" />
+                Waiting ({displayCounts.waiting})
+              </Button>
+              <Button
+                variant={quickFilter === "failed" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setQuickFilter("failed")}
+                className={quickFilter !== "failed"
+                  ? "h-7 border-red-500/30 px-2 text-xs text-red-500 hover:text-red-600"
+                  : "h-7 px-2 text-xs"}
+              >
+                <AlertCircle className="h-3.5 w-3.5 mr-1" />
+                Errors ({displayCounts.failed})
+              </Button>
+              <Button
+                variant={quickFilter === "completed" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setQuickFilter("completed")}
+                className={quickFilter !== "completed"
+                  ? "h-7 px-2 text-xs text-green-500 hover:text-green-600"
+                  : "h-7 px-2 text-xs"}
+              >
+                <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                Completed ({displayCounts.completed})
+              </Button>
+            </div>
+          )}
+
+          {!isEmptyView && <JobErrorStats />}
+
+          <Card>
+            <CardContent className="space-y-2 p-2.5 [&_button]:h-8 [&_input]:h-8">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative w-[220px]">
+                  <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="search"
+                    placeholder="Search by ID or worker..."
+                    className="h-8 pl-8 text-xs"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-[200px] justify-between"
+                    >
+                      {getTypesLabel()}
+                      <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-[200px]">
+                    <DropdownMenuItem
+                      onSelect={(e) => e.preventDefault()}
+                      onClick={selectAllTypes}
+                    >
+                      <Checkbox
+                        checked={allTypesSelected}
+                        className="mr-2"
+                        onClick={(e) => e.stopPropagation()}
+                        onCheckedChange={(checked) =>
+                          checked ? selectAllTypes() : selectNoTypes()}
+                      />
+                      All workers
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {isLoadingSchemas
+                      ? <DropdownMenuItem disabled>Loading...</DropdownMenuItem>
+                      : (
+                        allTypes.map((type) => (
+                          <DropdownMenuItem
+                            key={type}
+                            onSelect={(e) => e.preventDefault()}
+                            onClick={() => toggleType(type)}
+                            className="cursor-pointer"
+                          >
+                            <Checkbox
+                              checked={allTypesSelected ||
+                                filterTypes.has(type)}
+                              className="mr-2"
+                              onClick={(e) => e.stopPropagation()}
+                              onCheckedChange={() => toggleType(type)}
+                            />
+                            {type}
+                            {legacyTypes.includes(type) && (
+                              <Badge
+                                variant="outline"
+                                className="ml-1 px-1 py-0 text-[10px]"
+                              >
+                                legacy
+                              </Badge>
+                            )}
+                          </DropdownMenuItem>
+                        ))
+                      )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Popover
+                  open={inferenceFilterOpen}
+                  onOpenChange={setInferenceFilterOpen}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-[230px] justify-between"
+                      title="Filter jobs by LLM provider, model or alias"
+                    >
+                      <span className="truncate">
+                        {inferenceFilter
+                          ? `${inferenceFilter.kind}: ${inferenceFilter.value}`
+                          : "Provider / model"}
+                      </span>
+                      <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[320px] p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search provider, model or alias…" />
+                      <CommandList>
+                        <CommandEmpty>Nothing matches.</CommandEmpty>
+                        {inferenceFilter && (
+                          <CommandGroup>
+                            <CommandItem
+                              value="__clear"
+                              onSelect={() => {
+                                setInferenceFilter(null);
+                                setInferenceFilterOpen(false);
+                              }}
+                            >
+                              Clear filter ({inferenceFilter.kind}:{" "}
+                              {inferenceFilter.value})
+                            </CommandItem>
+                          </CommandGroup>
+                        )}
+                        {inferenceFilterOptions.providers.length > 0 && (
+                          <CommandGroup heading="Providers">
+                            {inferenceFilterOptions.providers.map((
+                              [name, count],
+                            ) => (
+                              <CommandItem
+                                key={`provider-${name}`}
+                                value={`provider ${name}`}
+                                onSelect={() => {
+                                  toggleInferenceFilter("provider", name);
+                                  setInferenceFilterOpen(false);
+                                }}
+                              >
+                                <span className="truncate">{name}</span>
+                                <span className="ml-auto text-xs text-muted-foreground">
+                                  {count}
+                                </span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        )}
+                        {inferenceFilterOptions.aliases.length > 0 && (
+                          <CommandGroup heading="Aliases">
+                            {inferenceFilterOptions.aliases.map((
+                              [name, count],
+                            ) => (
+                              <CommandItem
+                                key={`alias-${name}`}
+                                value={`alias ${name}`}
+                                onSelect={() => {
+                                  toggleInferenceFilter("alias", name);
+                                  setInferenceFilterOpen(false);
+                                }}
+                              >
+                                <span className="truncate">{name}</span>
+                                <span className="ml-auto text-xs text-muted-foreground">
+                                  {count}
+                                </span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        )}
+                        {inferenceFilterOptions.models.length > 0 && (
+                          <CommandGroup heading="Models">
+                            {inferenceFilterOptions.models.map((
+                              [name, count],
+                            ) => (
+                              <CommandItem
+                                key={`model-${name}`}
+                                value={`model ${name}`}
+                                onSelect={() => {
+                                  toggleInferenceFilter("model", name);
+                                  setInferenceFilterOpen(false);
+                                }}
+                              >
+                                <span className="truncate">{name}</span>
+                                <span className="ml-auto text-xs text-muted-foreground">
+                                  {count}
+                                </span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        )}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+
+                <Select
+                  value={errorFilter ?? "__all"}
+                  onValueChange={(v) =>
+                    setErrorFilter(v === "__all" ? null : v)}
+                >
+                  <SelectTrigger
+                    className="w-[190px]"
+                    title="Filter failed jobs by error type"
+                  >
+                    <SelectValue placeholder="Error type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all">All errors</SelectItem>
+                    {errorFilterOptions.map(([key, count]) => (
+                      <SelectItem key={key} value={key}>
+                        {key} ({count})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-[200px] justify-between capitalize"
+                    >
+                      {getStatusesLabel()}
+                      <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-[200px]">
+                    <DropdownMenuItem
+                      onSelect={(e) => e.preventDefault()}
+                      onClick={selectAllStatuses}
+                    >
+                      <Checkbox
+                        checked={filterStatuses.size === ALL_STATUSES.length}
+                        className="mr-2"
+                        onClick={(e) => e.stopPropagation()}
+                        onCheckedChange={(checked) =>
+                          checked ? selectAllStatuses() : selectNoStatuses()}
+                      />
+                      All Statuses
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {ALL_STATUSES.map((status) => (
+                      <DropdownMenuItem
+                        key={status}
+                        onSelect={(e) => e.preventDefault()}
+                        onClick={() => selectOnlyStatus(status)}
+                        className="cursor-pointer capitalize"
+                      >
+                        <Checkbox
+                          checked={filterStatuses.has(status)}
+                          className="mr-2"
+                          onClick={(e) => e.stopPropagation()}
+                          onCheckedChange={() => toggleStatus(status)}
+                        />
+                        {status}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="w-[120px]">
+                  <Select
+                    value={limit.toString()}
+                    onValueChange={(v) => setLimit(parseInt(v))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Limit" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="20">20</SelectItem>
+                      <SelectItem value="50">50</SelectItem>
+                      <SelectItem value="100">100</SelectItem>
+                      <SelectItem value="500">500</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {hasActiveFilters && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearFilters}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="overflow-x-auto p-0">
+              <Table className="min-w-[760px] text-xs">
+                <TableHeader>
+                  <TableRow className="h-8 [&>th]:h-8 [&>th]:px-2">
+                    <TableHead
+                      className="cursor-pointer hover:bg-muted/50 select-none"
+                      onClick={() => handleSort("state")}
+                    >
+                      <div className="flex items-center">
+                        Status
+                        <SortIcon column="state" />
+                      </div>
+                    </TableHead>
+                    <TableHead
+                      className="cursor-pointer hover:bg-muted/50 select-none"
+                      onClick={() => handleSort("type")}
+                    >
+                      <div className="flex items-center">
+                        Type
+                        <SortIcon column="type" />
+                      </div>
+                    </TableHead>
+                    <TableHead
+                      className="cursor-pointer hover:bg-muted/50 select-none"
+                      onClick={() => handleSort("timestamp")}
+                    >
+                      <div className="flex items-center">
+                        Created
+                        <SortIcon column="timestamp" />
+                      </div>
+                    </TableHead>
+                    <TableHead
+                      className="cursor-pointer hover:bg-muted/50 select-none"
+                      onClick={() => handleSort("duration")}
+                    >
+                      <div className="flex items-center">
+                        Duration
+                        <SortIcon column="duration" />
+                      </div>
+                    </TableHead>
+                    <TableHead>Progress</TableHead>
+                    <TableHead className="w-[80px] text-right">ID</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isLoading
+                    ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-8">
+                          Loading jobs...
+                        </TableCell>
+                      </TableRow>
+                    )
+                    : filteredJobs.length === 0
+                    ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-8">
+                          No jobs found
+                        </TableCell>
+                      </TableRow>
+                    )
+                    : (
+                      filteredJobs.map((job) => (
+                        <TableRow
+                          key={job.id}
+                          className={`text-xs [&>td]:px-2 [&>td]:py-1.5 ${
+                            job.state === "failed"
+                              ? "border-l-2 border-l-red-500 bg-red-500/5"
+                              : ""
+                          }`}
+                        >
+                          <TableCell>
+                            <Link
+                              to={`/jobs/${job.id}`}
+                            >
+                              <Badge
+                                variant="secondary"
+                                className={getStatusColor(job.state)}
+                              >
+                                {job.state}
+                              </Badge>
+                            </Link>
+                          </TableCell>
+                          <TableCell
+                            className="font-medium cursor-pointer hover:text-primary hover:underline"
+                            onClick={() => toggleOnlyType(job.type)}
+                            title={!allTypesSelected &&
+                                filterTypes.size === 1 &&
+                                filterTypes.has(job.type)
+                              ? "Show all workers"
+                              : `Filter by ${job.type}`}
+                          >
+                            <div>
+                              {job.type === "summarization" &&
+                                  (Array.isArray(job.result?.summaries) &&
+                                      job.result.summaries.length > 0 ||
+                                    (job.result?.skipped ?? 0) > 0)
+                                ? `Batch summarization · ${
+                                  job.result?.summaries?.length ?? 0
+                                }${
+                                  (job.result?.skipped ?? 0) > 0
+                                    ? ` (+${job.result.skipped} skipped)`
+                                    : ""
+                                }`
+                                : job.type}
+                            </div>
+                            {job.type === "transcription" &&
+                              job.routingContext?.providerProfileName && (
+                              <div className="text-[10px] font-normal text-muted-foreground">
+                                {inferenceChip(
+                                  "provider",
+                                  (job.result?.providerProfileName as string) ||
+                                    job.routingContext.providerProfileName,
+                                )}
+                                {(() => {
+                                  const sttModel = job.routingContext.model ||
+                                    transcriptionModelByProfileId.get(
+                                      job.routingContext.providerProfileId ||
+                                        "",
+                                    );
+                                  return sttModel
+                                    ? (
+                                      <>
+                                        {" · "}
+                                        {inferenceChip("model", sttModel)}
+                                      </>
+                                    )
+                                    : null;
+                                })()}
+                              </div>
+                            )}
+                            {(() => {
+                              const route = getDiarizationJobRoute(job);
+                              return route
+                                ? (
+                                  <div
+                                    className="text-[10px] font-normal text-muted-foreground"
+                                    title={route.url
+                                      ? `Diarizator used by this job: ${route.url}`
+                                      : "Diarizator route snapshotted for this job"}
+                                  >
+                                    Diarizator: {inferenceChip(
+                                      "provider",
+                                      route.name,
+                                      undefined,
+                                      route.id,
+                                    )}
+                                    {route.url ? ` · ${route.url}` : ""}
+                                  </div>
                                 )
                                 : null;
                             })()}
-                          </div>
-                        )}
-                        {(() => {
-                          const route = getDiarizationJobRoute(job);
-                          return route
-                            ? (
-                              <div
-                                className="text-[10px] font-normal text-muted-foreground"
-                                title={route.url
-                                  ? `Diarizator used by this job: ${route.url}`
-                                  : "Diarizator route snapshotted for this job"}
-                              >
-                                Diarizator: {inferenceChip(
-                                  "provider",
-                                  route.name,
-                                  undefined,
-                                  route.id,
-                                )}
-                                {route.url ? ` · ${route.url}` : ""}
-                              </div>
-                            )
-                            : null;
-                        })()}
-                        {LLM_JOB_TYPES.has(job.type) && (() => {
-                          // Completed jobs report the provider and model that
-                          // actually served them; active jobs stream their
-                          // current route through progress; queued jobs show
-                          // the route expected to serve the request.
-                          // Chunk-creator jobs make no LLM calls themselves —
-                          // they only snapshot the model for extraction.
-                          const isSnapshotOnly =
-                            job.type === "conversation_chunk_creator";
-                          const inference = (job.result?.inference ??
-                            job.progress?.inference) as
-                              | JobInferenceUsage
-                              | undefined;
-                          const isCompleted = Boolean(job.result?.inference);
-                          if (
-                            inference?.mixed && inference.byProvider
-                          ) {
-                            // Calls were served by several provider/model
-                            // groups; show the breakdown with per-group
-                            // fallback markers, every part clickable.
-                            return (
-                              <div
-                                className="text-[10px] font-normal text-muted-foreground"
-                                title="Calls in this job were served by several routes (saturated routes overflow by priority; failed models retry on their fallback)"
-                              >
-                                {inference.byProvider.map((entry, index) => (
-                                  <span key={index}>
-                                    {index > 0 ? " + " : ""}
+                            {LLM_JOB_TYPES.has(job.type) && (() => {
+                              // Completed jobs report the provider and model that
+                              // actually served them; active jobs stream their
+                              // current route through progress; queued jobs show
+                              // the route expected to serve the request.
+                              const inference = (job.result?.inference ??
+                                job.progress?.inference) as
+                                  | JobInferenceUsage
+                                  | undefined;
+                              const isCompleted = Boolean(
+                                job.result?.inference,
+                              );
+                              if (
+                                inference?.mixed && inference.byProvider
+                              ) {
+                                // Calls were served by several provider/model
+                                // groups; show the breakdown with per-group
+                                // fallback markers, every part clickable.
+                                return (
+                                  <div
+                                    className="text-[10px] font-normal text-muted-foreground"
+                                    title="Calls in this job were served by several routes (saturated routes overflow by priority; failed models retry on their fallback)"
+                                  >
+                                    {inference.byProvider.map((
+                                      entry,
+                                      index,
+                                    ) => (
+                                      <span key={index}>
+                                        {index > 0 ? " + " : ""}
+                                        {inferenceChip(
+                                          "provider",
+                                          entry.providerProfileName ||
+                                            entry.providerProfileId,
+                                        )}
+                                        {` ×${entry.calls}`}
+                                        {entry.resolvedModel && (
+                                          <>
+                                            {" ("}
+                                            {modelChip(entry.resolvedModel)}
+                                            {entry.fallback ? ", fallback" : ""}
+                                            {")"}
+                                          </>
+                                        )}
+                                      </span>
+                                    ))}
+                                  </div>
+                                );
+                              }
+                              if (
+                                inference?.resolvedModel ||
+                                inference?.providerProfileName
+                              ) {
+                                const requested = inference.requestedModel;
+                                const resolved = inference.resolvedModel;
+                                const served = inference.responseModel;
+                                if (isCompleted) {
+                                  // Completed jobs show only what actually ran:
+                                  // the executed model, with a fallback marker
+                                  // when the whole job ran on the fallback.
+                                  return (
+                                    <div
+                                      className="text-[10px] font-normal text-muted-foreground"
+                                      title="LLM provider and model that served this job"
+                                    >
+                                      {inferenceChip(
+                                        "provider",
+                                        inference.providerProfileName ||
+                                          inference.providerProfileId,
+                                      )}
+                                      {" · "}
+                                      {modelChip(resolved || requested)}
+                                      {inference.fallbackUsed
+                                        ? " (fallback)"
+                                        : ""}
+                                      {served && resolved &&
+                                        served !== resolved &&
+                                        (
+                                          <>
+                                            {" (served "}
+                                            {modelChip(served)}
+                                            {")"}
+                                          </>
+                                        )}
+                                    </div>
+                                  );
+                                }
+                                // Active jobs keep the requested → resolved
+                                // notation streamed through progress.
+                                return (
+                                  <div
+                                    className="text-[10px] font-normal text-muted-foreground"
+                                    title="LLM provider and model currently serving this job"
+                                  >
                                     {inferenceChip(
                                       "provider",
-                                      entry.providerProfileName ||
-                                        entry.providerProfileId,
+                                      inference.providerProfileName ||
+                                        inference.providerProfileId,
                                     )}
-                                    {` ×${entry.calls}`}
-                                    {entry.resolvedModel && (
-                                      <>
-                                        {" ("}
-                                        {modelChip(entry.resolvedModel)}
-                                        {entry.fallback ? ", fallback" : ""}
-                                        {")"}
-                                      </>
-                                    )}
-                                  </span>
-                                ))}
-                              </div>
-                            );
-                          }
-                          if (
-                            inference?.resolvedModel ||
-                            inference?.providerProfileName
-                          ) {
-                            const requested = inference.requestedModel;
-                            const resolved = inference.resolvedModel;
-                            const served = inference.responseModel;
-                            if (isCompleted) {
-                              // Completed jobs show only what actually ran:
-                              // the executed model, with a fallback marker
-                              // when the whole job ran on the fallback.
-                              return (
-                                <div
-                                  className="text-[10px] font-normal text-muted-foreground"
-                                  title="LLM provider and model that served this job"
-                                >
-                                  {inferenceChip(
-                                    "provider",
-                                    inference.providerProfileName ||
-                                      inference.providerProfileId,
-                                  )}
-                                  {" · "}
-                                  {modelChip(resolved || requested)}
-                                  {inference.fallbackUsed ? " (fallback)" : ""}
-                                  {served && resolved && served !== resolved &&
-                                    (
-                                      <>
-                                        {" (served "}
-                                        {modelChip(served)}
-                                        {")"}
-                                      </>
-                                    )}
-                                </div>
-                              );
-                            }
-                            // Active jobs keep the requested → resolved
-                            // notation streamed through progress.
-                            return (
-                              <div
-                                className="text-[10px] font-normal text-muted-foreground"
-                                title="LLM provider and model currently serving this job"
-                              >
-                                {inferenceChip(
-                                  "provider",
-                                  inference.providerProfileName ||
-                                    inference.providerProfileId,
-                                )}
-                                {" · "}
-                                {requested && resolved &&
-                                    requested !== resolved
-                                  ? (
-                                    <>
-                                      {
-                                        /* Only aliases stay clickable on the
+                                    {" · "}
+                                    {requested && resolved &&
+                                        requested !== resolved
+                                      ? (
+                                        <>
+                                          {
+                                            /* Only aliases stay clickable on the
                                           requested side: the model filter
                                           matches executed models, and a
                                           fallen-back request never executed. */
-                                      }
-                                      {requested === "small" ||
-                                          requested === "medium" ||
-                                          requested === "large"
-                                        ? modelChip(requested)
-                                        : requested}
+                                          }
+                                          {requested === "small" ||
+                                              requested === "medium" ||
+                                              requested === "large"
+                                            ? modelChip(requested)
+                                            : requested}
+                                          {" → "}
+                                          {modelChip(resolved)}
+                                        </>
+                                      )
+                                      : modelChip(resolved || requested)}
+                                    {inference.fallbackUsed
+                                      ? " · fallback"
+                                      : ""}
+                                    {inference.failoverUsed
+                                      ? " · failover"
+                                      : ""}
+                                  </div>
+                                );
+                              }
+                              const context = job.routingContext;
+                              const requested =
+                                (typeof job.data?.model === "string" &&
+                                  job.data.model) ||
+                                context?.model;
+                              if (!context?.providerProfileName && !requested) {
+                                return null;
+                              }
+                              // Pick the route expected to serve this model:
+                              // providers advertising an explicit model outrank
+                              // blind candidates; aliases go to the first provider
+                              // mapping them.
+                              const isAlias = requested === "small" ||
+                                requested === "medium" || requested === "large";
+                              const planned = requested
+                                ? (isAlias
+                                  ? llmRoutingProfiles.find((profile) =>
+                                    profile.aliases[requested as ModelAlias]
+                                  )
+                                  : llmRoutingProfiles.find((profile) =>
+                                    Object.values(profile.aliases).includes(
+                                      requested,
+                                    ) || profile.chatModel === requested
+                                  ) ?? llmRoutingProfiles[0])
+                                : llmRoutingProfiles.find((profile) =>
+                                  profile.id === context?.providerProfileId
+                                );
+                              const resolved = requested && isAlias
+                                ? planned?.aliases[requested as ModelAlias]
+                                : undefined;
+                              return (
+                                <div
+                                  className="text-[10px] font-normal text-muted-foreground"
+                                  title="Planned LLM route; requests may fail over by priority"
+                                >
+                                  {inferenceChip(
+                                    "provider",
+                                    planned?.name ||
+                                      context?.providerProfileName,
+                                  ) || "LLM route"}
+                                  {requested && (
+                                    <>
+                                      {" · "}
+                                      {modelChip(requested)}
+                                    </>
+                                  )}
+                                  {resolved && (
+                                    <>
                                       {" → "}
                                       {modelChip(resolved)}
                                     </>
-                                  )
-                                  : modelChip(resolved || requested)}
-                                {inference.fallbackUsed ? " · fallback" : ""}
-                                {inference.failoverUsed ? " · failover" : ""}
-                              </div>
-                            );
-                          }
-                          const context = job.routingContext;
-                          const requested =
-                            (typeof job.data?.model === "string" &&
-                              job.data.model) ||
-                            context?.model;
-                          if (!context?.providerProfileName && !requested) {
-                            return null;
-                          }
-                          // Pick the route expected to serve this model:
-                          // providers advertising an explicit model outrank
-                          // blind candidates; aliases go to the first provider
-                          // mapping them.
-                          const isAlias = requested === "small" ||
-                            requested === "medium" || requested === "large";
-                          const planned = requested
-                            ? (isAlias
-                              ? llmRoutingProfiles.find((profile) =>
-                                profile.aliases[requested as ModelAlias]
-                              )
-                              : llmRoutingProfiles.find((profile) =>
-                                Object.values(profile.aliases).includes(
-                                  requested,
-                                ) || profile.chatModel === requested
-                              ) ?? llmRoutingProfiles[0])
-                            : llmRoutingProfiles.find((profile) =>
-                              profile.id === context?.providerProfileId
-                            );
-                          const resolved = requested && isAlias
-                            ? planned?.aliases[requested as ModelAlias]
-                            : undefined;
-                          if (isSnapshotOnly) {
-                            return (
-                              <div
-                                className="text-[10px] font-normal text-muted-foreground"
-                                title="Model snapshotted for later conversation extraction; this job makes no LLM calls"
+                                  )}
+                                </div>
+                              );
+                            })()}
+                            {job.restartedFromJobId && (
+                              <Link
+                                to={`/jobs/${job.restartedFromJobId}`}
+                                onClick={(event) => event.stopPropagation()}
+                                className="block text-[10px] font-normal text-amber-500 hover:underline"
                               >
-                                {"extraction model · "}
-                                {modelChip(requested)}
-                                {resolved && (
-                                  <>
-                                    {" → "}
-                                    {modelChip(resolved)}
-                                  </>
+                                restarted from …{job.restartedFromJobId.slice(
+                                  -6,
                                 )}
-                              </div>
-                            );
-                          }
-                          return (
-                            <div
-                              className="text-[10px] font-normal text-muted-foreground"
-                              title="Planned LLM route; requests may fail over by priority"
-                            >
-                              {inferenceChip(
-                                "provider",
-                                planned?.name || context?.providerProfileName,
-                              ) || "LLM route"}
-                              {requested && (
-                                <>
-                                  {" · "}
-                                  {modelChip(requested)}
-                                </>
-                              )}
-                              {resolved && (
-                                <>
-                                  {" → "}
-                                  {modelChip(resolved)}
-                                </>
-                              )}
-                            </div>
-                          );
-                        })()}
-                        {job.restartedFromJobId && (
-                          <Link
-                            to={`/jobs/${job.restartedFromJobId}`}
-                            onClick={(event) => event.stopPropagation()}
-                            className="block text-[10px] font-normal text-amber-500 hover:underline"
+                              </Link>
+                            )}
+                            {job.restartJobId && (
+                              <Link
+                                to={`/jobs/${job.restartJobId}`}
+                                onClick={(event) => event.stopPropagation()}
+                                className="block text-[10px] font-normal text-amber-500 hover:underline"
+                              >
+                                restarted as …{job.restartJobId.slice(-6)}
+                              </Link>
+                            )}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">
+                            {job.timestamp
+                              ? format(new Date(job.timestamp), "MMM d, HH:mm")
+                              : "-"}
+                          </TableCell>
+                          <TableCell
+                            className={job.restarted ||
+                                (job.finishedOn && job.processedOn &&
+                                  job.finishedOn < job.processedOn)
+                              ? "text-xs text-amber-500"
+                              : "text-xs"}
+                            title={job.finishedOn && job.processedOn &&
+                                job.finishedOn < job.processedOn
+                              ? "This job was restarted and still has stale timestamps from an earlier attempt"
+                              : job.restarted
+                              ? "This job has been restarted; duration is for the latest attempt"
+                              : undefined}
                           >
-                            restarted from …{job.restartedFromJobId.slice(-6)}
-                          </Link>
-                        )}
-                        {job.restartJobId && (
-                          <Link
-                            to={`/jobs/${job.restartJobId}`}
-                            onClick={(event) => event.stopPropagation()}
-                            className="block text-[10px] font-normal text-amber-500 hover:underline"
-                          >
-                            restarted as …{job.restartJobId.slice(-6)}
-                          </Link>
-                        )}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">
-                        {job.timestamp
-                          ? format(new Date(job.timestamp), "MMM d, HH:mm")
-                          : "-"}
-                      </TableCell>
-                      <TableCell
-                        className={job.restarted ||
-                            (job.finishedOn && job.processedOn &&
-                              job.finishedOn < job.processedOn)
-                          ? "text-xs text-amber-500"
-                          : "text-xs"}
-                        title={job.finishedOn && job.processedOn &&
-                            job.finishedOn < job.processedOn
-                          ? "This job was restarted and still has stale timestamps from an earlier attempt"
-                          : job.restarted
-                          ? "This job has been restarted; duration is for the latest attempt"
-                          : undefined}
-                      >
-                        {formatJobDuration(
-                          job.processedOn,
-                          job.finishedOn,
-                          currentTime,
-                        )}
-                        {job.restarted && !(job.finishedOn && job.processedOn &&
-                          job.finishedOn < job.processedOn) &&
-                          <span className="ml-1 text-xs">(retry)</span>}
-                      </TableCell>
-                      <TableCell>
-                        <JobProgressCell job={job} />
-                      </TableCell>
-                      <TableCell className="w-[80px] text-right p-1">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                navigator.clipboard.writeText(job.id);
-                                setCopiedId(job.id);
-                                setTimeout(() => setCopiedId(null), 2000);
-                              }}
-                              className="font-mono text-xs text-muted-foreground hover:text-foreground cursor-pointer inline-flex items-center gap-1"
-                            >
-                              <span className="truncate max-w-[50px]">
-                                {job.id.slice(-6)}
-                              </span>
-                              {copiedId === job.id
-                                ? <Check className="h-3 w-3 text-green-500" />
-                                : <Copy className="h-3 w-3 opacity-50" />}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>{job.id}</TooltipContent>
-                        </Tooltip>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                            {formatJobDuration(
+                              job.processedOn,
+                              job.finishedOn,
+                              currentTime,
+                            )}
+                            {job.restarted &&
+                              !(job.finishedOn && job.processedOn &&
+                                job.finishedOn < job.processedOn) &&
+                              <span className="ml-1 text-xs">(retry)</span>}
+                          </TableCell>
+                          <TableCell>
+                            <JobProgressCell job={job} />
+                          </TableCell>
+                          <TableCell className="w-[80px] text-right p-1">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(job.id);
+                                    setCopiedId(job.id);
+                                    setTimeout(() => setCopiedId(null), 2000);
+                                  }}
+                                  className="font-mono text-xs text-muted-foreground hover:text-foreground cursor-pointer inline-flex items-center gap-1"
+                                >
+                                  <span className="truncate max-w-[50px]">
+                                    {job.id.slice(-6)}
+                                  </span>
+                                  {copiedId === job.id
+                                    ? (
+                                      <Check className="h-3 w-3 text-green-500" />
+                                    )
+                                    : <Copy className="h-3 w-3 opacity-50" />}
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent>{job.id}</TooltipContent>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

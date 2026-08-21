@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import {
+  deriveEntityTypingPending,
   deriveObjectListCategories,
   legacyObjectListMatch,
   withObjectListCategories,
@@ -10,6 +11,20 @@ Deno.test("deriveObjectListCategories preserves multi-section membership", () =>
     ["person", "event"],
   );
   expect(deriveObjectListCategories({})).toEqual(["other"]);
+});
+
+Deno.test("entity typing marker is materialized only for named untyped objects", () => {
+  expect(deriveEntityTypingPending({ name: "Amsterdam" })).toBe(true);
+  expect(deriveEntityTypingPending({ name: "Amsterdam", isPlace: false })).toBe(
+    false,
+  );
+  expect(deriveEntityTypingPending({ name: "", isPlace: true })).toBe(false);
+  expect(
+    deriveEntityTypingPending({
+      name: "Amsterdam",
+      metadata: { aiProvenance: { entityTyping: { model: "used-model" } } },
+    }),
+  ).toBe(false);
 });
 
 Deno.test("promise and tag relationship records are excluded from relationship browse section", () => {

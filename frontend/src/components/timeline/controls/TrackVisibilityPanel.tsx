@@ -56,8 +56,10 @@ export function TrackVisibilityPanel() {
         return histogramCounts.transcriptions;
       case "audio-chunks":
         return histogramCounts.audioChunks;
+      // Speaker identity reads active speaker segments directly. It is not a
+      // histogram-derived track and intentionally has no density count here.
       case "diarizations":
-        return histogramCounts.diarizations;
+        return undefined;
       case "objects":
         return totalObjectCount;
       default:

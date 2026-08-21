@@ -71,7 +71,13 @@ your own words.
 ### Background Processing
 
 - BullMQ job queue backed by Redis.
-- Worker management UI with pause/resume, statistics, and success rates.
+- Canonical worker catalog shared by Jobs and Settings, with stable stale-state
+  fallback, one-line descriptions, relevant routing metadata, and compact
+  advanced controls.
+- Persistent manual snapshots for exact backlog, incremental run history, and
+  Timeline integrity; refresh failures retain the last successful values.
+- Durable, pausable Timeline density rebuild campaigns with bounded batches,
+  progress, missing-successor recovery, and explicit final verification.
 - Lightweight live diarization campaign, five-minute rolling throughput, queue,
   and dynamic route-capacity status, with corpus-wide pipeline and identity
   counts available through explicit calculate buttons instead of dashboard
