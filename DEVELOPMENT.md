@@ -601,10 +601,11 @@ For diarization, voice enrollment, speaker recognition, and historical backfill:
 3. Configure and verify the route in Settings → Diarization.
 4. Complete missing diarization coverage.
 5. In Settings → Voice Identity, enroll Sky under **Profiles & samples**, label
-   validation audio under **Review & calibration**, and verify the current
-   revision-bound calibration.
-6. Run a bounded identity pilot from **Operations & generations** before
-   historical backfill.
+   scoped validation audio under **Review & calibration**, preview the selected
+   recordings/Timeline range, and save the current revision-bound calibration.
+6. In **Jobs**, press play on `speakerIdentity`; the launcher resolves Sky,
+   calibration, and the compatible active generation. Run a bounded 24-hour
+   pilot before historical backfill.
 
 See
 [the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)

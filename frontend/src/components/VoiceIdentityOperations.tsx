@@ -336,6 +336,38 @@ export function VoiceIdentityOperations() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <nav
+          aria-label="Related voice identity pages"
+          className="flex flex-wrap gap-x-4 gap-y-1 border-b pb-3 text-sm font-medium"
+        >
+          <Link
+            className="text-primary hover:underline"
+            to="/settings/voice-identity"
+          >
+            Review & calibration
+          </Link>
+          <Link
+            className="text-primary hover:underline"
+            to="/jobs?type=speakerIdentity"
+          >
+            Identity jobs
+          </Link>
+          <Link
+            className="text-primary hover:underline"
+            to="/jobs?type=diarization"
+          >
+            Diarization jobs
+          </Link>
+          <Link
+            className="text-primary hover:underline"
+            to="/settings/diarization"
+          >
+            Diarization servers
+          </Link>
+          <Link className="text-primary hover:underline" to="/audio/pipeline">
+            Audio Pipeline
+          </Link>
+        </nav>
         <div className="flex flex-wrap items-center gap-2">
           {[24, 24 * 7, 24 * 14, 24 * 30].map((value) => (
             <Button

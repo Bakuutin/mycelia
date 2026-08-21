@@ -109,6 +109,24 @@ export function VoiceIdentityStatusCard() {
           >
             Operations & generations →
           </Link>
+          <Link
+            className="text-primary hover:underline"
+            to="/jobs?type=speakerIdentity"
+          >
+            Identity jobs →
+          </Link>
+          <Link
+            className="text-primary hover:underline"
+            to="/jobs?type=diarization"
+          >
+            Diarization jobs →
+          </Link>
+          <Link
+            className="text-primary hover:underline"
+            to="/settings/diarization"
+          >
+            Diarization servers →
+          </Link>
         </div>
       </CardContent>
     </Card>

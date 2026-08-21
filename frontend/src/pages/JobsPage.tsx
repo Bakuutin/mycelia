@@ -109,6 +109,9 @@ import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
 import { DiarizationLaunchDialog } from "@/components/DiarizationLaunchDialog";
 import {
+  SpeakerIdentityLaunchDialog,
+} from "@/components/SpeakerIdentityLaunchDialog";
+import {
   type DetectedDiarizatorReadinessMode,
   type DiarizatorReadinessMode,
   getDiarizatorReadinessBadge,
@@ -5783,11 +5786,15 @@ export default function JobsPage() {
                                     size="sm"
                                     className="h-7 px-2 text-[10px]"
                                   >
-                                    <Link to="/pipeline">Pipeline</Link>
+                                    <Link to="/audio/pipeline">
+                                      Audio Pipeline
+                                    </Link>
                                   </Button>
                                 )
                                 : worker.type === "diarization"
                                 ? <DiarizationLaunchDialog />
+                                : worker.type === "speakerIdentity"
+                                ? <SpeakerIdentityLaunchDialog />
                                 : (
                                   <Tooltip>
                                     <TooltipTrigger asChild>

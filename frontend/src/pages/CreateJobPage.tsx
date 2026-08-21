@@ -18,6 +18,7 @@ import { ArrowLeft, Play } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { prepareJobLaunchSchema } from "@/lib/jobLaunchDefaults";
+import { SpeakerIdentityLaunchPanel } from "@/components/SpeakerIdentityLaunchDialog";
 
 export default function CreateJobPage() {
   const navigate = useNavigate();
@@ -193,44 +194,53 @@ export default function CreateJobPage() {
             {dependencyMessage && (
               <p className="text-sm text-destructive">{dependencyMessage}</p>
             )}
-            <div className="rjsf-container">
-              {launchSchema && (!needsVoiceProfile ||
-                (!isLoadingProfiles && !isProfilesError &&
-                  speakerProfiles.length > 0)) &&
-                (
-                  <Form
-                    schema={launchSchema}
-                    validator={validator}
-                    uiSchema={selectedType === "profileReenrollment"
-                      ? { type: { "ui:widget": "hidden" } }
-                      : undefined}
-                    onSubmit={(data: any) => onSubmit(data.formData)}
-                    disabled={enqueueMutation.isPending || !dependencyReady}
-                    noHtml5Validate
-                    showErrorList={false}
-                    liveValidate={false}
-                  >
-                    <div className="mt-6">
-                      <Button
-                        type="submit"
+            {selectedType === "speakerIdentity"
+              ? (
+                <SpeakerIdentityLaunchPanel
+                  onQueued={(jobId) => navigate(`/jobs/${jobId}`)}
+                />
+              )
+              : (
+                <div className="rjsf-container">
+                  {launchSchema && (!needsVoiceProfile ||
+                    (!isLoadingProfiles && !isProfilesError &&
+                      speakerProfiles.length > 0)) &&
+                    (
+                      <Form
+                        schema={launchSchema}
+                        validator={validator}
+                        uiSchema={selectedType === "profileReenrollment"
+                          ? { type: { "ui:widget": "hidden" } }
+                          : undefined}
+                        onSubmit={(data: any) => onSubmit(data.formData)}
                         disabled={enqueueMutation.isPending || !dependencyReady}
-                        className="w-full sm:w-auto"
+                        noHtml5Validate
+                        showErrorList={false}
+                        liveValidate={false}
                       >
-                        {enqueueMutation.isPending
-                          ? (
-                            "Launching..."
-                          )
-                          : (
-                            <>
-                              <Play className="h-4 w-4 mr-2" />
-                              Launch Job
-                            </>
-                          )}
-                      </Button>
-                    </div>
-                  </Form>
-                )}
-            </div>
+                        <div className="mt-6">
+                          <Button
+                            type="submit"
+                            disabled={enqueueMutation.isPending ||
+                              !dependencyReady}
+                            className="w-full sm:w-auto"
+                          >
+                            {enqueueMutation.isPending
+                              ? (
+                                "Launching..."
+                              )
+                              : (
+                                <>
+                                  <Play className="h-4 w-4 mr-2" />
+                                  Launch Job
+                                </>
+                              )}
+                          </Button>
+                        </div>
+                      </Form>
+                    )}
+                </div>
+              )}
           </CardContent>
         </Card>
       )}

@@ -78,6 +78,39 @@ interface ConversationChunk {
   processedByJobId?: string;
 }
 
+type JobRelatedLink = { to: string; label: string };
+
+function getJobRelatedLinks(jobType: string): JobRelatedLink[] {
+  if (jobType === "diarization") {
+    return [
+      { to: "/audio/pipeline", label: "Audio Pipeline" },
+      { to: "/settings/diarization", label: "Diarization servers" },
+      {
+        to: "/settings/voice-identity/operations",
+        label: "Generations & identity",
+      },
+    ];
+  }
+  if (jobType === "speakerIdentity" || jobType === "speakerMatching") {
+    return [
+      { to: "/settings/voice-identity", label: "Review & calibration" },
+      {
+        to: "/settings/voice-identity/operations",
+        label: "Identity operations",
+      },
+      { to: "/audio/pipeline", label: "Audio Pipeline" },
+    ];
+  }
+  if (jobType === "profileReenrollment" || jobType === "enrollment") {
+    return [
+      { to: "/settings/voice-profiles", label: "Profiles & samples" },
+      { to: "/settings/voice-identity", label: "Review & calibration" },
+      { to: "/settings/diarization", label: "Diarization servers" },
+    ];
+  }
+  return [];
+}
+
 const flattenNestedFields = (obj: any, prefix = ""): Array<[string, any]> => {
   const result: Array<[string, any]> = [];
 
@@ -672,11 +705,14 @@ export default function JobDetailPage() {
     );
   }
 
+  const jobListHref = `/jobs?type=${encodeURIComponent(job.type)}`;
+  const relatedLinks = getJobRelatedLinks(job.type);
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link to="/jobs">
+          <Link to={jobListHref} aria-label={`Back to ${job.type} jobs`}>
             <Button variant="ghost" size="icon">
               <ArrowLeft className="h-4 w-4" />
             </Button>
@@ -729,6 +765,25 @@ export default function JobDetailPage() {
           )}
         </div>
       </div>
+
+      {relatedLinks.length > 0 && (
+        <nav
+          aria-label="Related job pages"
+          className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 px-3 py-2"
+        >
+          <span className="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Related
+          </span>
+          <Button asChild size="sm" variant="ghost">
+            <Link to={jobListHref}>{job.type} jobs</Link>
+          </Button>
+          {relatedLinks.map((item) => (
+            <Button key={item.to} asChild size="sm" variant="ghost">
+              <Link to={item.to}>{item.label}</Link>
+            </Button>
+          ))}
+        </nav>
+      )}
 
       {job.type === "diarization" && job.state === "active" && (() => {
         const view = getDiarizationProgressView(job.progress || {});

@@ -558,6 +558,22 @@ validation recordings проверяют переносимость.
   выбранного профиля. Этот режим полезен после смены calibration и для поиска
   false positives.
 
+Затем выберите источник и сначала нажмите **Preview source**:
+
+- **All matching recordings** — весь совместимый диапазон;
+- **Selected recordings** — сначала показывает найденные recordings, затем
+  позволяет отфильтровать и отметить нужные;
+- **Current Timeline range** — на Timeline выделите точный интервал и нажмите
+  **Review voices**;
+- **Specific diarization generation** — только одна активная generation в том
+  же embedding space.
+
+Preview показывает число подходящих segments и recordings, причины исключения
+коротких/дублирующихся фрагментов и до пяти проигрываемых примеров. Создание
+session использует именно зафиксированный preview scope: изменения периода,
+recordings, run или embedding space требуют нового preview. Эти фильтры также
+применяются ко всем следующим rolling-окнам, а не только к первому.
+
 Рекомендуемый режим **Clear speech · ≥1s · deduplicate** исключает из новой
 очереди sub-second fragments и почти полностью перекрывающиеся интервалы одной
 записи/run. Из группы overlap-дубликатов сохраняется самый полный интервал, а UI
@@ -594,6 +610,13 @@ UI не принимает вручную введённые thresholds или p
 backend пересчитывает метрики повторно, поэтому значение из браузера нельзя
 подменить.
 
+**Recalculate preview** запускает реальный server calculation и показывает
+выполнение, время результата и `Ready to save` либо blockers. Это ещё не
+сохранённая calibration. **Fit thresholds** выбирает recordings, влияющие на
+границы; **Validate on held-out audio** проверяет эти границы на других
+recordings; **Exclude** убирает recording только из текущего расчёта, не удаляя
+labels.
+
 Сохранённая calibration считается рабочей только с
 `contractVersion=server-computed-v1`, server provenance, текущими profile
 revision/embedding space, непересекающимися Fit/Check recordings и реально
@@ -604,12 +627,14 @@ Transcript показывают их как unclassified до новой сов�
 
 ## 10. Identity pilot и backfill
 
-После актуального Sky profile и validated calibration используйте кнопки **Run
-24-hour pilot** и **Run 7 days** прямо в
-`https://localhost:4433/settings/voice-identity`. Статус campaign, progress,
-ETA, распределение решений и ссылка на Job Details отображаются ниже. Для
-custom/history диапазона откройте **Custom/history…** или Operations &
-generations.
+После актуального Sky profile и validated calibration откройте
+`https://localhost:4433/jobs?type=speakerIdentity` и нажмите play у worker.
+Launcher сам подставляет primary Sky, текущую profile revision,
+server-validated calibration и совместимую active generation; оператор выбирает
+только 24 часа, 7/14 дней или custom range. Raw `profileId`, `runId`, revision,
+calibration ID, cursor и campaign ID вручную вводить не нужно. Те же ссылки
+доступны из Review & calibration, Operations & generations, Audio Pipeline и
+Job Details.
 
 Порядок rollout:
 

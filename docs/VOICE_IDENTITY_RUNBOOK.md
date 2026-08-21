@@ -44,6 +44,12 @@ db.diarizations.countDocuments({
 db.diarization_runs.findOne({ runId: "legacy-v0" });
 ```
 
+Migrations `0066_speaker_review_source_index` and
+`0067_speaker_review_range_index` keep full-backlog and bounded-range review
+previews indexed. They are applied automatically at backend startup. Preview
+scans at most 5,000 raw segments per request, shows elapsed time in the UI, and
+reports capped totals as `at least N`.
+
 ## Pilot and backfill
 
 1. `/settings/voice-identity`: re-enroll Sky from all saved samples.
@@ -63,13 +69,21 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
      the review segment stops and disposes the previous clip. The next three
      pending clips/groups are fetched into a bounded browser cache, so autoplay
      normally starts without another audio download wait.
+   - Choose the source explicitly: all matching recordings, selected
+     recordings, an exact Timeline selection, or one active compatible
+     diarization generation. Run **Preview source** before creation; it shows
+     counts, quality exclusions, recordings, and playable samples. The server
+     freezes that exact scope and reapplies it to every rolling window.
 3. Save validated thresholds. The server accepts only the selected Fit/Check
    recording IDs and recomputes thresholds and metrics itself. Only
    `server-computed-v1` records with at least 98% independent Check precision
    unlock classification.
-4. On `/settings/voice-identity`, run the explicit 24-hour pilot first and
-   inspect its live campaign status. Then run 7 days. Use `/audio/pipeline` only
-   for a custom or historical range.
+   **Recalculate preview** is a visible server calculation; it does not save a
+   calibration until the final Save action succeeds.
+4. Open `/jobs?type=speakerIdentity` and press play on the worker. The launcher
+   resolves primary Sky, its current revision, the usable server calibration,
+   and a compatible active run without raw IDs. Run the 24-hour pilot first,
+   inspect its live campaign, then expand to 7/14 days or a custom range.
 5. Create an **Audit automatic matches** session to inspect old/current matched
    candidates across different recordings; also review uncertain and rejected
    samples.

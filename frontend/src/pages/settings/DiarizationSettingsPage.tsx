@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { callResource } from "@/lib/api";
 import {
   type DiarizationProfile,
@@ -235,15 +236,37 @@ export default function DiarizationSettingsPage() {
             the same gate used when a job starts.
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => void refreshHealth()}
-          disabled={refreshing}
-        >
-          <RefreshCw
-            className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
-          />Refresh health
-        </Button>
+        <div className="flex flex-col items-end gap-2">
+          <Button
+            variant="outline"
+            onClick={() => void refreshHealth()}
+            disabled={refreshing}
+          >
+            <RefreshCw
+              className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+            />Refresh health
+          </Button>
+          <nav
+            aria-label="Related diarization pages"
+            className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs font-medium"
+          >
+            <Link
+              className="text-primary hover:underline"
+              to="/jobs?type=diarization"
+            >
+              Diarization jobs
+            </Link>
+            <Link className="text-primary hover:underline" to="/audio/pipeline">
+              Audio Pipeline
+            </Link>
+            <Link
+              className="text-primary hover:underline"
+              to="/settings/voice-identity/operations"
+            >
+              Generations & identity
+            </Link>
+          </nav>
+        </div>
       </div>
 
       <Card className="space-y-3 p-4">
