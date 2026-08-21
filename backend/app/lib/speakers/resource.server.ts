@@ -117,12 +117,18 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     }).default({ minDurationSeconds: 1, deduplicateOverlaps: true }),
     start: zDateOrString().optional(),
     end: zDateOrString().optional(),
-    limit: z.number().int().min(1).max(100).default(100),
+    limit: z.number().int().min(1).max(100).default(10),
     preferences: z.object({
       autoPlay: z.boolean().default(true),
+      autoAdvanceWindow: z.boolean().default(true),
       groupMode: z.boolean().default(true),
       compactMode: z.boolean().default(true),
-    }).default({ autoPlay: true, groupMode: true, compactMode: true }),
+    }).default({
+      autoPlay: true,
+      autoAdvanceWindow: true,
+      groupMode: true,
+      compactMode: true,
+    }),
   }).refine(
     (value) =>
       value.rangeMode === "all_before" || Boolean(value.start && value.end),
@@ -147,6 +153,7 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     skipSegmentId: objectId.optional(),
     preferences: z.object({
       autoPlay: z.boolean().optional(),
+      autoAdvanceWindow: z.boolean().optional(),
       groupMode: z.boolean().optional(),
       compactMode: z.boolean().optional(),
     }).optional(),

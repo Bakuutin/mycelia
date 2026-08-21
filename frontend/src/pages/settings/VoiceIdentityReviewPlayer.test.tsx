@@ -40,6 +40,12 @@ const segment = {
 function renderPlayer(overrides: Record<string, unknown> = {}) {
   const props = {
     segment,
+    profileName: "Sky",
+    profileOptions: [
+      { id: "66b000000000000000000010", name: "Sky" },
+      { id: "66b000000000000000000020", name: "Belka" },
+      { id: "66b000000000000000000030", name: "david bowie" },
+    ],
     position: 1,
     remaining: 12,
     sessionAnswered: 0,
@@ -86,6 +92,30 @@ describe("VoiceIdentityReviewPlayer", () => {
       "data-audio-url",
       expect.stringContaining("original_id=66b000000000000000000002"),
     );
+  });
+
+  it("shows matcher candidates as similarities, not probabilities", () => {
+    renderPlayer({
+      segment: {
+        ...segment,
+        speakerIdentity: {
+          primaryScore: 0.73,
+          state: "matched",
+          candidates: [
+            {
+              profileId: "66b000000000000000000020",
+              score: 0.73,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(screen.getByText("Similarity to Sky: 73%")).toBeInTheDocument();
+    expect(screen.getByText("Model candidates: Belka 73%"))
+      .toBeInTheDocument();
+    expect(screen.getByText(/not a calibrated probability/i))
+      .toBeInTheDocument();
   });
 
   it("maps review shortcuts while protecting interactive focus and pending state", () => {

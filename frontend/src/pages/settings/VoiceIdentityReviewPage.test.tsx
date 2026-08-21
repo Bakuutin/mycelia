@@ -163,6 +163,34 @@ describe("VoiceIdentityReviewPage", () => {
         sessionListCalls += 1;
         return Promise.resolve([]);
       }
+      if (input.action === "create-review-session") {
+        return Promise.resolve({
+          _id: "66b000000000000000000050",
+          name: "Rolling review",
+          status: "active",
+          revision: 1,
+          targetProfileIds: [profile._id],
+          window: [],
+          groups: [],
+          segments: [],
+          loadedCount: 0,
+          reviewedCount: 0,
+          skippedCount: 0,
+          backlogEstimate: 0,
+          hasMore: false,
+          preferences: {
+            autoPlay: true,
+            autoAdvanceWindow: true,
+            groupMode: true,
+            compactMode: true,
+          },
+          querySnapshot: {
+            rangeMode: "fixed",
+            start: "2026-08-07T10:00:00.000Z",
+            end: "2026-08-21T10:00:00.000Z",
+          },
+        });
+      }
       return Promise.resolve({});
     });
 
@@ -174,6 +202,20 @@ describe("VoiceIdentityReviewPage", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("option", { name: "No saved sessions" }))
       .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    await waitFor(() =>
+      expect(mockCallResource).toHaveBeenCalledWith(
+        "speaker-segments",
+        expect.objectContaining({
+          action: "create-review-session",
+          limit: 10,
+          preferences: expect.objectContaining({
+            autoAdvanceWindow: true,
+          }),
+        }),
+      )
+    );
   });
 
   it("runs the global identity classification only from the manual button", async () => {

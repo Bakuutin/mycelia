@@ -47,10 +47,11 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
 ## Pilot and backfill
 
 1. `/settings/voice-identity`: re-enroll Sky from all saved samples.
-2. Create an **Uncertain + unclassified** review session. Its 100-item windows
-   are stratified across source recordings. Keep the default **Clear speech ·
-   ≥1s · deduplicate** quality filter; use **All fragments** only to diagnose
-   raw diarization. Label at least 100 compatible pilot segments (40 Sky, 40
+2. Create an **Uncertain + unclassified** review session. Its default 10-item
+   rolling windows (selectable as 5/10/20) are stratified across source
+   recordings and load continuously. Keep the default **Clear speech · ≥1s ·
+   deduplicate** quality filter; use **All fragments** only to diagnose raw
+   diarization. Label at least 100 compatible pilot segments (40 Sky, 40
    not-Sky, plus borderline/mixed).
    - Use **Skip** for noise, clipped/ambiguous speech and overlapping speakers.
    - Use **Edit** to change any saved label or Skip.
@@ -66,7 +67,9 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
    recording IDs and recomputes thresholds and metrics itself. Only
    `server-computed-v1` records with at least 98% independent Check precision
    unlock classification.
-4. `/audio/pipeline`: `Classify existing` for 7–14 days.
+4. On `/settings/voice-identity`, run the explicit 24-hour pilot first and
+   inspect its live campaign status. Then run 7 days. Use `/audio/pipeline` only
+   for a custom or historical range.
 5. Create an **Audit automatic matches** session to inspect old/current matched
    candidates across different recordings; also review uncertain and rejected
    samples.

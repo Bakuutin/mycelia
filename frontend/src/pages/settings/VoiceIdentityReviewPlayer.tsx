@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowDown,
@@ -61,12 +61,22 @@ export interface VoiceIdentityReviewSegment {
   speakerIdentity?: {
     primaryScore?: number;
     state?: string;
+    profileId?: unknown;
+    topCandidate?: VoiceIdentityCandidate;
+    candidates?: VoiceIdentityCandidate[];
   };
 }
+
+type VoiceIdentityCandidate = {
+  profileId?: unknown;
+  name?: string | null;
+  score?: number;
+};
 
 interface VoiceIdentityReviewPlayerProps {
   segment: VoiceIdentityReviewSegment;
   profileName?: string;
+  profileOptions: VoiceIdentityProfileOption[];
   position: number;
   remaining: number;
   sessionAnswered: number;
@@ -171,6 +181,7 @@ export function buildVoiceReviewAudioUrl(
 export function VoiceIdentityReviewPlayer({
   segment,
   profileName = "target profile",
+  profileOptions,
   position,
   remaining,
   sessionAnswered,
@@ -209,6 +220,29 @@ export function VoiceIdentityReviewPlayer({
   const audioUrl = buildVoiceReviewAudioUrl(segment);
   const score = segment.speakerIdentity?.primaryScore;
   const hasScore = typeof score === "number" && Number.isFinite(score);
+  const candidateProfiles = useMemo(() => {
+    const source = segment.speakerIdentity?.candidates?.length
+      ? segment.speakerIdentity.candidates
+      : segment.speakerIdentity?.topCandidate
+      ? [segment.speakerIdentity.topCandidate]
+      : [];
+    return source.flatMap((candidate) => {
+      const candidateId = normalizeObjectId(candidate.profileId);
+      const candidateScore = candidate.score;
+      if (
+        !candidateId || typeof candidateScore !== "number" ||
+        !Number.isFinite(candidateScore)
+      ) return [];
+      const knownName = profileOptions.find((profile) =>
+        profile.id === candidateId
+      )?.name;
+      return [{
+        id: candidateId,
+        name: candidate.name || knownName || candidateId,
+        score: candidateScore,
+      }];
+    }).sort((a, b) => b.score - a.score).slice(0, 3);
+  }, [profileOptions, segment.speakerIdentity]);
   const sessionPercent = sessionTotal > 0
     ? Math.min(100, Math.round((sessionAnswered / sessionTotal) * 100))
     : 0;
@@ -340,6 +374,13 @@ export function VoiceIdentityReviewPlayer({
                 ? "Matcher similarity, not a calibrated probability."
                 : "No identity matcher result exists for this segment yet."}
             </p>
+            {candidateProfiles.length > 0 && (
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                Model candidates: {candidateProfiles.map((candidate) =>
+                  `${candidate.name} ${Math.round(candidate.score * 100)}%`
+                ).join(" · ")}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -389,7 +430,7 @@ export function VoiceIdentityReviewPlayer({
               disabled={pending}
               onClick={() => stopThen(() => onDecision("not-me"))}
             >
-              <ArrowLeft className="mr-2 h-5 w-5" />Not Sky
+              <ArrowLeft className="mr-2 h-5 w-5" />Not {profileName}
             </Button>
             <Button
               size="lg"
@@ -408,7 +449,8 @@ export function VoiceIdentityReviewPlayer({
               disabled={pending}
               onClick={() => stopThen(() => onDecision("me"))}
             >
-              Sky<ArrowRight className="ml-2 h-5 w-5" />
+              {profileName}
+              <ArrowRight className="ml-2 h-5 w-5" />
             </Button>
           </div>
 
@@ -487,15 +529,15 @@ export function VoiceIdentityReviewPlayer({
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            Swipe or use ← Not Sky · → Sky · S skips · 1–9 profiles · Space
-            plays · U undoes · E edits
+            Swipe or use ← Not {profileName} · → {profileName}{" "}
+            · S skips · 1–9 profiles · Space plays · U undoes · E edits
           </p>
         </div>
 
         <aside className="space-y-4 rounded-lg border bg-muted/20 p-4">
           <div>
             <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">This session</span>
+              <span className="font-medium">Current window</span>
               <span>{sessionAnswered} / {sessionTotal}</span>
             </div>
             <Progress className="mt-2" value={sessionPercent} />

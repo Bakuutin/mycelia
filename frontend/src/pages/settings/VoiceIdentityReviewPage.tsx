@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
 import {
   AlertCircle,
   CheckCircle2,
@@ -84,6 +85,7 @@ type ReviewSession = {
   segments: VoiceIdentityReviewSegment[];
   activeSegmentId?: unknown;
   loadedCount: number;
+  windowSize?: number;
   sessionLoadedCount?: number;
   reviewedCount: number;
   skippedCount: number;
@@ -101,6 +103,7 @@ type ReviewSession = {
   };
   preferences?: {
     autoPlay?: boolean;
+    autoAdvanceWindow?: boolean;
     groupMode?: boolean;
     compactMode?: boolean;
   };
@@ -254,6 +257,11 @@ type IdentityClassificationSnapshot = {
   calibrationId: string | null;
 };
 
+type DiarizationRun = {
+  runId: string;
+  status: string;
+};
+
 export default function VoiceIdentityReviewPage() {
   const queryClient = useQueryClient();
   const [calibrationRecordings, setCalibrationRecordings] = useState("");
@@ -281,6 +289,7 @@ export default function VoiceIdentityReviewPage() {
   const [newQualityMode, setNewQualityMode] = useState<"clean" | "all">(
     "clean",
   );
+  const [newWindowSize, setNewWindowSize] = useState<5 | 10 | 20>(10);
   const [showReviewHistory, setShowReviewHistory] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<
     "all" | "assigned" | "skipped"
@@ -305,6 +314,7 @@ export default function VoiceIdentityReviewPage() {
     readRecentVoiceProfileIds,
   );
   const calibrationSectionRef = useRef<HTMLDivElement>(null);
+  const automaticWindowAdvanceRef = useRef(false);
 
   const { data: profiles = [] } = useQuery<any[]>({
     queryKey: voiceIdentityKeys.profiles,
@@ -318,6 +328,10 @@ export default function VoiceIdentityReviewPage() {
   const reviewProfile = profiles.find((profile) =>
     normalizeObjectId(profile._id) === reviewProfileId
   );
+  const allProfileOptions = profiles.map((profile) => ({
+    id: normalizeObjectId(profile._id) ?? "",
+    name: String(profile.name ?? "Unnamed profile"),
+  })).filter((profile) => profile.id);
   const alternateProfiles = orderVoiceProfilesByRecent(
     profiles
       .filter((profile) => normalizeObjectId(profile._id) !== reviewProfileId)
@@ -348,6 +362,19 @@ export default function VoiceIdentityReviewPage() {
         : false;
     },
   });
+  const { data: diarizationRuns = [] } = useQuery<DiarizationRun[]>({
+    queryKey: ["speaker-runs"],
+    queryFn: async () => {
+      const value = await callResource("speaker-segments", {
+        action: "list-runs",
+      });
+      return Array.isArray(value) ? value as DiarizationRun[] : [];
+    },
+    staleTime: 15_000,
+  });
+  const activeDiarizationRun = diarizationRuns.find((run) =>
+    run.status === "active"
+  );
   const {
     data: classificationSnapshot,
     error: classificationError,
@@ -503,9 +530,10 @@ export default function VoiceIdentityReviewPage() {
         quality: newQualityMode === "clean"
           ? { minDurationSeconds: 1, deduplicateOverlaps: true }
           : { minDurationSeconds: 0, deduplicateOverlaps: false },
-        limit: 100,
+        limit: newWindowSize,
         preferences: {
           autoPlay: autoPlayNext,
+          autoAdvanceWindow: true,
           groupMode: true,
           compactMode: true,
         },
@@ -809,22 +837,28 @@ export default function VoiceIdentityReviewPage() {
       }) as ReviewSession;
     },
     onSuccess: (session) => {
+      const automaticAdvance = automaticWindowAdvanceRef.current;
+      automaticWindowAdvanceRef.current = false;
       queryClient.setQueryData(sessionQueryKey, session);
       setHistory([]);
       setPlayOnMount(autoPlayNext && Boolean(session.activeSegmentId));
       void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
-      toast.success(
-        session.loadedCount > 0
-          ? `Loaded window ${session.windowNumber} with ${session.loadedCount} segments`
-          : "No more segments in this frozen backlog",
-      );
+      if (!automaticAdvance) {
+        toast.success(
+          session.loadedCount > 0
+            ? `Loaded window ${session.windowNumber} with ${session.loadedCount} segments`
+            : "No more segments in this frozen backlog",
+        );
+      }
     },
-    onError: (error) =>
+    onError: (error) => {
+      automaticWindowAdvanceRef.current = false;
       toast.error(
         error instanceof Error
           ? error.message
           : "Could not load the next review window",
-      ),
+      );
+    },
   });
 
   const saveCalibration = useMutation({
@@ -859,6 +893,70 @@ export default function VoiceIdentityReviewPage() {
       ),
   });
   const latestCalibration = identityStatus?.usableCalibration;
+  const activeIdentityCampaign = identityStatus?.latestCampaign &&
+      ["queued", "counting", "running"].includes(
+        identityStatus.latestCampaign.status,
+      )
+    ? identityStatus.latestCampaign
+    : null;
+  const identityLaunchBlocker = !activeDiarizationRun
+    ? "Activate a diarization generation first"
+    : !latestCalibration
+    ? "Save a server-validated calibration first"
+    : !identityStatus?.canClassify
+    ? identityStatus?.blockers?.join(" · ") ||
+      "Identity classification prerequisites are incomplete"
+    : activeIdentityCampaign
+    ? "An identity classification campaign is already running"
+    : null;
+  const launchIdentity = useMutation({
+    mutationFn: async (hours: 24 | 168) => {
+      if (
+        !profileId || !primary || !latestCalibration ||
+        !activeDiarizationRun
+      ) {
+        throw new Error(
+          identityLaunchBlocker ?? "Identity setup is incomplete",
+        );
+      }
+      const end = new Date();
+      const start = new Date(end.getTime() - hours * 3_600_000);
+      return await callResource("jobs", {
+        action: "enqueue",
+        data: {
+          type: "speakerIdentity",
+          runId: activeDiarizationRun.runId,
+          profileId,
+          profileRevision: primary.revision ?? 1,
+          calibrationId: latestCalibration.calibrationId,
+          start,
+          end,
+          limit: 1000,
+        },
+        trigger: {
+          type: "manual",
+          reason: hours === 24
+            ? "Voice Identity 24-hour pilot"
+            : "Voice Identity 7-day classification",
+        },
+        priority: 3,
+      });
+    },
+    onSuccess: (_result, hours) => {
+      toast.success(
+        hours === 24
+          ? "24-hour identity pilot queued"
+          : "7-day identity classification queued",
+      );
+      void refetchIdentityStatus();
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not queue identity classification",
+      ),
+  });
   const staleCalibrations =
     identityStatus?.calibrations.filter((calibration) =>
       calibration.validity === "stale"
@@ -1065,6 +1163,26 @@ export default function VoiceIdentityReviewPage() {
     skipDecision.isPending || undo.isPending ||
     updatePosition.isPending ||
     completeSession.isPending || loadNextWindow.isPending;
+  const autoAdvanceWindow =
+    reviewSession?.preferences?.autoAdvanceWindow !== false;
+  const pendingInWindow = windowItems.some((item) => item.status === "pending");
+  useEffect(() => {
+    if (
+      !reviewSession || reviewSession.status !== "active" ||
+      !autoAdvanceWindow || pendingInWindow || reviewPending ||
+      !reviewSession.hasMore || reviewSession.loadedCount === 0
+    ) return;
+    automaticWindowAdvanceRef.current = true;
+    loadNextWindow.mutate();
+  }, [
+    autoAdvanceWindow,
+    pendingInWindow,
+    reviewPending,
+    reviewSession?.hasMore,
+    reviewSession?.loadedCount,
+    reviewSession?.revision,
+    reviewSession?.status,
+  ]);
   const setAutoPlayPreference = (enabled: boolean) => {
     setAutoPlayNext(enabled);
     try {
@@ -1074,6 +1192,13 @@ export default function VoiceIdentityReviewPage() {
     }
     if (reviewSession && !updatePosition.isPending) {
       updatePosition.mutate({ preferences: { autoPlay: enabled } });
+    }
+  };
+  const setAutoAdvanceWindowPreference = (enabled: boolean) => {
+    if (reviewSession && !updatePosition.isPending) {
+      updatePosition.mutate({
+        preferences: { autoAdvanceWindow: enabled },
+      });
     }
   };
   const moveReview = (direction: -1 | 1) => {
@@ -1281,6 +1406,23 @@ export default function VoiceIdentityReviewPage() {
             <p className="text-xs text-muted-foreground">
               Across {calibrationLabelCounts.recordings} recordings
             </p>
+            <div
+              className={`rounded-md border p-2 text-xs ${
+                labelGateReady
+                  ? "border-green-500/30 bg-green-500/5"
+                  : "border-amber-500/30 bg-amber-500/5"
+              }`}
+            >
+              {labelGateReady
+                ? (
+                  <>
+                    Label-volume gate reached. The remaining gate is validation
+                    precision ≥98% on recordings not used to choose the
+                    thresholds.
+                  </>
+                )
+                : `Still needed: ${missingLabelRequirements.join(" · ")}`}
+            </div>
           </CardContent>
         </Card>
         <Card
@@ -1383,9 +1525,9 @@ export default function VoiceIdentityReviewPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="sticky top-2 z-10 grid gap-2 rounded-lg border bg-background/95 p-3 shadow-sm backdrop-blur md:grid-cols-[10rem_minmax(12rem,1fr)_auto_auto_auto]">
+          <div className="sticky top-2 z-10 grid gap-2 rounded-lg border bg-background/95 p-3 shadow-sm backdrop-blur md:grid-cols-[11rem_minmax(12rem,1fr)_auto_auto_auto_auto]">
             <label className="text-xs text-muted-foreground">
-              Target profile
+              Profile being reviewed
               <select
                 className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
                 value={reviewProfileId ?? ""}
@@ -1476,6 +1618,15 @@ export default function VoiceIdentityReviewPage() {
             >
               Group short: {groupMode ? "on" : "off"}
             </Button>
+            <label className="flex items-center gap-2 self-end rounded-md border px-2 py-2 text-xs">
+              <Switch
+                checked={autoAdvanceWindow}
+                disabled={!reviewSession || reviewPending}
+                onCheckedChange={setAutoAdvanceWindowPreference}
+                aria-label="Load review windows automatically"
+              />
+              Rolling
+            </label>
             <Button
               size="sm"
               variant="outline"
@@ -1484,12 +1635,21 @@ export default function VoiceIdentityReviewPage() {
                 reviewPending}
               onClick={() => completeSession.mutate()}
             >
-              <CheckCircle2 className="mr-1 h-4 w-4" />Complete
+              <CheckCircle2 className="mr-1 h-4 w-4" />End session
             </Button>
           </div>
 
+          <p className="text-xs text-muted-foreground">
+            “Me” and “Not me” refer to{" "}
+            <strong className="text-foreground">
+              {reviewProfile?.name ?? "the selected profile"}
+            </strong>. Change the selector to review another person. Ending a
+            session is safe: saved labels count immediately, and unanswered
+            segments can appear in a later session.
+          </p>
+
           {(showNewSession || (!sessionsLoading && sessions.length === 0)) && (
-            <div className="grid gap-2 rounded-lg border border-dashed p-3 md:grid-cols-[13rem_13rem_12rem_1fr_auto]">
+            <div className="grid gap-2 rounded-lg border border-dashed p-3 md:grid-cols-[13rem_13rem_9rem_12rem_1fr_auto]">
               <label className="text-xs text-muted-foreground">
                 Candidates
                 <select
@@ -1518,6 +1678,21 @@ export default function VoiceIdentityReviewPage() {
                     Clear speech · ≥1s · deduplicate
                   </option>
                   <option value="all">All fragments · diagnostic</option>
+                </select>
+              </label>
+              <label className="text-xs text-muted-foreground">
+                Rolling window
+                <select
+                  className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                  value={newWindowSize}
+                  onChange={(event) =>
+                    setNewWindowSize(
+                      Number(event.target.value) as typeof newWindowSize,
+                    )}
+                >
+                  <option value={5}>5 clips</option>
+                  <option value={10}>10 clips</option>
+                  <option value={20}>20 clips</option>
                 </select>
               </label>
               <label className="text-xs text-muted-foreground">
@@ -1555,8 +1730,8 @@ export default function VoiceIdentityReviewPage() {
                 )
                 : (
                   <p className="self-center text-xs text-muted-foreground">
-                    The session freezes its end time and selects each 100-item
-                    window across different recordings. New diarization cannot
+                    The session freezes its end time. Small windows load
+                    continuously across recordings, so new diarization cannot
                     move your saved position.
                   </p>
                 )}
@@ -1601,6 +1776,15 @@ export default function VoiceIdentityReviewPage() {
           )}
           {reviewSession && reviewSession.loadedCount > 0 && (
             <>
+              {reviewSession.loadedCount > 20 && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
+                  This saved session has a legacy{" "}
+                  {reviewSession.loadedCount}-item window. It is preserved so
+                  its position and answers do not move. You can safely end it
+                  and start a new 10-clip rolling session; saved labels remain
+                  part of calibration.
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">
                   {reviewSession.querySnapshot?.candidateMode === "auto_matched"
@@ -1651,19 +1835,28 @@ export default function VoiceIdentityReviewPage() {
                   </span>
                   {reviewSession.hasMore
                     ? (
-                      <Button
-                        size="sm"
-                        onClick={() => loadNextWindow.mutate()}
-                        disabled={reviewPending}
-                      >
-                        {loadNextWindow.isPending
-                          ? "Loading…"
-                          : "Load next 100"}
-                      </Button>
+                      autoAdvanceWindow
+                        ? (
+                          <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Loading next {reviewSession.windowSize ?? 10}…
+                          </span>
+                        )
+                        : (
+                          <Button
+                            size="sm"
+                            onClick={() => loadNextWindow.mutate()}
+                            disabled={reviewPending}
+                          >
+                            {loadNextWindow.isPending
+                              ? "Loading…"
+                              : `Load next ${reviewSession.windowSize ?? 10}`}
+                          </Button>
+                        )
                     )
                     : (
                       <span className="text-xs text-muted-foreground">
-                        No more known items · Complete the session
+                        No more known items · End the session when ready
                       </span>
                     )}
                 </div>
@@ -1690,14 +1883,14 @@ export default function VoiceIdentityReviewPage() {
                   }-${activeGroup?.groupId ?? "single"}`}
                   segment={playerSegment}
                   profileName={reviewProfile?.name ?? "target profile"}
+                  profileOptions={allProfileOptions}
                   position={reviewIndex + 1}
                   remaining={windowItems.filter((item) =>
                     item.status === "pending"
                   ).length}
-                  sessionAnswered={reviewSession.reviewedCount +
-                    reviewSession.skippedCount}
-                  sessionTotal={reviewSession.sessionLoadedCount ??
-                    reviewSession.loadedCount}
+                  sessionAnswered={(reviewSession.windowReviewedCount ?? 0) +
+                    (reviewSession.windowSkippedCount ?? 0)}
+                  sessionTotal={reviewSession.loadedCount}
                   pending={reviewPending || decisionSegmentIds.length === 0 ||
                     (reviewSession.status !== "active" && !editingSegmentId) ||
                     Boolean(historyEditingItem)}
@@ -1713,7 +1906,8 @@ export default function VoiceIdentityReviewPage() {
                   editingLabel={editingSegmentId
                     ? reviewItem?.status === "skipped"
                       ? "Skipped"
-                      : reviewItem?.decisionSummary?.profileName ?? "Not Sky"
+                      : reviewItem?.decisionSummary?.profileName ??
+                        `Not ${reviewProfile?.name ?? "target"}`
                     : null}
                   alternateProfiles={alternateProfiles}
                   creatingProfile={createReviewProfile.isPending}
@@ -1848,7 +2042,7 @@ export default function VoiceIdentityReviewPage() {
                     : item.decisionSummary?.excludedProfileIds.includes(
                         reviewProfileId ?? "",
                       )
-                    ? "Not Sky"
+                    ? `Not ${reviewProfile?.name ?? "target"}`
                     : null;
                   const modelProfile = profiles.find((profile) =>
                     normalizeObjectId(profile._id) ===
@@ -1865,7 +2059,7 @@ export default function VoiceIdentityReviewPage() {
                     : segment.speakerIdentity?.state === "matched"
                     ? `${modelProfile?.name ?? "Matched profile"} · Model`
                     : segment.speakerIdentity?.state === "rejected"
-                    ? "Not Sky · Model"
+                    ? `Not ${reviewProfile?.name ?? "target"} · Model`
                     : segment.speakerIdentity?.state === "uncertain"
                     ? "Uncertain · Model"
                     : "Pending";
@@ -2011,6 +2205,7 @@ export default function VoiceIdentityReviewPage() {
                     key={"history-" + historyEditingItem.decisionId}
                     segment={historyEditingItem.segment}
                     profileName={reviewProfile?.name ?? "target profile"}
+                    profileOptions={allProfileOptions}
                     position={1}
                     remaining={0}
                     sessionAnswered={1}
@@ -2450,6 +2645,45 @@ export default function VoiceIdentityReviewPage() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/20 p-3">
+            <div className="min-w-[16rem] flex-1">
+              <p className="text-sm font-medium">Run speakerIdentity</p>
+              <p className="text-xs text-muted-foreground">
+                Uses stored embeddings from active run{" "}
+                <span className="font-mono">
+                  {activeDiarizationRun?.runId ?? "none"}
+                </span>. Start with 24 hours, review the result, then expand to
+                seven days.
+              </p>
+              {identityLaunchBlocker && (
+                <p className="mt-1 text-xs text-amber-600">
+                  Blocked: {identityLaunchBlocker}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                disabled={Boolean(identityLaunchBlocker) ||
+                  launchIdentity.isPending}
+                onClick={() => launchIdentity.mutate(24)}
+              >
+                Run 24-hour pilot
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={Boolean(identityLaunchBlocker) ||
+                  launchIdentity.isPending}
+                onClick={() => launchIdentity.mutate(168)}
+              >
+                Run 7 days
+              </Button>
+              <Button asChild size="sm" variant="ghost">
+                <Link to="/audio/pipeline">Custom/history…</Link>
+              </Button>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-md border p-3">
               <strong>
@@ -2581,7 +2815,7 @@ export default function VoiceIdentityReviewPage() {
           )}
           <div className="rounded-lg border bg-muted/20 p-4 text-sm">
             <p className="font-medium">
-              What happens after the first 100 labels
+              How much review is enough?
             </p>
             <ol className="mt-2 grid gap-2 text-muted-foreground md:grid-cols-5">
               <li>
@@ -2605,15 +2839,14 @@ export default function VoiceIdentityReviewPage() {
               </li>
             </ol>
             <p className="mt-3 text-xs text-muted-foreground">
-              100 labels is the minimum calibration gate, not a stopping point.
-              Continue reviewing diverse recordings and the uncertain queue.
+              100 total with at least 40 target and 40 not-target labels is only
+              the minimum volume gate. Quality is accepted only when a separate
+              validation set reaches ≥98% positive precision. More clean,
+              diverse recordings help; repeating nearly identical clips does
+              not. Review remains incremental after classification, especially
+              for uncertain results and new profiles.
             </p>
           </div>
-          <Button asChild disabled={!latestCalibration}>
-            <Link to="/audio/pipeline">
-              Open Pipeline and run Classify existing
-            </Link>
-          </Button>
         </CardContent>
       </Card>
     </div>

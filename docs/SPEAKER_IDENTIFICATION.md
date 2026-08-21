@@ -513,9 +513,13 @@ Review queue содержит активные unclassified/uncertain segments:
 - autoplay и shortcuts двигают очередь;
 - playback всегда координируется как один активный clip; видимый playhead и
   elapsed time сбрасываются при переходе к следующему segment;
-- review session, окно из 100 segments и текущая позиция сохраняются на backend,
-  поэтому работу можно продолжить позже;
-- compact list показывает все 100 элементов текущего окна;
+- review session, небольшое окно из 5/10/20 segments и текущая позиция
+  сохраняются на backend, поэтому работу можно продолжить позже;
+- default 10-item window автоматически сменяется следующим после разметки всех
+  элементов; toggle **Rolling** разрешает оставить переход ручным;
+- завершение неполной session безопасно: уже сохранённые labels учитываются
+  сразу, а unanswered segments могут попасть в следующую session;
+- compact list показывает все элементы текущего небольшого окна;
 - **Edit** доступен и для speaker label, и для Skip: старую метку можно заменить
   другим профилем или шумом;
 - **Reviewed history** показывает последние решения из всех сохранённых окон и
@@ -564,8 +568,8 @@ validation recordings проверяют переносимость.
 
 Каждое окно берёт примеры по кругу из разных source recordings, прежде чем
 повторять ту же запись. Не создавайте новую сессию только ради смены окна:
-оставшиеся кандидаты сохраняются в session buffer, поэтому **Load next 100** не
-теряет пропущенные между окнами segments.
+оставшиеся кандидаты сохраняются в session buffer, а rolling-переход загружает
+следующие 5/10/20 без потери позиции.
 
 Цель auto-Sky precision — не ниже 98%. Precision важнее recall: сомнительные
 случаи должны остаться `uncertain`.
@@ -600,10 +604,12 @@ Transcript показывают их как unclassified до новой сов�
 
 ## 10. Identity pilot и backfill
 
-После актуального Sky profile и validated calibration откройте
-`https://localhost:4433/settings/voice-identity/operations` (**Settings → Voice
-Identity → Operations & generations**). Audio Pipeline показывает компактную
-read-only readiness card со ссылками на эти настройки.
+После актуального Sky profile и validated calibration используйте кнопки **Run
+24-hour pilot** и **Run 7 days** прямо в
+`https://localhost:4433/settings/voice-identity`. Статус campaign, progress,
+ETA, распределение решений и ссылка на Job Details отображаются ниже. Для
+custom/history диапазона откройте **Custom/history…** или Operations &
+generations.
 
 Порядок rollout:
 
