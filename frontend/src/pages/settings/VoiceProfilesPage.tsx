@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { apiClient, callResource } from "@/lib/api";
 import { convertBlobToWav } from "@/lib/audioUtils";
 import { Button } from "@/components/ui/button";
@@ -107,6 +108,8 @@ interface SpeakerProfile {
   color: string;
   created_at: string;
   updated_at: string;
+  enrollmentStatus?: string;
+  seed_segment_count?: number;
 }
 
 interface VoiceSample {
@@ -245,6 +248,33 @@ const VoiceProfilesPage = () => {
     },
   });
 
+  const createProfileMutation = useMutation({
+    mutationFn: async (name: string) =>
+      await callResource("speaker-segments", {
+        action: "create-profile",
+        name,
+      }),
+    onSuccess: () => {
+      toast.success("Speaker profile created", {
+        description:
+          "It can receive manual labels now. Add a clean voice sample before automatic matching.",
+      });
+      void queryClient.invalidateQueries({
+        queryKey: voiceIdentityKeys.profiles,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker_profiles", "timeline-sample"],
+      });
+      setIsDialogOpen(false);
+      resetForm();
+    },
+    onError: (error: Error) => {
+      toast.error("Could not create speaker profile", {
+        description: error.message,
+      });
+    },
+  });
+
   // Update profile mutation
   const updateProfileMutation = useMutation({
     mutationFn: async (
@@ -349,6 +379,35 @@ const VoiceProfilesPage = () => {
     });
   };
 
+  const markProfileNeedsSamples = async (profileId: string) => {
+    const profile = await callResource("mongo", {
+      action: "findOne",
+      collection: "speaker_profiles",
+      query: { _id: { $oid: profileId } },
+      options: { projection: { revision: 1 } },
+    }) as { revision?: number } | null;
+    if (!profile) throw new Error("Voice profile no longer exists");
+    await callResource("mongo", {
+      action: "updateOne",
+      collection: "speaker_profiles",
+      query: { _id: { $oid: profileId } },
+      update: {
+        $set: {
+          sample_count: 0,
+          total_duration: 0,
+          enrollmentStatus: "needs_samples",
+          revision: (profile.revision ?? 1) + 1,
+          updated_at: new Date().toISOString(),
+        },
+        $unset: {
+          embedding: "",
+          embeddingSpaceId: "",
+          enrollmentProvenance: "",
+        },
+      },
+    });
+  };
+
   // Delete attached sample mutation (with profile update)
   const deleteAttachedSampleMutation = useMutation({
     mutationFn: async (
@@ -376,19 +435,19 @@ const VoiceProfilesPage = () => {
       const remaining = Array.isArray(remainingSamples) ? remainingSamples : [];
 
       if (remaining.length === 0) {
-        // Delete the profile if no samples remain
-        await callResource("mongo", {
-          action: "deleteOne",
-          collection: "speaker_profiles",
-          query: { _id: { $oid: profileId } },
-        });
-        toast.info("Profile deleted (no samples remaining)");
+        await markProfileNeedsSamples(profileId);
+        return { rebuildQueued: false };
       } else {
         await invalidateAndRebuildProfile(profileId, remaining.length);
+        return { rebuildQueued: true };
       }
     },
-    onSuccess: () => {
-      toast.success("Sample deleted");
+    onSuccess: (result) => {
+      toast.success(
+        result.rebuildQueued
+          ? "Sample deleted; profile rebuild queued"
+          : "Sample deleted; profile kept for manual labels",
+      );
       queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
       queryClient.invalidateQueries({
         queryKey: voiceIdentityKeys.profiles,
@@ -457,17 +516,19 @@ const VoiceProfilesPage = () => {
         ? remainingSamples.length
         : 0;
       if (remaining === 0) {
-        await callResource("mongo", {
-          action: "deleteOne",
-          collection: "speaker_profiles",
-          query: { _id: { $oid: profileId } },
-        });
+        await markProfileNeedsSamples(profileId);
+        return { rebuildQueued: false };
       } else {
         await invalidateAndRebuildProfile(profileId, remaining);
+        return { rebuildQueued: true };
       }
     },
-    onSuccess: () => {
-      toast.success("Sample detached; profile embedding rebuild queued");
+    onSuccess: (result) => {
+      toast.success(
+        result.rebuildQueued
+          ? "Sample detached; profile embedding rebuild queued"
+          : "Sample detached; profile kept for manual labels",
+      );
       queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
       queryClient.invalidateQueries({
         queryKey: voiceIdentityKeys.profiles,
@@ -777,7 +838,7 @@ const VoiceProfilesPage = () => {
               <DialogDescription>
                 {sampleTargetProfile
                   ? "The sample is saved permanently and the profile embedding is rebuilt in the background."
-                  : "Record 10-30 seconds of clear speech or upload an audio file."}
+                  : "Record or upload clean speech for automatic matching, or create a named profile now and add Timeline audio later."}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
@@ -801,6 +862,12 @@ const VoiceProfilesPage = () => {
                 />
                 <Label htmlFor="primary">This is my voice</Label>
               </div>
+              {!sampleTargetProfile && isPrimary && (
+                <p className="text-xs text-muted-foreground">
+                  A My Voice profile needs an audio sample immediately. Empty
+                  profiles are available only for other speakers.
+                </p>
+              )}
 
               <div className="space-y-2">
                 <Label>Audio Sample</Label>
@@ -940,6 +1007,24 @@ const VoiceProfilesPage = () => {
               </div>
             </div>
             <DialogFooter>
+              {!sampleTargetProfile && (
+                <Button
+                  variant="secondary"
+                  onClick={() =>
+                    createProfileMutation.mutate(newProfileName.trim())}
+                  disabled={!newProfileName.trim() || isPrimary ||
+                    createProfileMutation.isPending ||
+                    enrollMutation.isPending}
+                  title={isPrimary
+                    ? "My Voice must be enrolled with an audio sample"
+                    : "Create a labelable profile without a voice sample"}
+                >
+                  {createProfileMutation.isPending && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  Create profile only
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={() => {
@@ -966,6 +1051,29 @@ const VoiceProfilesPage = () => {
       </div>
 
       <ServiceHealthBanner />
+
+      <Card className="bg-muted/20">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4 text-sm">
+          <div>
+            <p className="font-medium">
+              Labels and voice samples have different jobs
+            </p>
+            <p className="text-muted-foreground">
+              Review labels say who spoke in an interval. Saved voice samples
+              are clean audio used to build and rebuild that speaker's
+              embedding. One Timeline clip can be used for both workflows.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link to="/settings/voice-identity">Review segments</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link to="/timeline">Choose Timeline audio</Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Profiles List */}
       {isLoading
@@ -1021,6 +1129,17 @@ const VoiceProfilesPage = () => {
                             {profile.name}
                             {profile.is_primary && (
                               <Badge variant="secondary">My Voice</Badge>
+                            )}
+                            {profile.enrollmentStatus === "needs_samples" && (
+                              <Badge variant="outline">
+                                Needs voice sample
+                              </Badge>
+                            )}
+                            {profile.enrollmentStatus ===
+                                "seeded_from_review" && (
+                              <Badge variant="outline">
+                                Seeded from review
+                              </Badge>
                             )}
                           </CardTitle>
                           <CardDescription>

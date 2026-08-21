@@ -30,6 +30,17 @@ import {
 
 const objectId = z.string().refine(ObjectId.isValid, "Invalid ObjectId");
 const range = { start: zDateOrString(), end: zDateOrString() };
+const profileName = z.string().trim().min(1).max(120);
+const PROFILE_COLORS = [
+  "#3b82f6",
+  "#ef4444",
+  "#10b981",
+  "#f59e0b",
+  "#8b5cf6",
+  "#ec4899",
+  "#06b6d4",
+  "#f97316",
+];
 
 function isValidReviewAssignment(value: {
   profileId?: string;
@@ -70,6 +81,15 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     segmentId: objectId,
     scope: z.enum(["segment", "speaker"]),
     profileId: objectId.optional(),
+  }),
+  z.object({
+    action: z.literal("create-profile"),
+    name: profileName,
+  }),
+  z.object({
+    action: z.literal("create-profile-from-segments"),
+    name: profileName,
+    segmentIds: z.array(objectId).min(1).max(100),
   }),
   z.object({ action: z.literal("delete-annotation"), id: objectId }),
   z.object({
@@ -243,6 +263,65 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
 ]);
 
 type SpeakerSegmentsRequest = z.input<typeof speakerSegmentsRequestSchema>;
+
+function normalizedEmbedding(values: unknown): number[] | null {
+  if (
+    !Array.isArray(values) || values.length === 0 ||
+    values.some((value) => typeof value !== "number" || !Number.isFinite(value))
+  ) {
+    return null;
+  }
+  const norm = Math.sqrt(
+    values.reduce((sum: number, value: number) => sum + value * value, 0),
+  );
+  if (!Number.isFinite(norm) || norm === 0) return null;
+  return values.map((value: number) => value / norm);
+}
+
+function centroidEmbedding(embeddings: unknown[]): number[] {
+  const normalized = embeddings.map(normalizedEmbedding);
+  if (normalized.some((embedding) => embedding === null)) {
+    throw new Error("Every selected segment must have a valid voice embedding");
+  }
+  const vectors = normalized as number[][];
+  const dimension = vectors[0].length;
+  if (vectors.some((embedding) => embedding.length !== dimension)) {
+    throw new Error("Selected segment embeddings have different dimensions");
+  }
+  const centroid = Array.from(
+    { length: dimension },
+    (_, index) =>
+      vectors.reduce((sum, embedding) => sum + embedding[index], 0) /
+      vectors.length,
+  );
+  const result = normalizedEmbedding(centroid);
+  if (!result) {
+    throw new Error("Selected segment embeddings cancel each other out");
+  }
+  return result;
+}
+
+async function nextProfileColor(mongo: any): Promise<string> {
+  const profiles = await mongo({
+    action: "find",
+    collection: "speaker_profiles",
+    query: {},
+    options: { projection: { _id: 1 }, limit: 5_000 },
+  }) as any[];
+  return PROFILE_COLORS[profiles.length % PROFILE_COLORS.length];
+}
+
+async function assertProfileNameAvailable(mongo: any, name: string) {
+  const existing = await mongo({
+    action: "findOne",
+    collection: "speaker_profiles",
+    query: { name },
+    options: { projection: { _id: 1 } },
+  });
+  if (existing) {
+    throw new Error(`A voice profile named "${name}" already exists`);
+  }
+}
 
 async function findReviewCandidates(
   mongo: any,
@@ -670,6 +749,99 @@ export class SpeakerSegmentsResource
     const mongo = await getMongoResource(auth);
 
     switch (input.action) {
+      case "create-profile": {
+        await assertProfileNameAvailable(mongo, input.name);
+        const now = new Date();
+        const doc = {
+          name: input.name,
+          sample_count: 0,
+          total_duration: 0,
+          is_primary: false,
+          color: await nextProfileColor(mongo),
+          source: "manual_profile",
+          enrollmentStatus: "needs_samples",
+          revision: 1,
+          created_at: now,
+          updated_at: now,
+          createdBy: auth.principal,
+        };
+        const result = await mongo({
+          action: "insertOne",
+          collection: "speaker_profiles",
+          doc,
+        }) as any;
+        return { ...doc, _id: result.insertedId };
+      }
+      case "create-profile-from-segments": {
+        await assertProfileNameAvailable(mongo, input.name);
+        const segmentIds = [...new Set(input.segmentIds)].map((id) =>
+          new ObjectId(id)
+        );
+        const segments = await mongo({
+          action: "find",
+          collection: "diarizations",
+          query: { _id: { $in: segmentIds }, lifecycleStatus: "active" },
+          options: { limit: segmentIds.length },
+        }) as any[];
+        if (segments.length !== segmentIds.length) {
+          throw new Error(
+            "Every selected review segment must still be active and available",
+          );
+        }
+        const embeddingSpaceIds = new Set(
+          segments.map((segment) =>
+            String(segment.embeddingSpaceId ?? "legacy-unknown")
+          ),
+        );
+        if (embeddingSpaceIds.size !== 1) {
+          throw new Error(
+            "Selected segments use different embedding spaces and cannot seed one profile",
+          );
+        }
+        const embeddingSpaceId = [...embeddingSpaceIds][0];
+        const embedding = centroidEmbedding(
+          segments.map((segment) => segment.embedding),
+        );
+        const duration = segments.reduce((total, segment) => {
+          const start = new Date(segment.start).getTime();
+          const end = new Date(segment.end).getTime();
+          return total +
+            (Number.isFinite(start) && Number.isFinite(end)
+              ? Math.max(0, (end - start) / 1_000)
+              : 0);
+        }, 0);
+        const now = new Date();
+        const doc = {
+          name: input.name,
+          embedding,
+          embeddingSpaceId,
+          sample_count: 0,
+          total_duration: 0,
+          seed_segment_count: segments.length,
+          seed_duration: duration,
+          is_primary: false,
+          color: await nextProfileColor(mongo),
+          source: "review_segments",
+          enrollmentStatus: "seeded_from_review",
+          revision: 1,
+          enrollmentProvenance: {
+            source: "review_segments",
+            embeddingSpaceId,
+            segmentIds: segments.map((segment) => segment._id),
+            segmentCount: segments.length,
+            duration,
+          },
+          created_at: now,
+          updated_at: now,
+          createdBy: auth.principal,
+        };
+        const result = await mongo({
+          action: "insertOne",
+          collection: "speaker_profiles",
+          doc,
+        }) as any;
+        return { ...doc, _id: result.insertedId };
+      }
       case "coverage": {
         const [rows, buildingRuns] = await Promise.all([
           mongo({

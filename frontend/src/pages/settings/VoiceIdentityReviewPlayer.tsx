@@ -6,6 +6,9 @@ import {
   ArrowRight,
   ArrowUp,
   Clock3,
+  FileAudio,
+  Loader2,
+  Plus,
   RotateCcw,
   SkipForward,
 } from "lucide-react";
@@ -15,6 +18,17 @@ import {
 } from "@/components/audio/WaveformPlayer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AddTimelineVoiceSampleDialog } from "@/components/voice/AddTimelineVoiceSampleDialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { normalizeObjectId } from "@/lib/diarization";
@@ -66,8 +80,10 @@ interface VoiceIdentityReviewPlayerProps {
   canEdit: boolean;
   editingLabel?: string | null;
   alternateProfiles: VoiceIdentityProfileOption[];
+  creatingProfile: boolean;
   onDecision: (decision: VoiceIdentityDecision) => void;
   onAssignProfile: (profileId: string) => void;
+  onCreateProfile: (name: string) => Promise<void>;
   onPrevious: () => void;
   onNext: () => void;
   onUndo: () => void;
@@ -166,8 +182,10 @@ export function VoiceIdentityReviewPlayer({
   canEdit,
   editingLabel,
   alternateProfiles,
+  creatingProfile,
   onDecision,
   onAssignProfile,
+  onCreateProfile,
   onPrevious,
   onNext,
   onUndo,
@@ -180,7 +198,11 @@ export function VoiceIdentityReviewPlayer({
   const [selectedProfileId, setSelectedProfileId] = useState(
     alternateProfiles[0]?.id ?? "",
   );
+  const [createOpen, setCreateOpen] = useState(false);
+  const [sampleOpen, setSampleOpen] = useState(false);
+  const [newProfileName, setNewProfileName] = useState("");
   const id = normalizeObjectId(segment._id);
+  const originalId = normalizeObjectId(segment.original_id ?? segment.original);
   const duration = durationSeconds(segment);
   const audioUrl = buildAudioUrl(segment);
   const score = segment.speakerIdentity?.primaryScore;
@@ -377,34 +399,79 @@ export function VoiceIdentityReviewPlayer({
             </Button>
           </div>
 
-          {alternateProfiles.length > 0 && (
-            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <label className="sr-only" htmlFor="voice-review-other-profile">
-                Assign another profile
-              </label>
-              <select
-                id="voice-review-other-profile"
-                className="h-10 rounded-md border bg-background px-3 text-sm"
-                value={selectedProfileId}
-                onChange={(event) => setSelectedProfileId(event.target.value)}
-              >
-                {alternateProfiles.map((profile, index) => (
-                  <option key={profile.id} value={profile.id}>
-                    {index < 9 ? `${index + 1} · ` : ""}
-                    {profile.name}
-                  </option>
-                ))}
-              </select>
+          <div className="rounded-lg border bg-muted/20 p-3">
+            <p className="mb-2 text-xs text-muted-foreground">
+              Assigning labels this interval immediately. A saved 10–30 second
+              voice sample is separate and is used later to rebuild the profile
+              embedding.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+              {alternateProfiles.length > 0
+                ? (
+                  <>
+                    <label
+                      className="sr-only"
+                      htmlFor="voice-review-other-profile"
+                    >
+                      Assign another profile
+                    </label>
+                    <select
+                      id="voice-review-other-profile"
+                      className="h-10 rounded-md border bg-background px-3 text-sm"
+                      value={selectedProfileId}
+                      onChange={(event) =>
+                        setSelectedProfileId(event.target.value)}
+                    >
+                      {alternateProfiles.map((profile, index) => (
+                        <option key={profile.id} value={profile.id}>
+                          {index < 9 ? `${index + 1} · ` : ""}
+                          {profile.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      variant="outline"
+                      disabled={pending || !selectedProfileId}
+                      onClick={() =>
+                        stopThen(() => onAssignProfile(selectedProfileId))}
+                    >
+                      Assign profile
+                    </Button>
+                  </>
+                )
+                : (
+                  <span className="self-center text-sm">
+                    No other profiles yet
+                  </span>
+                )}
               <Button
                 variant="outline"
-                disabled={pending || !selectedProfileId}
-                onClick={() =>
-                  stopThen(() => onAssignProfile(selectedProfileId))}
+                disabled={pending}
+                onClick={() => {
+                  useAudioPlaybackStore.getState().stopActive();
+                  setCreateOpen(true);
+                }}
               >
-                Assign profile
+                <Plus className="mr-1 h-4 w-4" />New speaker
               </Button>
             </div>
-          )}
+            <Button
+              className="mt-2 px-0 text-xs"
+              size="sm"
+              variant="link"
+              disabled={!originalId || duration < 3 || duration > 120}
+              title={duration < 3
+                ? "Voice samples require at least 3 seconds; use a safe grouped clip or Timeline selection"
+                : "Save this clear, single-speaker clip for profile enrollment"}
+              onClick={() => {
+                useAudioPlaybackStore.getState().stopActive();
+                setSampleOpen(true);
+              }}
+            >
+              <FileAudio className="mr-1 h-4 w-4" />
+              Save current clip as voice sample
+            </Button>
+          </div>
 
           <p className="text-center text-xs text-muted-foreground">
             Swipe or use ← Not Sky · → Sky · S skips · 1–9 profiles · Space
@@ -465,6 +532,66 @@ export function VoiceIdentityReviewPlayer({
           </div>
         </aside>
       </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create and assign a speaker</DialogTitle>
+            <DialogDescription>
+              The selected review segment or safe group seeds the new profile
+              and is labeled immediately. This creates no saved voice sample;
+              add a clean Timeline clip later for durable re-enrollment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="review-new-speaker-name">Speaker name</Label>
+            <Input
+              id="review-new-speaker-name"
+              value={newProfileName}
+              onChange={(event) => setNewProfileName(event.target.value)}
+              placeholder="e.g. Andrew Kislov"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCreateOpen(false)}
+              disabled={pending || creatingProfile}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!newProfileName.trim() || pending || creatingProfile}
+              onClick={async () => {
+                try {
+                  await onCreateProfile(newProfileName.trim());
+                  setNewProfileName("");
+                  setCreateOpen(false);
+                } catch {
+                  // Parent mutations show the actionable error and keep the
+                  // dialog open so the name can be corrected or retried.
+                }
+              }}
+            >
+              {(pending || creatingProfile) && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Create and assign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {sampleOpen && (
+        <AddTimelineVoiceSampleDialog
+          open
+          onOpenChange={setSampleOpen}
+          startDate={new Date(segment.start)}
+          endDate={new Date(segment.end)}
+          originalId={originalId ?? undefined}
+          source="review_selection"
+        />
+      )}
     </div>
   );
 }

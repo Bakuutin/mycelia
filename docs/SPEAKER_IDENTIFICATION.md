@@ -446,6 +446,18 @@ backup и проверьте restore. Затем **Preview purge**, сверка
 
 Откройте `https://localhost:4433/settings/voice-profiles`.
 
+В UI есть два связанных, но намеренно разных типа данных:
+
+- **speaker label / annotation** отвечает «кто говорил в этом интервале» и
+  сразу имеет приоритет на Timeline и в Transcript;
+- **saved voice sample** — сохранённое чистое аудио, из которого enrollment
+  строит embedding профиля для автоматического поиска похожего голоса.
+
+Один и тот же Timeline-интервал можно сначала назначить профилю как label, а
+затем сохранить как voice sample, но не каждая разметка годится для enrollment.
+Короткие обрывки, overlap, шум и мычание можно размечать для Timeline, но не
+следует добавлять в эталонный набор профиля.
+
 Для Sky:
 
 1. Создайте или выберите primary profile (`My Voice`).
@@ -463,12 +475,17 @@ overlap.
 
 1. На Timeline выберите 3–120 секунд с одним спикером; лучше 10–30 секунд.
 2. Нажмите **Voice sample**.
-3. Выберите профиль.
-4. Нажмите **Save and rebuild profile**.
+3. Выберите существующий профиль или **New speaker** и введите имя.
+4. Нажмите **Save and rebuild profile** либо **Create speaker and save
+   sample**.
 5. Проследите enrollment job.
 
 Source interval сохраняется вместе с sample. Другие профили добавляются тем же
 способом, но каждому нужна своя calibration в совместимом embedding space.
+
+Профиль без sample можно создать через **Voice Profiles → Add Profile → Create
+profile only**. Он уже доступен для ручных назначений, но automatic matching
+начинается только после добавления чистого sample и успешного enrollment.
 
 ## 9. Review и calibration Sky
 
@@ -478,6 +495,11 @@ Review queue содержит активные unclassified/uncertain segments:
 
 - **This is me** — positive Sky annotation;
 - **Not me** — Sky явно исключён;
+- **Assign profile** — сегмент сразу назначается существующему другому
+  спикеру;
+- **New speaker** — создаёт другой профиль из embedding выбранного сегмента или
+  безопасной группы и сразу назначает ему разметку; такой seed не считается
+  сохранённым voice sample;
 - undo удаляет последнее ручное решение;
 - **Skip** оставляет segment вне training/calibration;
 - autoplay и shortcuts двигают очередь;

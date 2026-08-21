@@ -552,6 +552,30 @@ export default function VoiceIdentityReviewPage() {
     },
   });
 
+  const createReviewProfile = useMutation({
+    mutationFn: async (
+      { name, segmentIds }: { name: string; segmentIds: string[] },
+    ) => {
+      return await callResource("speaker-segments", {
+        action: "create-profile-from-segments",
+        name,
+        segmentIds,
+      }) as { _id: unknown; name: string };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: voiceIdentityKeys.profiles,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker_profiles", "timeline-sample"],
+      });
+    },
+    onError: (error) =>
+      toast.error("Could not create speaker profile", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      }),
+  });
+
   const undo = useMutation({
     mutationFn: async (entry: ReviewHistoryEntry) => {
       if (!selectedSessionId || !reviewSession) {
@@ -798,7 +822,8 @@ export default function VoiceIdentityReviewPage() {
       end: activeGroup.end,
     }
     : activeSegment;
-  const reviewPending = label.isPending || undo.isPending ||
+  const reviewPending = label.isPending || createReviewProfile.isPending ||
+    undo.isPending ||
     updatePosition.isPending ||
     completeSession.isPending || loadNextWindow.isPending;
   const setAutoPlayPreference = (enabled: boolean) => {
@@ -1387,6 +1412,7 @@ export default function VoiceIdentityReviewPage() {
                     ? reviewItem?.decisionSummary?.profileName ?? "Not Sky"
                     : null}
                   alternateProfiles={alternateProfiles}
+                  creatingProfile={createReviewProfile.isPending}
                   onDecision={(state) => {
                     if (reviewPending) return;
                     if (state === "skip") {
@@ -1408,6 +1434,35 @@ export default function VoiceIdentityReviewPage() {
                     saveAssignment({
                       profileId: assignedProfileId,
                       excludedProfileIds: [reviewProfileId],
+                    });
+                  }}
+                  onCreateProfile={async (name) => {
+                    if (!reviewProfileId || decisionSegmentIds.length === 0) {
+                      throw new Error("No review segment is selected");
+                    }
+                    const profile = await createReviewProfile.mutateAsync({
+                      name,
+                      segmentIds: [...decisionSegmentIds],
+                    });
+                    const createdProfileId = normalizeObjectId(profile._id);
+                    if (!createdProfileId) {
+                      throw new Error("New speaker profile has no valid ID");
+                    }
+                    await label.mutateAsync({
+                      clientRequestId: crypto.randomUUID(),
+                      segmentIds: [...decisionSegmentIds],
+                      profileId: createdProfileId,
+                      excludedProfileIds: [reviewProfileId],
+                      ...(editingSegmentId && reviewItem?.decisionSummary
+                        ? {
+                          replacesDecisionId:
+                            reviewItem.decisionSummary.decisionId,
+                        }
+                        : {}),
+                    });
+                    toast.success(`${profile.name} created and assigned`, {
+                      description:
+                        "Add a clean Timeline voice sample before calibrating this speaker.",
                     });
                   }}
                   onPrevious={() => moveReview(-1)}

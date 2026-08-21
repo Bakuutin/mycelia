@@ -177,16 +177,23 @@ def add_sample_to_profile(
     embedding_space_id: str = "legacy-unknown",
 ) -> Dict[str, Any]:
     """Update an existing profile by ID without changing its identity flags."""
-    existing_space = profile.get("embeddingSpaceId", "legacy-unknown")
-    if existing_space != embedding_space_id:
+    existing_embedding = profile.get("embedding")
+    existing_space = profile.get("embeddingSpaceId")
+    if existing_embedding and existing_space not in (None, embedding_space_id):
         raise ValueError(
             f"Embedding space mismatch for profile {profile.get('name')}: {existing_space} != {embedding_space_id}; re-enroll the profile"
         )
     normalized = np.array(_normalize_embedding(embedding), dtype=np.float32)
-    old_embedding = np.array(profile["embedding"], dtype=np.float32)
-    old_count = int(profile.get("sample_count", 1))
+    old_count = int(profile.get("sample_count", 0))
     old_duration = float(profile.get("total_duration", 0.0))
-    merged = (old_embedding * old_count + normalized) / (old_count + 1)
+    if existing_embedding and old_count > 0:
+        old_embedding = np.array(existing_embedding, dtype=np.float32)
+        merged = (old_embedding * old_count + normalized) / (old_count + 1)
+    else:
+        # A draft profile, or a profile seeded only from reviewed diarization
+        # segments, has no retained enrollment samples yet. The first durable
+        # sample becomes its authoritative embedding.
+        merged = normalized
     norm = np.linalg.norm(merged)
     if norm > 0:
         merged = merged / norm
@@ -198,6 +205,7 @@ def add_sample_to_profile(
         "updated_at": datetime.now(UTC),
         "embeddingSpaceId": embedding_space_id,
         "revision": int(profile.get("revision", 1)) + 1,
+        "enrollmentStatus": "ready",
     }
     result = call_resource("mongo", {
         "action": "updateOne",

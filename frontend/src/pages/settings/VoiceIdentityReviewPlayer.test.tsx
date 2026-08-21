@@ -1,5 +1,5 @@
 import { forwardRef, useImperativeHandle } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -51,12 +51,14 @@ function renderPlayer(overrides: Record<string, unknown> = {}) {
     canNext: true,
     canUndo: true,
     canEdit: false,
+    creatingProfile: false,
     alternateProfiles: [
       { id: "66b000000000000000000020", name: "Belka" },
       { id: "66b000000000000000000030", name: "david bowie" },
     ],
     onDecision: vi.fn(),
     onAssignProfile: vi.fn(),
+    onCreateProfile: vi.fn().mockResolvedValue(undefined),
     onPrevious: vi.fn(),
     onNext: vi.fn(),
     onUndo: vi.fn(),
@@ -143,6 +145,22 @@ describe("VoiceIdentityReviewPlayer", () => {
     fireEvent.keyDown(window, { key: "e" });
     expect(props.onEdit).toHaveBeenCalledOnce();
     expect(getReviewShortcut("2")).toEqual({ type: "profile", index: 1 });
+  });
+
+  it("creates and assigns a new speaker without requiring an existing profile", async () => {
+    const { props } = renderPlayer({ alternateProfiles: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "New speaker" }));
+    fireEvent.change(screen.getByLabelText("Speaker name"), {
+      target: { value: "Andrew Kislov" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create and assign" }),
+    );
+
+    await waitFor(() =>
+      expect(props.onCreateProfile).toHaveBeenCalledWith("Andrew Kislov")
+    );
   });
 
   it("maps horizontal swipes and ignores vertical movement", () => {

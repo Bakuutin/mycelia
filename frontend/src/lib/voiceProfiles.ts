@@ -26,12 +26,13 @@ export function buildTimelineSampleMetadata(
   profile: VoiceProfileAttachTarget,
   start: Date,
   end: Date,
+  source = "timeline_selection",
 ) {
   return {
     speaker_name: profile.name,
     profile_id: profile.id,
     duration: Math.max(0, (end.getTime() - start.getTime()) / 1000),
-    source: "timeline_selection",
+    source,
     source_start: start.toISOString(),
     source_end: end.toISOString(),
     uploaded_at: new Date().toISOString(),

@@ -33,6 +33,34 @@ def test_adding_a_sample_increments_profile_revision() -> None:
     assert resource.call_args.args[1]["update"]["$set"]["revision"] == 5
 
 
+def test_first_saved_sample_initializes_a_draft_profile() -> None:
+    profile = {
+        "_id": ObjectId(),
+        "name": "Andrew",
+        "sample_count": 0,
+        "total_duration": 0.0,
+        "revision": 1,
+        "enrollmentStatus": "needs_samples",
+    }
+    with patch(
+        "speaker_identification.profiles.call_resource",
+        return_value={"matchedCount": 1},
+    ) as resource:
+        updated = add_sample_to_profile(
+            profile,
+            [0.8, 0.2],
+            12.0,
+            "space-v1",
+        )
+
+    saved = resource.call_args.args[1]["update"]["$set"]
+    assert updated["sample_count"] == 1
+    assert updated["total_duration"] == 12.0
+    assert updated["embeddingSpaceId"] == "space-v1"
+    assert updated["enrollmentStatus"] == "ready"
+    assert saved["sample_count"] == 1
+
+
 def test_updating_a_named_profile_increments_profile_revision() -> None:
     profile = {
         "_id": ObjectId(),

@@ -4,10 +4,7 @@ import { Check, Loader2, Plus, Unlink, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
-import {
-  normalizeSpeakerEmbedding,
-  type SpeakerAssignmentScope,
-} from "@/lib/speakerAssignment";
+import { type SpeakerAssignmentScope } from "@/lib/speakerAssignment";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,17 +24,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SpeakerBadge } from "./SpeakerBadge";
-
-const PROFILE_COLORS = [
-  "#3b82f6",
-  "#ef4444",
-  "#10b981",
-  "#f59e0b",
-  "#8b5cf6",
-  "#ec4899",
-  "#06b6d4",
-  "#f97316",
-];
 
 export interface SpeakerProfileOption {
   _id: unknown;
@@ -69,10 +55,8 @@ export function SpeakerAssignmentControl({
   originalId,
   speaker,
   embedding,
-  duration = 0,
   matchedSpeaker,
   onChanged,
-  embeddingSpaceId = "legacy-unknown",
 }: SpeakerAssignmentControlProps) {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<SpeakerAssignmentScope>("segment");
@@ -129,7 +113,9 @@ export function SpeakerAssignmentControl({
         : undefined;
 
       const normalizedSegmentId = normalizeObjectId(segmentId);
-      if (!normalizedSegmentId) throw new Error("Diarization segment has no valid ID");
+      if (!normalizedSegmentId) {
+        throw new Error("Diarization segment has no valid ID");
+      }
       await callResource("speaker-segments", {
         action: "assign",
         segmentId: normalizedSegmentId,
@@ -158,40 +144,25 @@ export function SpeakerAssignmentControl({
 
   const createProfile = async () => {
     const name = newProfileName.trim();
-    if (!name || !embedding?.length) return;
+    const normalizedSegmentId = normalizeObjectId(segmentId);
+    if (!name || !normalizedSegmentId || !embedding?.length) return;
 
     setSaving(true);
     try {
-      const now = new Date();
-      const profile = {
+      const profile = await callResource("speaker-segments", {
+        action: "create-profile-from-segments",
         name,
-        embedding: normalizeSpeakerEmbedding(embedding),
-        sample_count: 1,
-        total_duration: duration,
-        is_primary: false,
-        color: PROFILE_COLORS[profiles.length % PROFILE_COLORS.length],
-        source: "diarization_segment",
-        created_at: now,
-        updated_at: now,
-        embeddingSpaceId,
-        revision: 1,
-        enrollmentProvenance: { source: "diarization_segment", embeddingSpaceId },
-      };
-      const result = await callResource("mongo", {
-        action: "insertOne",
-        collection: "speaker_profiles",
-        doc: profile,
-      });
-      const insertedId = normalizeObjectId(result?.insertedId);
+        segmentIds: [normalizedSegmentId],
+      }) as SpeakerProfileOption;
+      const insertedId = normalizeObjectId(profile._id);
       if (!insertedId) {
         throw new Error("Speaker profile was created without an ID");
       }
 
-      const createdProfile = { ...profile, _id: { $oid: insertedId } };
       await queryClient.invalidateQueries({ queryKey: ["speaker_profiles"] });
       setCreateOpen(false);
       setNewProfileName("");
-      await updateAssignment(createdProfile);
+      await updateAssignment(profile);
     } catch (error) {
       toast.error("Could not create speaker profile", {
         description: error instanceof Error ? error.message : "Unknown error",
@@ -304,7 +275,8 @@ export function SpeakerAssignmentControl({
             <DialogTitle>Create speaker from this segment</DialogTitle>
             <DialogDescription>
               The segment embedding becomes the initial voice profile and is
-              assigned using the selected scope.
+              assigned using the selected scope. It does not count as a saved
+              enrollment sample; add a clean Timeline clip later.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
