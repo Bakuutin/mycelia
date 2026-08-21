@@ -35,6 +35,7 @@ import type { JobAccessLogEntry, JobInfo, JobLogEntry } from "@/types/jobs";
 import { parseJobError } from "@/lib/jobs";
 import { getJobErrorCode } from "@/lib/jobErrors";
 import { getDiarizationJobRoute } from "@/lib/jobRouting";
+import { getJobTimeRange } from "@/lib/jobTimeRange";
 import {
   getCompletedDiarizationWorkerRate,
   getDiarizationProgressView,
@@ -1179,12 +1180,13 @@ export default function JobDetailPage() {
               job.finishedOn,
             )
             : null;
-          const dateRange = job.data?.start && job.data?.end
-            ? `${format(new Date(job.data.start), "PPp")} — ${
-              format(new Date(job.data.end), "PPp")
-            }`
-            : job.data?.start
-            ? `from ${format(new Date(job.data.start), "PPp")}`
+          const jobTimeRange = getJobTimeRange(job);
+          const dateRange = jobTimeRange
+            ? jobTimeRange.end
+              ? `${format(jobTimeRange.start, "PPp")} — ${
+                format(jobTimeRange.end, "PPp")
+              }`
+              : `from ${format(jobTimeRange.start, "PPp")}`
             : null;
 
           // "reasoning off · 123 reasoning tok" row for any LLM job
@@ -1695,9 +1697,22 @@ export default function JobDetailPage() {
                 {dateRange && (
                   <div className="text-sm text-muted-foreground">
                     <span className="text-xs uppercase tracking-wide">
-                      Date Range:
+                      {job.type === "diarization" &&
+                          jobTimeRange?.source === "processed"
+                        ? "Processed audio:"
+                        : "Date range:"}
                     </span>{" "}
-                    {dateRange}
+                    <Link
+                      to={`/timeline?start=${
+                        jobTimeRange!.start.getTime()
+                      }&end=${
+                        jobTimeRange!.end?.getTime() ??
+                          jobTimeRange!.start.getTime() + 86400000
+                      }`}
+                      className="text-primary hover:underline"
+                    >
+                      {dateRange}
+                    </Link>
                   </div>
                 )}
                 {job.type === "conversation_extractor" && r.description && (

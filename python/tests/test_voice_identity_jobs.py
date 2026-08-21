@@ -130,6 +130,55 @@ class EnrollmentJobTest(TestCase):
 
 
 class DiarizationJobTest(TestCase):
+    def test_job_reports_actual_processed_audio_range(self):
+        sequence_start = datetime(2026, 8, 18, 8, 0, tzinfo=UTC)
+        sequence = DiarizationSequence(
+            original_id=ObjectId(),
+            chunks=[{
+                "_id": ObjectId(),
+                "index": 1,
+                "start": sequence_start,
+            }],
+        )
+        progress_updates = []
+        with (
+            patch("jobs.diarization._campaign_call", return_value=None),
+            patch("jobs.diarization._update_campaign"),
+            patch("jobs.diarization.count_pending_chunks", return_value=1),
+            patch(
+                "jobs.diarization.get_diarization_sequences",
+                return_value=[sequence],
+            ),
+            patch(
+                "jobs.diarization.diarize_sequence",
+                return_value={
+                    "status": "diarized",
+                    "chunks_diarized": 1,
+                    "segments": 2,
+                    "audio_seconds": 12.5,
+                    "payload_audio_seconds": 12.5,
+                },
+            ),
+        ):
+            result = process_diarization_job(
+                "job-processed-range",
+                DiarizationJobData(limit=1),
+                progress_updates.append,
+            )
+
+        expected = {
+            "start": "2026-08-18T08:00:00+00:00",
+            "end": "2026-08-18T08:00:12.500000+00:00",
+        }
+        self.assertEqual(result["processedRange"], expected)
+        processing = next(
+            update
+            for update in progress_updates
+            if update.get("stage") == "processing"
+            and update.get("processedRange") is not None
+        )
+        self.assertEqual(processing["processedRange"], expected)
+
     def test_max_sequence_chunks_snapshot_is_validated_and_forwarded(self):
         for value in (0, 33):
             with self.subTest(value=value), self.assertRaises(ValidationError):

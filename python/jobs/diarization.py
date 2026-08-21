@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 from pydantic import BaseModel, Field
 from bson import ObjectId
@@ -450,6 +450,8 @@ def process_diarization_job(
     stage_timings_ms: dict[str, dict[str, float]] = {}
     last_error: Optional[str] = None
     cursor: Optional[datetime] = data.cursor
+    processed_range_start: datetime | None = None
+    processed_range_end: datetime | None = None
     elapsed_seconds = 0.0
     provider_unavailable = False
     route_disabled = False
@@ -481,6 +483,7 @@ def process_diarization_job(
         nonlocal audio_seconds_processed, segments_created, errors
         nonlocal successful_sequences, failed_sequences, chunk_claim_skips
         nonlocal last_error, provider_unavailable, cursor, elapsed_seconds
+        nonlocal processed_range_start, processed_range_end
 
         sample_timings = result.get("stage_timings_ms")
         if isinstance(sample_timings, dict):
@@ -509,6 +512,25 @@ def process_diarization_job(
         else:
             successful_sequences += 1
             audio_seconds_processed += float(result.get("audio_seconds", 0.0))
+            sequence_start = getattr(sequence, "start", None)
+            payload_seconds = result.get("payload_audio_seconds")
+            if payload_seconds is None:
+                payload_seconds = result.get("audio_seconds")
+            if isinstance(sequence_start, datetime):
+                try:
+                    sequence_end = sequence_start + timedelta(
+                        seconds=max(float(payload_seconds or 0.0), 0.0),
+                    )
+                except (TypeError, ValueError):
+                    sequence_end = sequence_start
+                processed_range_start = min(
+                    processed_range_start or sequence_start,
+                    sequence_start,
+                )
+                processed_range_end = max(
+                    processed_range_end or sequence_end,
+                    sequence_end,
+                )
             if building_generation:
                 cursor = max(cursor or sequence.start, sequence.last["start"])
 
@@ -554,6 +576,15 @@ def process_diarization_job(
             "batch_sequences_processed": sequences_processed,
             "batch_sequences_total": effective_batch_size,
             "batch_chunks_processed": chunks_processed,
+            "processedRange": (
+                {
+                    "start": processed_range_start.isoformat(),
+                    "end": processed_range_end.isoformat(),
+                }
+                if processed_range_start is not None
+                and processed_range_end is not None
+                else None
+            ),
             "worker_chunks_per_second": batch_rate,
             "recording_lease_skipped_sequences": recording_lease_skipped_sequences,
             "chunk_claim_skips": chunk_claim_skips,
@@ -1042,6 +1073,15 @@ def process_diarization_job(
         "recordingLeaseSkippedSequences": recording_lease_skipped_sequences,
         "chunkClaimSkips": chunk_claim_skips,
         "audioSecondsProcessed": audio_seconds_processed,
+        "processedRange": (
+            {
+                "start": processed_range_start.isoformat(),
+                "end": processed_range_end.isoformat(),
+            }
+            if processed_range_start is not None
+            and processed_range_end is not None
+            else None
+        ),
         "stageTimingsMs": stage_timings_ms,
         "processed": chunks_processed,
         "hasMore": has_more,

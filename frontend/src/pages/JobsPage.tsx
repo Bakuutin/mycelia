@@ -89,6 +89,7 @@ import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { getJobsListView, withJobsListView } from "@/lib/jobListView";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
+import { getJobTimeRange } from "@/lib/jobTimeRange";
 import {
   formatDiarizationWorkerRate,
   getCompletedDiarizationWorkerRate,
@@ -549,19 +550,30 @@ const STATUS_PRIORITY: Record<string, number> = {
 const ERRORED_JOB_STATES = new Set(["failed", "cancelled"]);
 
 /**
- * Renders a date range link to the timeline from job data start/end fields.
+ * Renders the worker's actual processed interval when available, falling back
+ * to the requested job range for older/manual jobs.
  */
-function JobDateRange({ job }: { job: JobInfo }) {
-  const start = job.data?.start ? new Date(job.data.start) : null;
-  const end = job.data?.end ? new Date(job.data.end) : null;
-  if (!start) return null;
+function JobDateRange({
+  job,
+  label,
+}: {
+  job: JobInfo;
+  label?: string;
+}) {
+  const range = getJobTimeRange(job);
+  if (!range) return null;
+  const { start, end } = range;
   const endTs = end ? end.getTime() : start.getTime() + 86400000;
   const isSameDay = end && start.toDateString() === end.toDateString();
   return (
     <Link
       to={`/timeline?start=${start.getTime()}&end=${endTs}`}
       className="text-xs text-primary hover:underline"
+      title={range.source === "processed"
+        ? "Audio interval actually processed by this job"
+        : "Time range requested for this job"}
     >
+      {label ? `${label}: ` : ""}
       {isSameDay
         ? `${format(start, "MMM d, HH:mm")}–${format(end, "HH:mm")}`
         : end
@@ -1184,7 +1196,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
       }
       return (
         <div className="space-y-1">
-          <JobDateRange job={job} />
+          <JobDateRange job={job} label="Audio" />
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             {result.sequences_processed != null && (
               <span>{result.sequences_processed} sequences</span>
@@ -1224,7 +1236,7 @@ function JobProgressCell({ job }: { job: JobInfo }) {
           >
             {stageLabels[progress.stage] ?? progress.stage}
           </Badge>
-          <JobDateRange job={job} />
+          <JobDateRange job={job} label="Audio" />
           {progressView.batchProgressLabel && (
             <div className="space-y-1">
               <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

@@ -9,7 +9,6 @@ import {
 } from "@/lib/audioPipelineStats";
 import {
   getDiarizationCampaignProgressView,
-  getDiarizationSkipMetricsView,
   isOpenDiarizationCampaignStatus,
 } from "@/lib/diarizationProgress";
 import { format, formatDistanceToNow } from "date-fns";
@@ -683,26 +682,9 @@ export default function AudioPipelinePage() {
   const diarizationCampaignView = diarizationCampaign
     ? getDiarizationCampaignProgressView(diarizationCampaign)
     : null;
-  const diarizationSkipMetricsView = diarizationCampaign
-    ? getDiarizationSkipMetricsView(diarizationCampaign)
-    : null;
-  const diarizationAggregateSkipRatio = diarizationCampaign
-    ? diarizationCampaign.skipRatio ??
-      (diarizationCampaign.chunkClaimSkips == null
-        ? diarizationCampaign.claimSkipRatio
-        : null)
-    : null;
   const diarizationCampaignOpen = diarizationCampaign
     ? isOpenDiarizationCampaignStatus(diarizationCampaign.status)
     : false;
-  const diarizationRateWindowLabel =
-    diarizationCampaign?.rateWindowSeconds != null
-      ? diarizationCampaign.rateWindowSeconds >= 60
-        ? `${
-          (diarizationCampaign.rateWindowSeconds / 60).toFixed(1)
-        } min window`
-        : `${Math.round(diarizationCampaign.rateWindowSeconds)}s window`
-      : "window warming up";
   const diarizationStage = stats?.stages?.find((stage) =>
     stage.type === "diarization"
   );
@@ -1115,9 +1097,8 @@ export default function AudioPipelinePage() {
                 Speaker diarization
               </CardTitle>
               <CardDescription className="mt-1">
-                Campaign-wide progress for the current global historical
-                backfill. Live route capacity and queue state update without
-                running the expensive corpus snapshot.
+                Current historical backfill: progress, rolling throughput and
+                available GPU capacity.
               </CardDescription>
             </div>
             {diarizationCampaign && (
@@ -1160,78 +1141,15 @@ export default function AudioPipelinePage() {
                       <span>{diarizationCampaignView.etaLabel}</span>
                     )}
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    {diarizationCampaign.totalChunks == null
-                      ? diarizationCampaign.status === "counting"
-                        ? "Campaign total is still being counted"
-                        : "Campaign total is unavailable"
-                      : diarizationCampaignView.remainingLabel}
-                    {diarizationCampaignView.rateLabel
-                      ? `${
-                        diarizationCampaign.totalChunks == null ||
-                          diarizationCampaignView.remainingLabel
-                          ? " · "
-                          : ""
-                      }${diarizationCampaignView.rateLabel}`
-                      : ""}
-                    {diarizationCampaign.totalEstimated
-                      ? " · Total is estimated"
-                      : ""}
-                  </p>
+                  {diarizationCampaign.totalEstimated && (
+                    <p className="text-xs text-muted-foreground">
+                      Total is estimated and is refined as jobs complete.
+                    </p>
+                  )}
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                   {[
-                    [
-                      "Sequences",
-                      diarizationCampaign.processedSequences,
-                      "text-foreground",
-                    ],
-                    [
-                      "Chunks",
-                      diarizationCampaign.processedChunks,
-                      "text-foreground",
-                    ],
-                    [
-                      "Segments",
-                      diarizationCampaign.segmentsCreated,
-                      "text-foreground",
-                    ],
-                    [
-                      "Backlog",
-                      diarizationStage
-                        ? stageBacklogValue(diarizationStage)
-                        : `≈${
-                          (diarizationCampaign.pendingChunks ?? 0)
-                            .toLocaleString()
-                        }`,
-                      "text-amber-600",
-                    ],
-                    [
-                      "Active / queued",
-                      liveDiarizationJobs?.available
-                        ? `${activeDiarizationJobs ?? 0} / ${
-                          queuedDiarizationJobs ?? 0
-                        }`
-                        : "Unavailable",
-                      "text-foreground",
-                    ],
-                    [
-                      "Healthy / enabled slots",
-                      liveStatusQuery.data?.capacity.available
-                        ? `${
-                          liveStatusQuery.data.capacity.healthySlots ?? 0
-                        } / ${liveStatusQuery.data.capacity.enabledSlots ?? 0}`
-                        : "Unavailable",
-                      "text-foreground",
-                    ],
-                    [
-                      "Errors",
-                      diarizationCampaign.errorCount,
-                      diarizationCampaign.errorCount > 0
-                        ? "text-red-500"
-                        : "text-foreground",
-                    ],
                     [
                       "Rolling speed (≤5 min)",
                       diarizationCampaign.chunksPerSecond != null
@@ -1252,27 +1170,28 @@ export default function AudioPipelinePage() {
                       "text-foreground",
                     ],
                     [
-                      "Skip ratio",
-                      diarizationSkipMetricsView?.totalLabel ?? "—",
-                      diarizationAggregateSkipRatio != null &&
-                        diarizationAggregateSkipRatio >= 0.15
-                        ? "text-amber-600"
-                        : "text-foreground",
+                      "Active / queued",
+                      liveDiarizationJobs?.available
+                        ? `${activeDiarizationJobs ?? 0} / ${
+                          queuedDiarizationJobs ?? 0
+                        }`
+                        : "Unavailable",
+                      "text-foreground",
                     ],
                     [
-                      "Lease skips",
-                      diarizationSkipMetricsView?.leaseLabel ?? "—",
-                      diarizationCampaign.leaseSkipRatio != null &&
-                        diarizationCampaign.leaseSkipRatio >= 0.15
-                        ? "text-amber-600"
-                        : "text-foreground",
+                      "Ready / enabled slots",
+                      liveStatusQuery.data?.capacity.available
+                        ? `${
+                          liveStatusQuery.data.capacity.healthySlots ?? 0
+                        } / ${liveStatusQuery.data.capacity.enabledSlots ?? 0}`
+                        : "Unavailable",
+                      "text-foreground",
                     ],
                     [
-                      "Claim skips",
-                      diarizationSkipMetricsView?.claimLabel ?? "—",
-                      diarizationCampaign.claimSkipRatio != null &&
-                        diarizationCampaign.claimSkipRatio >= 0.15
-                        ? "text-amber-600"
+                      "Errors",
+                      diarizationCampaign.errorCount,
+                      diarizationCampaign.errorCount > 0
+                        ? "text-red-500"
                         : "text-foreground",
                     ],
                   ].map(([label, value, className]) => (
@@ -1287,30 +1206,28 @@ export default function AudioPipelinePage() {
                   ))}
                 </div>
 
-                <div className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
-                  <span className="break-all font-mono">
-                    Campaign {diarizationCampaign.campaignId}
-                  </span>
-                  {diarizationCampaign.batchNumber != null && (
-                    <span>
-                      Batch {diarizationCampaign.batchNumber.toLocaleString()}
-                      {diarizationCampaign.estimatedBatches != null
-                        ? ` / ${diarizationCampaign.estimatedBatches.toLocaleString()}`
-                        : ""}
+                <div className="rounded-lg border bg-muted/20 p-4 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="break-all font-mono text-xs">
+                      Campaign {diarizationCampaign.campaignId}
                     </span>
-                  )}
-                  <span>
-                    {diarizationCampaign.rateStatus === "live"
-                      ? diarizationCampaign.activeRateReportingJobCount ===
-                          diarizationCampaign.activeRateJobCount
-                        ? `${diarizationCampaign.activeRateJobCount.toLocaleString()} active task(s) + ${diarizationCampaign.rateSampleCount.toLocaleString()} completed sample(s) · ${diarizationRateWindowLabel}`
-                        : `${diarizationCampaign.activeRateReportingJobCount.toLocaleString()} / ${diarizationCampaign.activeRateJobCount.toLocaleString()} active task(s) reporting + ${diarizationCampaign.rateSampleCount.toLocaleString()} completed sample(s) · ${diarizationRateWindowLabel}`
-                      : diarizationCampaign.rateStatus === "aggregate"
-                      ? `${diarizationCampaign.rateSampleCount.toLocaleString()} completed sample(s) across ${diarizationCampaign.sampledLanes.toLocaleString()} lane(s) · ${diarizationRateWindowLabel}`
-                      : diarizationCampaign.rateStatus === "legacy"
-                      ? "Combined-rate telemetry is waiting for updated workers"
-                      : "Combined rate is warming up"}
-                  </span>
+                    <Link
+                      to="/jobs?type=diarization"
+                      className="text-xs font-medium text-primary hover:underline"
+                    >
+                      Manage diarization jobs
+                    </Link>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                    A campaign is one durable historical backfill, not one
+                    container or one job. Each bounded job keeps this ID; a
+                    successful job schedules the next batch, while the
+                    five-minute watchdog resumes the same campaign after a
+                    broken chain. In Jobs, Pause prevents new batches and lets
+                    active work finish; Resume continues this campaign. Route
+                    switches and slot counts control how many jobs run in
+                    parallel.
+                  </p>
                 </div>
               </>
             )

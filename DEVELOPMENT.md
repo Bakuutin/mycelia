@@ -144,6 +144,23 @@ provider call as a single bounded lookahead; promotion still requires a claim.
 The cursor uses the diarization work index, a 5-second Mongo deadline, and an
 explicit `mongo.closeCursor` call whenever a batch stops early.
 
+One `diarization-…` campaign is the durable identity of a historical backfill,
+not a container and not a single BullMQ job. Every bounded job and its `hasMore`
+continuation keep the same campaign id. A successful batch schedules the next
+one; the five-minute trigger is a watchdog that resumes eligible work after a
+crash or broken continuation. Pausing the diarization worker prevents new
+batches and lets active work finish; resuming continues the same campaign. Route
+enablement and slot counts control parallelism independently of campaign
+identity. The Audio Pipeline card shows only progress, rolling speed, useful
+realtime, active/queued work, ready slots, and errors; detailed jobs remain on
+the Jobs page.
+
+Current workers add `result.processedRange` and the same live progress field
+from the earliest through latest successfully processed audio in each job. Jobs
+links that interval to Timeline without querying `audio_chunks` again.
+Older/manual jobs fall back to their requested `data.start`/`data.end`; a job
+with neither field has no range rendered rather than an inferred one.
+
 Deploy changes to this path by pausing only the diarization worker, draining its
 active jobs, recreating `backend` and `python-worker`, and then resuming the
 same worker. Do not clear waiting or delayed jobs, and do not restart MongoDB or
