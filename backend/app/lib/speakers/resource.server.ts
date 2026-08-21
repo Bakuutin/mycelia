@@ -24,6 +24,14 @@ import {
   splitCalibrationRecordings,
 } from "./calibration.ts";
 import {
+  describeCalibrations,
+  findUsableCalibration,
+  SPEAKER_CALIBRATION_COMPUTED_BY,
+  SPEAKER_CALIBRATION_CONTRACT_VERSION,
+  SPEAKER_CALIBRATION_TARGET_PRECISION,
+  SPEAKER_IDENTITY_SNAPSHOT_INDEX,
+} from "./calibration-contract.ts";
+import {
   buildDiarizationCoveragePipeline,
   TIMELINE_SPEAKER_SEGMENT_PROJECTION,
 } from "./timeline-queries.ts";
@@ -99,6 +107,9 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     embeddingSpaceIds: z.array(z.string().min(1)).default([]),
     runIds: z.array(z.string().min(1)).default([]),
     rangeMode: z.enum(["fixed", "all_before"]).default("fixed"),
+    candidateMode: z.enum(["reviewable", "auto_matched"]).default(
+      "reviewable",
+    ),
     start: zDateOrString().optional(),
     end: zDateOrString().optional(),
     limit: z.number().int().min(1).max(100).default(100),
@@ -201,6 +212,7 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("identity-classification"),
+    profileId: objectId,
   }),
   z.object({
     action: z.literal("list-identity-campaigns"),
@@ -210,24 +222,13 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("save-calibration"),
-    calibrationId: z.string().min(1),
     profileId: objectId,
-    profileRevision: z.number().int().positive(),
-    embeddingSpaceId: z.string().min(1),
-    positiveThreshold: z.number().min(-1).max(1),
-    negativeThreshold: z.number().min(-1).max(1),
-    metrics: z.object({
-      precision: z.number().min(0).max(1),
-      recall: z.number().min(0).max(1).optional(),
-      sky: z.number().int().min(0),
-      notSky: z.number().int().min(0),
-      borderline: z.number().int().min(0).default(0),
-    }),
     calibrationRecordingIds: z.array(z.string()).min(1),
     validationRecordingIds: z.array(z.string()).min(1),
-    status: z.enum(["draft", "validated"]),
-    allowLegacyCompatibility: z.boolean().default(false),
-  }),
+    targetPrecision: z.literal(SPEAKER_CALIBRATION_TARGET_PRECISION).default(
+      SPEAKER_CALIBRATION_TARGET_PRECISION,
+    ),
+  }).strict(),
   z.object({ action: z.literal("list-runs") }),
   z.object({
     action: z.literal("list-campaigns"),
@@ -328,15 +329,29 @@ async function findReviewCandidates(
   start: Date,
   end: Date,
   limit: number,
+  candidateMode: "reviewable" | "auto_matched" = "reviewable",
+  targetProfileId?: string,
   cursor?: { start: Date | string; segmentId: string } | null,
 ): Promise<any[]> {
-  const identityFilter = {
-    $or: [
-      { "speakerIdentity.state": "uncertain" },
-      { speakerIdentity: { $exists: false } },
-      { "speakerIdentity.identityState": { $exists: false } },
-    ],
-  };
+  const profileValues = targetProfileId
+    ? [targetProfileId, new ObjectId(targetProfileId)]
+    : [];
+  const identityFilter = candidateMode === "auto_matched"
+    ? {
+      "speakerIdentity.state": "matched",
+      $or: [
+        { "speakerIdentity.profileId": { $in: profileValues } },
+        { "speakerIdentity.topCandidate.profileId": { $in: profileValues } },
+        { "matched_speaker.profile_id": { $in: profileValues } },
+      ],
+    }
+    : {
+      $or: [
+        { "speakerIdentity.state": "uncertain" },
+        { speakerIdentity: { $exists: false } },
+        { "speakerIdentity.identityState": { $exists: false } },
+      ],
+    };
   const cursorFilter = cursor
     ? {
       $or: [
@@ -359,7 +374,7 @@ async function findReviewCandidates(
     },
     options: {
       sort: { start: 1, _id: 1 },
-      limit: Math.min(Math.max(limit * 10, limit), 5_000),
+      limit: Math.min(Math.max(limit, 1), 5_000),
       projection: { embedding: 0 },
     },
   }) as any[];
@@ -375,10 +390,136 @@ async function findReviewCandidates(
   return candidates.filter((segment) => !annotated.has(String(segment._id)));
 }
 
+export function stratifyReviewCandidates(
+  candidates: any[],
+  limit: number,
+): { selected: any[]; remaining: any[] } {
+  const groups = new Map<string, any[]>();
+  for (const candidate of candidates) {
+    const recordingId = String(
+      candidate.original_id ?? candidate.original ?? "unknown",
+    );
+    const group = groups.get(recordingId) ?? [];
+    group.push(candidate);
+    groups.set(recordingId, group);
+  }
+  const queues = [...groups.values()];
+  const selected: any[] = [];
+  while (selected.length < limit && queues.some((queue) => queue.length > 0)) {
+    for (const queue of queues) {
+      const candidate = queue.shift();
+      if (candidate) selected.push(candidate);
+      if (selected.length >= limit) break;
+    }
+  }
+  const selectedIds = new Set(
+    selected.map((candidate) => String(candidate._id)),
+  );
+  return {
+    selected,
+    remaining: candidates.filter((candidate) =>
+      !selectedIds.has(String(candidate._id))
+    ),
+  };
+}
+
+async function loadBufferedReviewCandidates(
+  mongo: any,
+  ids: unknown[],
+): Promise<any[]> {
+  const objectIds = ids.map(String).filter(ObjectId.isValid).map((id) =>
+    new ObjectId(id)
+  );
+  if (objectIds.length === 0) return [];
+  const candidates = await mongo({
+    action: "find",
+    collection: "diarizations",
+    query: { _id: { $in: objectIds }, lifecycleStatus: "active" },
+    options: { projection: { embedding: 0 }, limit: objectIds.length },
+  }) as any[];
+  const annotations = await mongo({
+    action: "find",
+    collection: "speaker_annotations",
+    query: { segmentId: { $in: objectIds } },
+    options: { projection: { segmentId: 1 }, limit: objectIds.length },
+  }) as any[];
+  const annotated = new Set(annotations.map((item) => String(item.segmentId)));
+  const byId = new Map(candidates.map((item) => [String(item._id), item]));
+  return objectIds.map((id) => byId.get(String(id))).filter((item) =>
+    item && !annotated.has(String(item._id))
+  );
+}
+
+async function suppressStaleAutomaticIdentities(
+  mongo: any,
+  segments: any[],
+): Promise<void> {
+  const automatic = segments.filter((segment) =>
+    segment.speakerIdentity?.source !== "manual_projection" &&
+    segment.speakerIdentity?.calibrationId
+  );
+  const calibrationIds = [
+    ...new Set(
+      automatic.map((segment) => String(segment.speakerIdentity.calibrationId)),
+    ),
+  ];
+  if (calibrationIds.length === 0) return;
+  const calibrations = await mongo({
+    action: "find",
+    collection: "speaker_calibrations",
+    query: { calibrationId: { $in: calibrationIds } },
+    options: { limit: calibrationIds.length },
+  }) as any[];
+  const profileIds = [
+    ...new Set(
+      calibrations.map((calibration) => String(calibration.profileId ?? ""))
+        .filter(ObjectId.isValid),
+    ),
+  ];
+  const profiles = profileIds.length === 0 ? [] : await mongo({
+    action: "find",
+    collection: "speaker_profiles",
+    query: { _id: { $in: profileIds.map((id) => new ObjectId(id)) } },
+    options: {
+      projection: { revision: 1, embeddingSpaceId: 1 },
+      limit: profileIds.length,
+    },
+  }) as any[];
+  const profileById = new Map(
+    profiles.map((profile) => [String(profile._id), profile]),
+  );
+  const usableIds = new Set<string>();
+  for (const calibration of calibrations) {
+    const profileId = String(calibration.profileId ?? "");
+    const profile = profileById.get(profileId);
+    if (
+      profile && findUsableCalibration([calibration], {
+        profileId,
+        profileRevision: Number(profile.revision ?? 1),
+        embeddingSpaceId: profile.embeddingSpaceId,
+      })
+    ) {
+      usableIds.add(String(calibration.calibrationId));
+    }
+  }
+  for (const segment of automatic) {
+    const identity = segment.speakerIdentity;
+    if (usableIds.has(String(identity.calibrationId))) {
+      identity.validity = "verified";
+      continue;
+    }
+    identity.validity = "stale";
+    identity.staleState = identity.state;
+    delete identity.state;
+    identity.identityState = "unclassified";
+  }
+}
+
 async function hydrateReviewSession(
   mongo: any,
   session: any,
 ): Promise<any> {
+  const { candidateBufferIds: _candidateBufferIds, ...publicSession } = session;
   const window = session?.window ?? [];
   const ids = window.map((item: any) => String(item.segmentId)).filter(
     ObjectId.isValid,
@@ -428,7 +569,7 @@ async function hydrateReviewSession(
     options: { projection: { name: 1 }, limit: profileIds.length },
   }) as any[];
   return {
-    ...session,
+    ...publicSession,
     window: attachReviewDecisionSummaries(window, decisions, profiles),
     segments: window.map((item: any) => byId.get(String(item.segmentId)))
       .filter(Boolean),
@@ -903,6 +1044,7 @@ export class SpeakerSegmentsResource
               : {}),
           },
         }) as any[];
+        await suppressStaleAutomaticIdentities(mongo, segments);
         const originalIds = [
           ...new Set(
             segments.map((s) => String(s.original_id ?? s.original)).filter(
@@ -943,6 +1085,7 @@ export class SpeakerSegmentsResource
                 ...segment.speakerIdentity,
                 ...projected,
                 annotationId: annotation._id,
+                validity: "manual",
               };
             }
           }
@@ -1051,10 +1194,15 @@ export class SpeakerSegmentsResource
           mongo,
           snapshotStart,
           snapshotEnd,
-          Math.max(input.limit, 500),
+          5_000,
+          input.candidateMode,
+          input.targetProfileIds[0],
         );
-        const candidates = candidatePool.slice(0, input.limit);
-        const lastCandidate = candidates.at(-1);
+        const { selected: candidates, remaining } = stratifyReviewCandidates(
+          candidatePool,
+          input.limit,
+        );
+        const lastScannedCandidate = candidatePool.at(-1);
         const groups = groupReviewSegments(candidates);
         const groupBySegment = new Map(
           groups.flatMap((group) =>
@@ -1074,7 +1222,8 @@ export class SpeakerSegmentsResource
           embeddingSpaceIds: input.embeddingSpaceIds,
           runIds: input.runIds,
           querySnapshot: {
-            identityState: "reviewable",
+            identityState: input.candidateMode,
+            candidateMode: input.candidateMode,
             rangeMode: input.rangeMode,
             start: snapshotStart,
             end: snapshotEnd,
@@ -1086,6 +1235,7 @@ export class SpeakerSegmentsResource
             groupId: groupBySegment.get(String(segment._id)),
             status: "pending",
           })),
+          candidateBufferIds: remaining.map((segment) => segment._id),
           groups,
           windowNumber: 1,
           windowSize: input.limit,
@@ -1097,11 +1247,12 @@ export class SpeakerSegmentsResource
           windowSkippedCount: 0,
           backlogEstimate: candidatePool.length,
           backlogEstimateCapped: candidatePool.length >= 5_000,
-          hasMore: candidatePool.length > candidates.length,
-          nextCursor: lastCandidate
+          hasMore: remaining.length > 0 || candidatePool.length >= 5_000,
+          hasMoreBeyondCursor: candidatePool.length >= 5_000,
+          nextCursor: lastScannedCandidate
             ? {
-              start: lastCandidate.start,
-              segmentId: String(lastCandidate._id),
+              start: lastScannedCandidate.start,
+              segmentId: String(lastScannedCandidate._id),
             }
             : null,
           activeSegmentId: candidates[0]?._id ?? null,
@@ -1122,7 +1273,8 @@ export class SpeakerSegmentsResource
           collection: "speaker_review_sessions",
           doc,
         });
-        return { ...doc, segments: candidates };
+        const { candidateBufferIds: _candidateBufferIds, ...publicDoc } = doc;
+        return { ...publicDoc, segments: candidates };
       }
       case "list-review-sessions":
         return await mongo({
@@ -1138,7 +1290,7 @@ export class SpeakerSegmentsResource
           options: {
             sort: { lastOpenedAt: -1, updatedAt: -1 },
             limit: input.limit,
-            projection: { window: 0, groups: 0 },
+            projection: { window: 0, groups: 0, candidateBufferIds: 0 },
           },
         });
       case "get-review-session": {
@@ -1173,15 +1325,25 @@ export class SpeakerSegmentsResource
           throw new Error("Review or skip every item in this window first");
         }
         const snapshot = session.querySnapshot;
-        const candidatePool = await findReviewCandidates(
+        const buffered = await loadBufferedReviewCandidates(
           mongo,
-          new Date(snapshot.start),
-          new Date(snapshot.snapshotEnd ?? snapshot.end),
-          Math.max(Number(session.windowSize ?? 100), 500),
-          session.nextCursor,
+          session.candidateBufferIds ?? [],
         );
-        const candidates = candidatePool.slice(
-          0,
+        const fetched = buffered.length === 0 &&
+            Boolean(session.hasMoreBeyondCursor ?? session.hasMore)
+          ? await findReviewCandidates(
+            mongo,
+            new Date(snapshot.start),
+            new Date(snapshot.snapshotEnd ?? snapshot.end),
+            5_000,
+            snapshot.candidateMode ?? "reviewable",
+            String(session.targetProfileIds?.[0] ?? ""),
+            session.nextCursor,
+          )
+          : [];
+        const candidatePool = buffered.length > 0 ? buffered : fetched;
+        const { selected: candidates, remaining } = stratifyReviewCandidates(
+          candidatePool,
           Number(session.windowSize ?? 100),
         );
         const groups = groupReviewSegments(candidates, session.grouping);
@@ -1195,7 +1357,10 @@ export class SpeakerSegmentsResource
           groupId: groupBySegment.get(String(segment._id)),
           status: "pending",
         }));
-        const lastCandidate = candidates.at(-1);
+        const lastScannedCandidate = fetched.at(-1);
+        const hasMoreBeyondCursor = buffered.length > 0
+          ? Boolean(session.hasMoreBeyondCursor ?? session.hasMore)
+          : fetched.length >= 5_000;
         const completed = candidates.length === 0;
         const result = await mongo({
           action: "updateOne",
@@ -1205,6 +1370,7 @@ export class SpeakerSegmentsResource
             $set: {
               window,
               groups,
+              candidateBufferIds: remaining.map((segment) => segment._id),
               activeSegmentId: candidates[0]?._id ?? null,
               loadedCount: candidates.length,
               sessionLoadedCount:
@@ -1212,11 +1378,12 @@ export class SpeakerSegmentsResource
                 candidates.length,
               windowReviewedCount: 0,
               windowSkippedCount: 0,
-              hasMore: candidatePool.length > candidates.length,
-              nextCursor: lastCandidate
+              hasMore: remaining.length > 0 || hasMoreBeyondCursor,
+              hasMoreBeyondCursor,
+              nextCursor: lastScannedCandidate
                 ? {
-                  start: lastCandidate.start,
-                  segmentId: String(lastCandidate._id),
+                  start: lastScannedCandidate.start,
+                  segmentId: String(lastScannedCandidate._id),
                 }
                 : session.nextCursor,
               status: completed ? "completed" : "active",
@@ -2046,13 +2213,19 @@ export class SpeakerSegmentsResource
         ]) as [any, any[], any[], any[], any[]];
         const profileRevision = Number(profile?.revision ?? 1);
         const profileEmbeddingSpaceId = profile?.embeddingSpaceId;
-        const usableCalibration =
-          calibrations.find((calibration) =>
-            calibration.status === "validated" &&
-            calibration.profileId === input.profileId &&
-            calibration.profileRevision === profileRevision &&
-            calibration.embeddingSpaceId === profileEmbeddingSpaceId
-          ) ?? null;
+        const calibrationContext = {
+          profileId: input.profileId,
+          profileRevision,
+          embeddingSpaceId: profileEmbeddingSpaceId,
+        };
+        const describedCalibrations = describeCalibrations(
+          calibrations,
+          calibrationContext,
+        );
+        const usableCalibration = findUsableCalibration(
+          calibrations,
+          calibrationContext,
+        );
         const blockers: string[] = [];
         if (!profile) blockers.push("Profile no longer exists");
         if (!profile?.is_primary) blockers.push("Profile is not primary");
@@ -2068,8 +2241,15 @@ export class SpeakerSegmentsResource
           blockers.push("Profile has no embedding provenance");
         }
         if (profile && !usableCalibration) {
+          const staleReasons = describedCalibrations.flatMap((calibration) =>
+            calibration.staleReasons ?? []
+          );
           blockers.push(
-            "No validated calibration matches the current profile revision and embedding space",
+            staleReasons.length > 0
+              ? `Saved calibration is stale: ${
+                [...new Set(staleReasons)].join("; ")
+              }`
+              : "No server-validated calibration exists for the current profile",
           );
         }
         const recordings = new Map<
@@ -2122,7 +2302,7 @@ export class SpeakerSegmentsResource
               total: row.sky + row.notSky,
             })).sort((a, b) => b.total - a.total),
           },
-          calibrations,
+          calibrations: describedCalibrations,
           usableCalibration,
           canClassify: blockers.length === 0,
           blockers,
@@ -2131,7 +2311,31 @@ export class SpeakerSegmentsResource
         };
       }
       case "identity-classification": {
-        const identityCounts = await mongo({
+        const profileObjectId = new ObjectId(input.profileId);
+        const [profile, calibrations] = await Promise.all([
+          mongo({
+            action: "findOne",
+            collection: "speaker_profiles",
+            query: { _id: profileObjectId },
+            options: { projection: { revision: 1, embeddingSpaceId: 1 } },
+          }),
+          mongo({
+            action: "find",
+            collection: "speaker_calibrations",
+            query: { profileId: input.profileId },
+            options: { sort: { createdAt: -1 }, limit: 20 },
+          }),
+        ]) as [any, any[]];
+        const profileRevision = Number(profile?.revision ?? 1);
+        const embeddingSpaceId = profile?.embeddingSpaceId ?? null;
+        const usableCalibration = profile
+          ? findUsableCalibration(calibrations, {
+            profileId: input.profileId,
+            profileRevision,
+            embeddingSpaceId,
+          })
+          : null;
+        const rawIdentityCounts = await mongo({
           action: "aggregate",
           collection: "diarizations",
           pipeline: [
@@ -2143,19 +2347,62 @@ export class SpeakerSegmentsResource
               },
             },
           ],
-          options: { maxTimeMS: 10_000 },
+          options: {
+            maxTimeMS: 10_000,
+            hint: "pipeline_speaker_identity_state",
+          },
         }) as any[];
-        const classified = Object.fromEntries(
-          identityCounts.map((row) => [row._id ?? "unclassified", row.count]),
+        const raw = Object.fromEntries(
+          rawIdentityCounts.map((row) => [
+            row._id ?? "unclassified",
+            row.count,
+          ]),
         );
+        const verifiedCounts = usableCalibration
+          ? await mongo({
+            action: "aggregate",
+            collection: "diarizations",
+            pipeline: [
+              {
+                $match: {
+                  lifecycleStatus: "active",
+                  "speakerIdentity.calibrationId":
+                    usableCalibration.calibrationId,
+                  "speakerIdentity.profileRevision": profileRevision,
+                  "speakerIdentity.embeddingSpaceId": embeddingSpaceId,
+                  "speakerIdentity.source": "automatic",
+                },
+              },
+              {
+                $group: {
+                  _id: "$speakerIdentity.identityState",
+                  count: { $sum: 1 },
+                },
+              },
+            ],
+            options: {
+              maxTimeMS: 10_000,
+              hint: SPEAKER_IDENTITY_SNAPSHOT_INDEX,
+            },
+          }) as any[]
+          : [];
+        const verified = Object.fromEntries(
+          verifiedCounts.map((row) => [row._id, row.count]),
+        );
+        const rawClassified = Number(raw.identified ?? 0) +
+          Number(raw.unknown ?? 0) + Number(raw.uncertain ?? 0);
+        const verifiedTotal = Number(verified.identified ?? 0) +
+          Number(verified.unknown ?? 0) + Number(verified.uncertain ?? 0);
         return {
           asOf: new Date(),
           classification: {
-            identified: classified.identified ?? 0,
-            unknown: classified.unknown ?? 0,
-            uncertain: classified.uncertain ?? 0,
-            unclassified: classified.unclassified ?? 0,
+            identified: verified.identified ?? 0,
+            unknown: verified.unknown ?? 0,
+            uncertain: verified.uncertain ?? 0,
+            stale: Math.max(0, rawClassified - verifiedTotal),
+            unclassified: raw.unclassified ?? 0,
           },
+          calibrationId: usableCalibration?.calibrationId ?? null,
         };
       }
       case "list-identity-campaigns": {
@@ -2181,33 +2428,33 @@ export class SpeakerSegmentsResource
           input.profileId,
           input.calibrationRecordingIds,
           input.validationRecordingIds,
-          0.98,
+          input.targetPrecision,
         );
-        if (
-          preview.profile.revision !== input.profileRevision ||
-          preview.profile.embeddingSpaceId !== input.embeddingSpaceId
-        ) {
-          throw new Error(
-            "Profile revision changed; refresh the calibration preview",
-          );
-        }
         if (!preview.thresholds) {
           throw new Error(
             "Calibration data does not produce a safe threshold pair",
           );
         }
-        if (input.status === "validated") {
-          if (!preview.canValidate) {
-            throw new Error(
-              `Calibration is blocked: ${preview.blockers.join("; ")}`,
-            );
-          }
+        if (!preview.canValidate) {
+          throw new Error(
+            `Calibration is blocked: ${preview.blockers.join("; ")}`,
+          );
+        }
+        if (preview.profile.embeddingSpaceId === "legacy-unknown") {
+          throw new Error(
+            "Legacy embeddings require an explicit compatibility validation before calibration",
+          );
         }
         const now = new Date();
-        const { action: _action, metrics: _clientMetrics, ...inputRecord } =
-          input;
+        const calibrationId =
+          `voice-r${preview.profile.revision}-${Date.now()}-${
+            crypto.randomUUID().slice(0, 8)
+          }`;
         const record = {
-          ...inputRecord,
+          calibrationId,
+          profileId: input.profileId,
+          profileRevision: preview.profile.revision,
+          embeddingSpaceId: preview.profile.embeddingSpaceId,
           positiveThreshold: preview.thresholds.positiveThreshold,
           negativeThreshold: preview.thresholds.negativeThreshold,
           metrics: {
@@ -2222,18 +2469,30 @@ export class SpeakerSegmentsResource
           validationMetrics: preview.validationMetrics,
           targetPrecision: preview.targetPrecision,
           serverComputed: true,
+          contractVersion: SPEAKER_CALIBRATION_CONTRACT_VERSION,
+          computedBy: SPEAKER_CALIBRATION_COMPUTED_BY,
+          computedAt: now,
+          calibrationAlgorithmVersion: "cosine-thresholds-v1",
+          matcherVersion: "profile-candidates-v2",
+          calibrationRecordingIds: input.calibrationRecordingIds,
+          validationRecordingIds: input.validationRecordingIds,
+          allowLegacyCompatibility: false,
+          status: "validated",
+          evidence: {
+            compatibleLabels: preview.counts.total,
+            positiveLabels: preview.counts.positive,
+            negativeLabels: preview.counts.negative,
+            recordings: preview.counts.recordings,
+          },
+          createdAt: now,
+          updatedAt: now,
         };
         await mongo({
-          action: "updateOne",
+          action: "insertOne",
           collection: "speaker_calibrations",
-          query: { calibrationId: input.calibrationId },
-          update: {
-            $set: { ...record, updatedAt: now },
-            $setOnInsert: { createdAt: now },
-          },
-          options: { upsert: true },
+          doc: record,
         });
-        return { ...record, updatedAt: now };
+        return record;
       }
       case "list-runs": {
         const [runs, campaigns] = await Promise.all([

@@ -12,9 +12,30 @@ from jobs.speaker_identity import (
 )
 
 
+def valid_calibration(**overrides):
+    calibration = {
+        "status": "validated",
+        "serverComputed": True,
+        "contractVersion": "server-computed-v1",
+        "computedBy": "speaker-segments",
+        "targetPrecision": 0.98,
+        "validationMetrics": {"positivePrecision": 0.99, "identified": 10},
+        "profileRevision": 2,
+        "embeddingSpaceId": "space-v1",
+        "positiveThreshold": 0.8,
+        "negativeThreshold": 0.2,
+    }
+    calibration.update(overrides)
+    return calibration
+
+
 def test_classifies_all_three_states() -> None:
-    kwargs = {"positive_threshold": 0.72, "negative_threshold": 0.45,
-              "segment_space": "space-v1", "profile_space": "space-v1"}
+    kwargs = {
+        "positive_threshold": 0.72,
+        "negative_threshold": 0.45,
+        "segment_space": "space-v1",
+        "profile_space": "space-v1",
+    }
     assert classify_identity(0.81, **kwargs) == "matched"
     assert classify_identity(0.20, **kwargs) == "rejected"
     assert classify_identity(0.60, **kwargs) == "uncertain"
@@ -46,19 +67,28 @@ def test_unknown_space_requires_explicit_compatibility() -> None:
             profile_space="legacy-unknown",
         )
 
-    assert classify_identity(
-        0.9,
-        positive_threshold=0.7,
-        negative_threshold=0.4,
-        segment_space="legacy-unknown",
-        profile_space="legacy-unknown",
-        allow_legacy_compatibility=True,
-    ) == "matched"
+    assert (
+        classify_identity(
+            0.9,
+            positive_threshold=0.7,
+            negative_threshold=0.4,
+            segment_space="legacy-unknown",
+            profile_space="legacy-unknown",
+            allow_legacy_compatibility=True,
+        )
+        == "matched"
+    )
 
 
 def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
     profile_id = ObjectId()
-    profile = {"_id": profile_id, "name": "Sky", "embedding": [1.0, 0.0], "revision": 2, "embeddingSpaceId": "space-v1"}
+    profile = {
+        "_id": profile_id,
+        "name": "Sky",
+        "embedding": [1.0, 0.0],
+        "revision": 2,
+        "embeddingSpaceId": "space-v1",
+    }
     segments = [
         {"_id": ObjectId(), "embedding": [1.0, 0.0], "embeddingSpaceId": "space-v1"},
         {"_id": ObjectId(), "embedding": [0.0, 1.0], "embeddingSpaceId": "space-v1"},
@@ -69,13 +99,7 @@ def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
 
     def resource(_name, request):
         if request["collection"] == "speaker_calibrations":
-            return {
-                "status": "validated",
-                "profileRevision": 2,
-                "embeddingSpaceId": "space-v1",
-                "positiveThreshold": 0.8,
-                "negativeThreshold": 0.2,
-            }
+            return valid_calibration()
         if request["action"] == "find":
             segment_queries.append(request["query"])
             return segments
@@ -90,13 +114,25 @@ def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
     ):
         result = process_speaker_identity_job(
             "job-1",
-            SpeakerIdentityJobData(runId="run-1", profileId=str(profile_id), profileRevision=2, calibrationId="cal-1", limit=10),
+            SpeakerIdentityJobData(
+                runId="run-1",
+                profileId=str(profile_id),
+                profileRevision=2,
+                calibrationId="cal-1",
+                limit=10,
+            ),
             lambda _progress: None,
         )
 
-    states = [operation["updateOne"]["update"]["$set"]["speakerIdentity"]["state"] for operation in writes]
+    states = [
+        operation["updateOne"]["update"]["$set"]["speakerIdentity"]["state"]
+        for operation in writes
+    ]
     assert states == ["matched", "rejected", "uncertain"]
-    identities = [operation["updateOne"]["update"]["$set"]["speakerIdentity"] for operation in writes]
+    identities = [
+        operation["updateOne"]["update"]["$set"]["speakerIdentity"]
+        for operation in writes
+    ]
     assert identities[0]["identityState"] == "identified"
     assert identities[1]["identityState"] == "unknown"
     assert identities[2]["identityState"] == "uncertain"
@@ -105,8 +141,7 @@ def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
         "speakerIdentity.topCandidate.profileId": {"$ne": profile_id}
     } in segment_queries[0]["$or"]
     assert not any(
-        "speakerIdentity.profileId" in clause
-        for clause in segment_queries[0]["$or"]
+        "speakerIdentity.profileId" in clause for clause in segment_queries[0]["$or"]
     )
     assert result["processed"] == 3
     assert result["hasMore"] is False
@@ -129,13 +164,7 @@ def test_job_skips_incompatible_spaces_without_failing_the_batch() -> None:
 
     def resource(_name, request):
         if request["collection"] == "speaker_calibrations":
-            return {
-                "status": "validated",
-                "profileRevision": 2,
-                "embeddingSpaceId": "space-v1",
-                "positiveThreshold": 0.8,
-                "negativeThreshold": 0.2,
-            }
+            return valid_calibration()
         if request["action"] == "find":
             return segments
         if request["action"] == "bulkWrite":
@@ -199,11 +228,7 @@ def test_job_rejects_stale_or_cross_space_calibration(calibration, message) -> N
         patch("jobs.speaker_identity.get_profile_by_id", return_value=profile),
         patch(
             "jobs.speaker_identity.call_resource",
-            return_value={
-                **calibration,
-                "positiveThreshold": 0.8,
-                "negativeThreshold": 0.2,
-            },
+            return_value=valid_calibration(**calibration),
         ),
         pytest.raises(ValueError, match=message),
     ):
@@ -214,6 +239,38 @@ def test_job_rejects_stale_or_cross_space_calibration(calibration, message) -> N
                 profileId=str(profile_id),
                 profileRevision=2,
                 calibrationId="cal-1",
+                limit=10,
+            ),
+            lambda _progress: None,
+        )
+
+
+def test_job_rejects_legacy_client_asserted_calibration() -> None:
+    profile_id = ObjectId()
+    profile = {
+        "_id": profile_id,
+        "name": "Sky",
+        "embedding": [1.0, 0.0],
+        "revision": 2,
+        "embeddingSpaceId": "space-v1",
+    }
+    legacy = valid_calibration()
+    legacy.pop("serverComputed")
+    legacy.pop("contractVersion")
+    legacy.pop("computedBy")
+
+    with (
+        patch("jobs.speaker_identity.get_profile_by_id", return_value=profile),
+        patch("jobs.speaker_identity.call_resource", return_value=legacy),
+        pytest.raises(ValueError, match="server-computed contract"),
+    ):
+        process_speaker_identity_job(
+            "job-legacy-calibration",
+            SpeakerIdentityJobData(
+                runId="run-1",
+                profileId=str(profile_id),
+                profileRevision=2,
+                calibrationId="legacy-calibration",
                 limit=10,
             ),
             lambda _progress: None,

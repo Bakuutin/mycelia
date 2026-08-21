@@ -206,6 +206,7 @@ describe("VoiceIdentityReviewPage", () => {
     const calculate = await screen.findByRole("button", {
       name: "Calculate exact",
     });
+    await waitFor(() => expect(calculate).toBeEnabled());
     expect(mockCallResource).not.toHaveBeenCalledWith(
       "speaker-segments",
       expect.objectContaining({ action: "identity-classification" }),
@@ -216,6 +217,7 @@ describe("VoiceIdentityReviewPage", () => {
     await screen.findByRole("button", { name: "Recalculate exact" });
     expect(mockCallResource).toHaveBeenCalledWith("speaker-segments", {
       action: "identity-classification",
+      profileId: profile._id,
     });
     expect(screen.getByText("10")).toBeInTheDocument();
   });

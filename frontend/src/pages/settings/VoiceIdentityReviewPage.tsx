@@ -91,6 +91,7 @@ type ReviewSession = {
   };
   lastOpenedAt?: Date | string;
   querySnapshot: {
+    candidateMode?: "reviewable" | "auto_matched";
     rangeMode: "fixed" | "all_before";
     start: Date | string;
     end: Date | string;
@@ -168,7 +169,13 @@ type IdentityStatus = {
     >;
   };
   calibrations: Array<
-    { calibrationId: string; status: string; updatedAt?: Date }
+    {
+      calibrationId: string;
+      status: string;
+      validity?: "usable" | "stale";
+      staleReasons?: string[];
+      updatedAt?: Date;
+    }
   >;
   latestJob?: {
     _id: unknown;
@@ -202,8 +209,10 @@ type IdentityClassificationSnapshot = {
     identified: number;
     unknown: number;
     uncertain: number;
+    stale: number;
     unclassified: number;
   };
+  calibrationId: string | null;
 };
 
 export default function VoiceIdentityReviewPage() {
@@ -227,6 +236,9 @@ export default function VoiceIdentityReviewPage() {
   const [newRange, setNewRange] = useState<"14d" | "30d" | "custom" | "all">(
     "14d",
   );
+  const [newCandidateMode, setNewCandidateMode] = useState<
+    "reviewable" | "auto_matched"
+  >("reviewable");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [autoPlayNext, setAutoPlayNext] = useState(() => {
@@ -284,6 +296,7 @@ export default function VoiceIdentityReviewPage() {
     queryFn: () =>
       callResource("speaker-segments", {
         action: "identity-classification",
+        profileId,
       }) as Promise<IdentityClassificationSnapshot>,
     enabled: false,
     retry: false,
@@ -406,6 +419,7 @@ export default function VoiceIdentityReviewPage() {
           ? [reviewProfile.embeddingSpaceId]
           : [],
         rangeMode: newRange === "all" ? "all_before" : "fixed",
+        candidateMode: newCandidateMode,
         limit: 100,
         preferences: {
           autoPlay: autoPlayNext,
@@ -659,23 +673,10 @@ export default function VoiceIdentityReviewPage() {
       }
       return await callResource("speaker-segments", {
         action: "save-calibration",
-        calibrationId: `sky-r${primary.revision ?? 1}-${Date.now()}`,
         profileId,
-        profileRevision: primary.revision ?? 1,
-        embeddingSpaceId: primary.embeddingSpaceId,
-        positiveThreshold: calibrationPreview.thresholds.positiveThreshold,
-        negativeThreshold: calibrationPreview.thresholds.negativeThreshold,
-        metrics: {
-          precision: calibrationPreview.validationMetrics.positivePrecision,
-          recall: calibrationPreview.validationMetrics.positiveRecall,
-          sky: calibrationPreview.counts.positive,
-          notSky: calibrationPreview.counts.negative,
-          borderline: calibrationPreview.validationMetrics.uncertain,
-        },
         calibrationRecordingIds: effectiveCalibrationIds,
         validationRecordingIds: effectiveValidationIds,
-        status: "validated",
-        allowLegacyCompatibility: primary.embeddingSpaceId === "legacy-unknown",
+        targetPrecision: 0.98,
       });
     },
     onSuccess: () => {
@@ -690,6 +691,10 @@ export default function VoiceIdentityReviewPage() {
       ),
   });
   const latestCalibration = identityStatus?.usableCalibration;
+  const staleCalibrations =
+    identityStatus?.calibrations.filter((calibration) =>
+      calibration.validity === "stale"
+    ) ?? [];
   const labels = identityStatus?.labels ?? {
     sky: 0,
     notSky: 0,
@@ -759,6 +764,8 @@ export default function VoiceIdentityReviewPage() {
   ].filter(Boolean) as string[];
   const readinessState = latestCalibration
     ? "Validated"
+    : staleCalibrations.length > 0
+    ? "Calibration stale"
     : !labelGateReady
     ? "Need labels"
     : calibrationPreview?.blockers.length
@@ -1048,7 +1055,8 @@ export default function VoiceIdentityReviewPage() {
         <Card
           className={latestCalibration
             ? "border-green-500/30"
-            : readinessState === "Split blocked"
+            : readinessState === "Split blocked" ||
+                readinessState === "Calibration stale"
             ? "border-amber-500/30"
             : "border-muted"}
         >
@@ -1067,6 +1075,14 @@ export default function VoiceIdentityReviewPage() {
               <p className="text-xs text-green-700 dark:text-green-400">
                 Pilot ready · {latestCalibration.calibrationId}
               </p>
+            )}
+            {!latestCalibration && staleCalibrations.length > 0 && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-400">
+                {staleCalibrations.length} saved calibration
+                {staleCalibrations.length === 1 ? " is" : "s are"}{" "}
+                stale and cannot unlock classification. {staleCalibrations[0]
+                  ?.staleReasons?.slice(0, 2).join("; ")}
+              </div>
             )}
             {!labelGateReady && (
               <p className="text-xs text-muted-foreground">
@@ -1185,6 +1201,9 @@ export default function VoiceIdentityReviewPage() {
                     <option key={id} value={id}>
                       {session.status === "active" ? "Resume" : "Completed"} ·
                       {" "}
+                      {session.querySnapshot?.candidateMode === "auto_matched"
+                        ? "Auto-match audit · "
+                        : "Review queue · "}
                       {session.name}
                     </option>
                   );
@@ -1239,7 +1258,21 @@ export default function VoiceIdentityReviewPage() {
           </div>
 
           {(showNewSession || (!sessionsLoading && sessions.length === 0)) && (
-            <div className="grid gap-2 rounded-lg border border-dashed p-3 md:grid-cols-[12rem_1fr_auto]">
+            <div className="grid gap-2 rounded-lg border border-dashed p-3 md:grid-cols-[13rem_12rem_1fr_auto]">
+              <label className="text-xs text-muted-foreground">
+                Candidates
+                <select
+                  className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                  value={newCandidateMode}
+                  onChange={(event) =>
+                    setNewCandidateMode(
+                      event.target.value as typeof newCandidateMode,
+                    )}
+                >
+                  <option value="reviewable">Uncertain + unclassified</option>
+                  <option value="auto_matched">Audit automatic matches</option>
+                </select>
+              </label>
               <label className="text-xs text-muted-foreground">
                 Range
                 <select
@@ -1275,8 +1308,9 @@ export default function VoiceIdentityReviewPage() {
                 )
                 : (
                   <p className="self-center text-xs text-muted-foreground">
-                    The session freezes its end time, order and first 100 items.
-                    New diarization cannot move your saved position.
+                    The session freezes its end time and selects each 100-item
+                    window across different recordings. New diarization cannot
+                    move your saved position.
                   </p>
                 )}
               <Button
@@ -1321,6 +1355,11 @@ export default function VoiceIdentityReviewPage() {
           {reviewSession && reviewSession.loadedCount > 0 && (
             <>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {reviewSession.querySnapshot?.candidateMode === "auto_matched"
+                    ? "Auditing automatic matches"
+                    : "Uncertain + unclassified"}
+                </span>
                 <span>{reviewSession.loadedCount} items in this window</span>
                 <span>{reviewSession.groups.length} playback groups</span>
                 <span>
@@ -1861,15 +1900,15 @@ export default function VoiceIdentityReviewPage() {
           <div>
             <CardTitle>Classify existing — current results</CardTitle>
             <CardDescription>
-              Exact global distribution scans active diarizations only when you
-              request it. Campaign progress remains lightweight and live.
+              Verified automatic results require the current server-computed
+              calibration. Older decisions are counted separately as stale.
             </CardDescription>
           </div>
           <Button
             size="sm"
             variant="outline"
             onClick={() => void calculateClassification()}
-            disabled={isCalculatingClassification}
+            disabled={!profileId || isCalculatingClassification}
           >
             <RefreshCw
               className={`mr-2 h-4 w-4 ${
@@ -1880,7 +1919,7 @@ export default function VoiceIdentityReviewPage() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-5">
+          <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-md border p-3">
               <strong>
                 {classificationSnapshot?.classification.identified ?? "—"}
@@ -1899,6 +1938,12 @@ export default function VoiceIdentityReviewPage() {
               </strong>
               <br />uncertain
             </div>
+            <div className="rounded-md border border-amber-500/30 p-3">
+              <strong>
+                {classificationSnapshot?.classification.stale ?? "—"}
+              </strong>
+              <br />stale decisions
+            </div>
             <div className="rounded-md border p-3">
               <strong>
                 {classificationSnapshot?.classification.unclassified ?? "—"}
@@ -1911,10 +1956,12 @@ export default function VoiceIdentityReviewPage() {
             </div>
           </div>
           {classificationSnapshot && (
-            <p className="text-xs text-muted-foreground">
-              Exact snapshot:{" "}
-              {new Date(classificationSnapshot.asOf).toLocaleString()}
-            </p>
+            <div className="text-xs text-muted-foreground">
+              Exact snapshot: {new Date(classificationSnapshot.asOf)
+                .toLocaleString()} · verified calibration:{" "}
+              {classificationSnapshot
+                .calibrationId ?? "none"}
+            </div>
           )}
           {classificationError && (
             <p className="text-xs text-red-600">

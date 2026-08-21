@@ -42,6 +42,8 @@ export type VoiceIdentityStatus = {
     profileId?: string;
     profileRevision?: number;
     embeddingSpaceId?: string;
+    validity?: "usable" | "stale";
+    staleReasons?: string[];
     updatedAt?: Date;
   }>;
   usableCalibration: UsableVoiceCalibration | null;

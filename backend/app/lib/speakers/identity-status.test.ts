@@ -39,6 +39,18 @@ Deno.test(
           profileRevision: 2,
           embeddingSpaceId: "pyannote-v2",
           status: "validated",
+          serverComputed: true,
+          contractVersion: "server-computed-v1",
+          computedBy: "speaker-segments",
+          positiveThreshold: 0.7,
+          negativeThreshold: 0.35,
+          targetPrecision: 0.98,
+          validationMetrics: {
+            positivePrecision: 0.99,
+            identified: 20,
+          },
+          calibrationRecordingIds: ["recording-fit"],
+          validationRecordingIds: ["recording-check"],
           createdAt: new Date("2026-08-21T00:00:00Z"),
         },
       ],
@@ -71,6 +83,11 @@ Deno.test(
     expect(current.canClassify).toBe(true);
     expect(current.blockers).toEqual([]);
     expect(current.latestJob.state).toBe("completed");
+    expect(
+      current.calibrations.find((item: any) =>
+        item.calibrationId === "old-revision"
+      ).validity,
+    ).toBe("stale");
 
     await mongo({
       action: "updateOne",
@@ -84,6 +101,6 @@ Deno.test(
     ) as any;
     expect(changed.usableCalibration).toBeNull();
     expect(changed.canClassify).toBe(false);
-    expect(changed.blockers.join(" ")).toContain("current profile revision");
+    expect(changed.blockers.join(" ")).toContain("profile revision changed");
   }),
 );

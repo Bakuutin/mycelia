@@ -1,5 +1,8 @@
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@^1.0.15";
-import { speakerSegmentsRequestSchema } from "./resource.server.ts";
+import {
+  speakerSegmentsRequestSchema,
+  stratifyReviewCandidates,
+} from "./resource.server.ts";
 import {
   applyReviewDecisionRevision,
   attachReviewDecisionSummaries,
@@ -211,4 +214,37 @@ Deno.test("label counts use only the latest annotation for each segment", () => 
 
   assertEquals(latest.length, 1);
   assertEquals(latest[0].profileId, otherProfileId);
+});
+
+Deno.test("review windows take candidates across recordings before repeating one", () => {
+  const candidates = [
+    { _id: "a1", original_id: "recording-a" },
+    { _id: "a2", original_id: "recording-a" },
+    { _id: "a3", original_id: "recording-a" },
+    { _id: "b1", original_id: "recording-b" },
+    { _id: "c1", original_id: "recording-c" },
+  ];
+  const { selected, remaining } = stratifyReviewCandidates(candidates, 3);
+
+  assertEquals(selected.map((item) => item._id), ["a1", "b1", "c1"]);
+  assertEquals(remaining.map((item) => item._id), ["a2", "a3"]);
+});
+
+Deno.test("calibration save accepts evidence selection but rejects client metrics", () => {
+  const request = {
+    action: "save-calibration",
+    profileId: skyProfileId,
+    calibrationRecordingIds: ["fit-recording"],
+    validationRecordingIds: ["check-recording"],
+    targetPrecision: 0.98,
+  };
+  assert(speakerSegmentsRequestSchema.safeParse(request).success);
+  assertEquals(
+    speakerSegmentsRequestSchema.safeParse({
+      ...request,
+      calibrationId: "client-chosen",
+      metrics: { precision: 1, sky: 40, notSky: 40 },
+    }).success,
+    false,
+  );
 });

@@ -448,8 +448,8 @@ backup и проверьте restore. Затем **Preview purge**, сверка
 
 В UI есть два связанных, но намеренно разных типа данных:
 
-- **speaker label / annotation** отвечает «кто говорил в этом интервале» и
-  сразу имеет приоритет на Timeline и в Transcript;
+- **speaker label / annotation** отвечает «кто говорил в этом интервале» и сразу
+  имеет приоритет на Timeline и в Transcript;
 - **saved voice sample** — сохранённое чистое аудио, из которого enrollment
   строит embedding профиля для автоматического поиска похожего голоса.
 
@@ -476,8 +476,7 @@ overlap.
 1. На Timeline выберите 3–120 секунд с одним спикером; лучше 10–30 секунд.
 2. Нажмите **Voice sample**.
 3. Выберите существующий профиль или **New speaker** и введите имя.
-4. Нажмите **Save and rebuild profile** либо **Create speaker and save
-   sample**.
+4. Нажмите **Save and rebuild profile** либо **Create speaker and save sample**.
 5. Проследите enrollment job.
 
 Source interval сохраняется вместе с sample. Другие профили добавляются тем же
@@ -495,8 +494,7 @@ Review queue содержит активные unclassified/uncertain segments:
 
 - **This is me** — positive Sky annotation;
 - **Not me** — Sky явно исключён;
-- **Assign profile** — сегмент сразу назначается существующему другому
-  спикеру;
+- **Assign profile** — сегмент сразу назначается существующему другому спикеру;
 - **New speaker** — создаёт другой профиль из embedding выбранного сегмента или
   безопасной группы и сразу назначает ему разметку; такой seed не считается
   сохранённым voice sample;
@@ -532,6 +530,18 @@ Review queue содержит активные unclassified/uncertain segments:
 Делите по source recording: calibration recordings выбирают thresholds, другие
 validation recordings проверяют переносимость.
 
+При создании review session выберите очередь:
+
+- **Uncertain + unclassified** — основная разметка для обучения calibration;
+- **Audit automatic matches** — проверка прежних auto-match кандидатов для
+  выбранного профиля. Этот режим полезен после смены calibration и для поиска
+  false positives.
+
+Каждое окно берёт примеры по кругу из разных source recordings, прежде чем
+повторять ту же запись. Не создавайте новую сессию только ради смены окна:
+оставшиеся кандидаты сохраняются в session buffer, поэтому **Load next 100** не
+теряет пропущенные между окнами segments.
+
 Цель auto-Sky precision — не ниже 98%. Precision важнее recall: сомнительные
 случаи должны остаться `uncertain`.
 
@@ -555,6 +565,14 @@ UI не принимает вручную введённые thresholds или p
 backend пересчитывает метрики повторно, поэтому значение из браузера нельзя
 подменить.
 
+Сохранённая calibration считается рабочей только с
+`contractVersion=server-computed-v1`, server provenance, текущими profile
+revision/embedding space, непересекающимися Fit/Check recordings и реально
+измеренной Check precision не ниже цели. Более старые client-asserted records
+показываются как `stale` и не разблокируют pilot. Старые automatic identity
+решения не удаляются, но отдельно считаются как `stale decisions`; Timeline и
+Transcript показывают их как unclassified до новой совместимой классификации.
+
 ## 10. Identity pilot и backfill
 
 После актуального Sky profile и validated calibration откройте
@@ -577,6 +595,8 @@ read-only readiness card со ссылками на эти настройки.
 - `unknown` — ниже conservative negative threshold;
 - `uncertain` — между thresholds;
 - `unclassified` — identity worker ещё не оценивал segment.
+- `stale decisions` — исторический automatic result с отсутствующей или
+  несовместимой текущей server calibration; это не подтверждённый результат.
 
 Показанный similarity score — не вероятность и не процент готовности. Только
 calibrated thresholds превращают score в identity decision.
