@@ -15,6 +15,7 @@ import {
   attachReviewDecisionSummaries,
   groupReviewSegments,
   latestReviewAnnotationsBySegment,
+  prepareReviewCandidates,
   restoreReviewDecision,
 } from "./review-sessions.ts";
 import {
@@ -110,6 +111,10 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     candidateMode: z.enum(["reviewable", "auto_matched"]).default(
       "reviewable",
     ),
+    quality: z.object({
+      minDurationSeconds: z.number().min(0).max(10).default(1),
+      deduplicateOverlaps: z.boolean().default(true),
+    }).default({ minDurationSeconds: 1, deduplicateOverlaps: true }),
     start: zDateOrString().optional(),
     end: zDateOrString().optional(),
     limit: z.number().int().min(1).max(100).default(100),
@@ -170,6 +175,36 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
   }).refine(
     isValidReviewAssignment,
     "Choose an assigned or excluded profile without contradicting the assignment",
+  ),
+  z.object({
+    action: z.literal("commit-review-skip"),
+    sessionId: objectId,
+    revision: z.number().int().positive(),
+    clientRequestId: z.string().min(1).max(120),
+    segmentIds: z.array(objectId).min(1).max(100),
+    replacesDecisionId: objectId.optional(),
+  }),
+  z.object({
+    action: z.literal("list-review-history"),
+    profileId: objectId,
+    limit: z.number().int().min(1).max(500).default(100),
+  }),
+  z.object({
+    action: z.literal("revise-review-history"),
+    profileId: objectId,
+    segmentId: objectId,
+    replacesDecisionId: objectId,
+    clientRequestId: z.string().min(1).max(120),
+    outcome: z.enum(["assigned", "skipped"]),
+    assignedProfileId: objectId.optional(),
+    excludedProfileIds: z.array(objectId).default([]),
+  }).refine(
+    (value) =>
+      value.outcome === "skipped" || isValidReviewAssignment({
+        profileId: value.assignedProfileId,
+        excludedProfileIds: value.excludedProfileIds,
+      }),
+    "An assigned correction needs a profile or an excluded target",
   ),
   z.object({
     action: z.literal("undo-review-decision"),
@@ -380,14 +415,37 @@ async function findReviewCandidates(
   }) as any[];
   const candidateIds = candidates.map((segment) => segment._id);
   if (candidateIds.length === 0) return [];
-  const annotations = await mongo({
-    action: "find",
-    collection: "speaker_annotations",
-    query: { segmentId: { $in: candidateIds } },
-    options: { projection: { segmentId: 1 }, limit: candidateIds.length },
-  }) as any[];
-  const annotated = new Set(annotations.map((item) => String(item.segmentId)));
-  return candidates.filter((segment) => !annotated.has(String(segment._id)));
+  const [annotations, skippedDecisions] = await Promise.all([
+    mongo({
+      action: "find",
+      collection: "speaker_annotations",
+      query: { segmentId: { $in: candidateIds } },
+      options: { projection: { segmentId: 1 }, limit: candidateIds.length },
+    }),
+    targetProfileId
+      ? mongo({
+        action: "find",
+        collection: "speaker_review_decisions",
+        query: {
+          status: "committed",
+          outcome: "skipped",
+          targetProfileIds: new ObjectId(targetProfileId),
+          segmentIds: { $in: candidateIds },
+        },
+        options: {
+          projection: { segmentIds: 1 },
+          limit: candidateIds.length,
+        },
+      })
+      : Promise.resolve([]),
+  ]) as [any[], any[]];
+  const excluded = new Set([
+    ...annotations.map((item) => String(item.segmentId)),
+    ...skippedDecisions.flatMap((decision) =>
+      (decision.segmentIds ?? []).map(String)
+    ),
+  ]);
+  return candidates.filter((segment) => !excluded.has(String(segment._id)));
 }
 
 export function stratifyReviewCandidates(
@@ -426,6 +484,7 @@ export function stratifyReviewCandidates(
 async function loadBufferedReviewCandidates(
   mongo: any,
   ids: unknown[],
+  targetProfileId?: string,
 ): Promise<any[]> {
   const objectIds = ids.map(String).filter(ObjectId.isValid).map((id) =>
     new ObjectId(id)
@@ -437,16 +496,36 @@ async function loadBufferedReviewCandidates(
     query: { _id: { $in: objectIds }, lifecycleStatus: "active" },
     options: { projection: { embedding: 0 }, limit: objectIds.length },
   }) as any[];
-  const annotations = await mongo({
-    action: "find",
-    collection: "speaker_annotations",
-    query: { segmentId: { $in: objectIds } },
-    options: { projection: { segmentId: 1 }, limit: objectIds.length },
-  }) as any[];
-  const annotated = new Set(annotations.map((item) => String(item.segmentId)));
+  const [annotations, skippedDecisions] = await Promise.all([
+    mongo({
+      action: "find",
+      collection: "speaker_annotations",
+      query: { segmentId: { $in: objectIds } },
+      options: { projection: { segmentId: 1 }, limit: objectIds.length },
+    }),
+    targetProfileId
+      ? mongo({
+        action: "find",
+        collection: "speaker_review_decisions",
+        query: {
+          status: "committed",
+          outcome: "skipped",
+          targetProfileIds: new ObjectId(targetProfileId),
+          segmentIds: { $in: objectIds },
+        },
+        options: { projection: { segmentIds: 1 }, limit: objectIds.length },
+      })
+      : Promise.resolve([]),
+  ]) as [any[], any[]];
+  const excluded = new Set([
+    ...annotations.map((item) => String(item.segmentId)),
+    ...skippedDecisions.flatMap((decision) =>
+      (decision.segmentIds ?? []).map(String)
+    ),
+  ]);
   const byId = new Map(candidates.map((item) => [String(item._id), item]));
   return objectIds.map((id) => byId.get(String(id))).filter((item) =>
-    item && !annotated.has(String(item._id))
+    item && !excluded.has(String(item._id))
   );
 }
 
@@ -546,6 +625,7 @@ async function hydrateReviewSession(
     query: { _id: { $in: decisionIds }, status: "committed" },
     options: {
       projection: {
+        outcome: 1,
         profileId: 1,
         excludedProfileIds: 1,
         source: 1,
@@ -573,6 +653,131 @@ async function hydrateReviewSession(
     window: attachReviewDecisionSummaries(window, decisions, profiles),
     segments: window.map((item: any) => byId.get(String(item.segmentId)))
       .filter(Boolean),
+  };
+}
+
+async function loadReviewHistory(
+  mongo: any,
+  author: string,
+  profileId: string,
+  limit: number,
+): Promise<any> {
+  const profileObjectId = new ObjectId(profileId);
+  const scanLimit = Math.min(Math.max(limit * 10, 500), 5_000);
+  const decisions = await mongo({
+    action: "find",
+    collection: "speaker_review_decisions",
+    query: {
+      author,
+      status: "committed",
+      targetProfileIds: profileObjectId,
+    },
+    options: {
+      sort: { updatedAt: -1, createdAt: -1 },
+      limit: scanLimit,
+      projection: {
+        sessionId: 1,
+        segmentIds: 1,
+        targetProfileIds: 1,
+        outcome: 1,
+        profileId: 1,
+        excludedProfileIds: 1,
+        source: 1,
+        updatedAt: 1,
+        createdAt: 1,
+      },
+    },
+  }) as any[];
+  const latestBySegment = new Map<string, any>();
+  for (const decision of decisions) {
+    for (const segmentId of decision.segmentIds ?? []) {
+      const id = String(segmentId);
+      if (!latestBySegment.has(id)) latestBySegment.set(id, decision);
+    }
+  }
+  const selected = [...latestBySegment.entries()].slice(0, limit);
+  const segmentIds = selected.map(([id]) => id).filter(ObjectId.isValid).map(
+    (id) => new ObjectId(id),
+  );
+  const segments = segmentIds.length === 0 ? [] : await mongo({
+    action: "find",
+    collection: "diarizations",
+    query: { _id: { $in: segmentIds } },
+    options: { projection: { embedding: 0 }, limit: segmentIds.length },
+  }) as any[];
+  const segmentById = new Map(
+    segments.map((segment) => [String(segment._id), segment]),
+  );
+  const sessionIds = [
+    ...new Set(
+      selected.map(([, decision]) => String(decision.sessionId ?? "")).filter(
+        ObjectId.isValid,
+      ),
+    ),
+  ].map((id) => new ObjectId(id));
+  const sessions = sessionIds.length === 0 ? [] : await mongo({
+    action: "find",
+    collection: "speaker_review_sessions",
+    query: { _id: { $in: sessionIds }, owner: author },
+    options: {
+      projection: { name: 1, status: 1 },
+      limit: sessionIds.length,
+    },
+  }) as any[];
+  const sessionById = new Map(
+    sessions.map((session) => [String(session._id), session]),
+  );
+  const profileIds = [
+    ...new Set(
+      selected.flatMap(([, decision]) => [
+        String(decision.profileId ?? ""),
+        ...(decision.excludedProfileIds ?? []).map(String),
+      ]).filter(ObjectId.isValid),
+    ),
+  ].map((id) => new ObjectId(id));
+  const profiles = profileIds.length === 0 ? [] : await mongo({
+    action: "find",
+    collection: "speaker_profiles",
+    query: { _id: { $in: profileIds } },
+    options: { projection: { name: 1 }, limit: profileIds.length },
+  }) as any[];
+  const profileNames = new Map(
+    profiles.map((profile) => [
+      String(profile._id),
+      String(profile.name ?? "Deleted profile"),
+    ]),
+  );
+  return {
+    items: selected.map(([segmentId, decision]) => {
+      const segment = segmentById.get(segmentId) ?? null;
+      const assignedProfileId = decision.profileId
+        ? String(decision.profileId)
+        : null;
+      const excludedProfileIds = (decision.excludedProfileIds ?? []).map(
+        String,
+      );
+      const session = sessionById.get(String(decision.sessionId ?? ""));
+      return {
+        decisionId: String(decision._id),
+        outcome: decision.outcome === "skipped" ? "skipped" : "assigned",
+        assignedProfileId,
+        assignedProfileName: assignedProfileId
+          ? profileNames.get(assignedProfileId) ?? "Deleted profile"
+          : null,
+        excludedProfileIds,
+        excludedProfileNames: excludedProfileIds.map((id: string) =>
+          profileNames.get(id) ?? "Deleted profile"
+        ),
+        updatedAt: decision.updatedAt ?? decision.createdAt ?? null,
+        sessionId: decision.sessionId ? String(decision.sessionId) : null,
+        sessionName: session?.name ?? "Older review",
+        sessionStatus: session?.status ?? null,
+        segment,
+      };
+    }).filter((item) => item.segment),
+    scannedDecisions: decisions.length,
+    hasMore: decisions.length >= scanLimit ||
+      latestBySegment.size > selected.length,
   };
 }
 
@@ -1198,8 +1403,9 @@ export class SpeakerSegmentsResource
           input.candidateMode,
           input.targetProfileIds[0],
         );
+        const prepared = prepareReviewCandidates(candidatePool, input.quality);
         const { selected: candidates, remaining } = stratifyReviewCandidates(
-          candidatePool,
+          prepared.candidates,
           input.limit,
         );
         const lastScannedCandidate = candidatePool.at(-1);
@@ -1229,11 +1435,15 @@ export class SpeakerSegmentsResource
             end: snapshotEnd,
             snapshotEnd,
             sort: { start: 1, _id: 1 },
+            quality: input.quality,
           },
           window: candidates.map((segment) => ({
             segmentId: segment._id,
             groupId: groupBySegment.get(String(segment._id)),
             status: "pending",
+            ...(segment.reviewQuality
+              ? { quality: segment.reviewQuality }
+              : {}),
           })),
           candidateBufferIds: remaining.map((segment) => segment._id),
           groups,
@@ -1245,8 +1455,9 @@ export class SpeakerSegmentsResource
           skippedCount: 0,
           windowReviewedCount: 0,
           windowSkippedCount: 0,
-          backlogEstimate: candidatePool.length,
+          backlogEstimate: prepared.candidates.length,
           backlogEstimateCapped: candidatePool.length >= 5_000,
+          qualityStats: prepared.stats,
           hasMore: remaining.length > 0 || candidatePool.length >= 5_000,
           hasMoreBeyondCursor: candidatePool.length >= 5_000,
           nextCursor: lastScannedCandidate
@@ -1293,6 +1504,193 @@ export class SpeakerSegmentsResource
             projection: { window: 0, groups: 0, candidateBufferIds: 0 },
           },
         });
+      case "list-review-history":
+        return await loadReviewHistory(
+          mongo,
+          auth.principal,
+          input.profileId,
+          input.limit,
+        );
+      case "revise-review-history": {
+        const segmentId = new ObjectId(input.segmentId);
+        const current = await mongo({
+          action: "findOne",
+          collection: "speaker_review_decisions",
+          query: {
+            segmentIds: segmentId,
+            author: auth.principal,
+            status: "committed",
+          },
+          options: { sort: { updatedAt: -1, createdAt: -1 } },
+        }) as any;
+        if (!current || String(current._id) !== input.replacesDecisionId) {
+          throw new Error(
+            "This history item changed elsewhere; refresh before editing",
+          );
+        }
+        const existing = await mongo({
+          action: "findOne",
+          collection: "speaker_review_decisions",
+          query: {
+            author: auth.principal,
+            clientRequestId: input.clientRequestId,
+          },
+        }) as any;
+        if (existing?.status === "committed") {
+          return await loadReviewHistory(
+            mongo,
+            auth.principal,
+            input.profileId,
+            100,
+          );
+        }
+        const segment = await mongo({
+          action: "findOne",
+          collection: "diarizations",
+          query: { _id: segmentId, lifecycleStatus: "active" },
+          options: { projection: { embedding: 0 } },
+        }) as any;
+        if (!segment) {
+          throw new Error("The diarization segment is no longer active");
+        }
+        const now = new Date();
+        const decisionId = existing?._id ?? new ObjectId();
+        const targetProfileIds = (current.targetProfileIds ?? []).length > 0
+          ? current.targetProfileIds
+          : [new ObjectId(input.profileId)];
+        const assignedProfileId = input.outcome === "assigned" &&
+            input.assignedProfileId
+          ? new ObjectId(input.assignedProfileId)
+          : null;
+        const excludedProfileIds = input.outcome === "assigned"
+          ? input.excludedProfileIds.map((id) => new ObjectId(id))
+          : [];
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_decisions",
+          query: {
+            author: auth.principal,
+            clientRequestId: input.clientRequestId,
+          },
+          update: {
+            $setOnInsert: {
+              _id: decisionId,
+              sessionId: current.sessionId ?? null,
+              clientRequestId: input.clientRequestId,
+              author: auth.principal,
+              segmentIds: [segmentId],
+              targetProfileIds,
+              outcome: input.outcome,
+              profileId: assignedProfileId,
+              excludedProfileIds,
+              supersedesDecisionId: current._id,
+              source: "review_history_revision",
+              status: "building",
+              createdAt: now,
+            },
+            $set: { updatedAt: now },
+          },
+          options: { upsert: true },
+        });
+        await mongo({
+          action: "deleteMany",
+          collection: "speaker_annotations",
+          query: { segmentId, source: "manual" },
+        });
+        if (input.outcome === "assigned") {
+          await mongo({
+            action: "insertOne",
+            collection: "speaker_annotations",
+            doc: {
+              decisionId,
+              sessionId: current.sessionId ?? null,
+              originalId: segment.original_id ?? segment.original,
+              segmentId,
+              runId: segment.runId ?? null,
+              start: segment.start,
+              end: segment.end,
+              profileId: assignedProfileId,
+              excludedProfileIds,
+              source: "manual",
+              author: auth.principal,
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+        }
+        const affectedSessions = await mongo({
+          action: "find",
+          collection: "speaker_review_sessions",
+          query: { owner: auth.principal, "window.segmentId": segmentId },
+          options: { limit: 50 },
+        }) as any[];
+        for (const session of affectedSessions) {
+          const previousWindow = session.window ?? [];
+          const previous = previousWindow.find((item: any) =>
+            String(item.segmentId) === input.segmentId
+          );
+          if (!previous) continue;
+          const nextStatus = input.outcome === "skipped"
+            ? "skipped"
+            : "reviewed";
+          const window = previousWindow.map((item: any) =>
+            String(item.segmentId) === input.segmentId
+              ? { ...item, status: nextStatus, decisionId }
+              : item
+          );
+          const reviewedDelta = (nextStatus === "reviewed" ? 1 : 0) -
+            (previous.status === "reviewed" ? 1 : 0);
+          const skippedDelta = (nextStatus === "skipped" ? 1 : 0) -
+            (previous.status === "skipped" ? 1 : 0);
+          await mongo({
+            action: "updateOne",
+            collection: "speaker_review_sessions",
+            query: { _id: session._id },
+            update: {
+              $set: {
+                window,
+                reviewedCount: Math.max(
+                  0,
+                  Number(session.reviewedCount ?? 0) + reviewedDelta,
+                ),
+                skippedCount: Math.max(
+                  0,
+                  Number(session.skippedCount ?? 0) + skippedDelta,
+                ),
+                windowReviewedCount: window.filter((item: any) =>
+                  item.status === "reviewed"
+                )
+                  .length,
+                windowSkippedCount: window.filter((item: any) =>
+                  item.status === "skipped"
+                )
+                  .length,
+                updatedAt: now,
+              },
+              $inc: { revision: 1 },
+            },
+          });
+        }
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_decisions",
+          query: { _id: decisionId, status: "building" },
+          update: {
+            $set: {
+              status: "committed",
+              annotationCount: input.outcome === "assigned" ? 1 : 0,
+              committedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          },
+        });
+        return await loadReviewHistory(
+          mongo,
+          auth.principal,
+          input.profileId,
+          100,
+        );
+      }
       case "get-review-session": {
         const session = await mongo({
           action: "findOne",
@@ -1328,6 +1726,7 @@ export class SpeakerSegmentsResource
         const buffered = await loadBufferedReviewCandidates(
           mongo,
           session.candidateBufferIds ?? [],
+          String(session.targetProfileIds?.[0] ?? ""),
         );
         const fetched = buffered.length === 0 &&
             Boolean(session.hasMoreBeyondCursor ?? session.hasMore)
@@ -1341,7 +1740,24 @@ export class SpeakerSegmentsResource
             session.nextCursor,
           )
           : [];
-        const candidatePool = buffered.length > 0 ? buffered : fetched;
+        const prepared = buffered.length > 0
+          ? {
+            candidates: buffered,
+            stats: {
+              input: 0,
+              accepted: 0,
+              shortExcluded: 0,
+              duplicateExcluded: 0,
+            },
+          }
+          : prepareReviewCandidates(
+            fetched,
+            snapshot.quality ?? {
+              minDurationSeconds: 0,
+              deduplicateOverlaps: false,
+            },
+          );
+        const candidatePool = prepared.candidates;
         const { selected: candidates, remaining } = stratifyReviewCandidates(
           candidatePool,
           Number(session.windowSize ?? 100),
@@ -1356,6 +1772,7 @@ export class SpeakerSegmentsResource
           segmentId: segment._id,
           groupId: groupBySegment.get(String(segment._id)),
           status: "pending",
+          ...(segment.reviewQuality ? { quality: segment.reviewQuality } : {}),
         }));
         const lastScannedCandidate = fetched.at(-1);
         const hasMoreBeyondCursor = buffered.length > 0
@@ -1378,6 +1795,18 @@ export class SpeakerSegmentsResource
                 candidates.length,
               windowReviewedCount: 0,
               windowSkippedCount: 0,
+              qualityStats: {
+                input: Number(session.qualityStats?.input ?? 0) +
+                  prepared.stats.input,
+                accepted: Number(session.qualityStats?.accepted ?? 0) +
+                  prepared.stats.accepted,
+                shortExcluded:
+                  Number(session.qualityStats?.shortExcluded ?? 0) +
+                  prepared.stats.shortExcluded,
+                duplicateExcluded:
+                  Number(session.qualityStats?.duplicateExcluded ?? 0) +
+                  prepared.stats.duplicateExcluded,
+              },
               hasMore: remaining.length > 0 || hasMoreBeyondCursor,
               hasMoreBeyondCursor,
               nextCursor: lastScannedCandidate
@@ -1549,7 +1978,7 @@ export class SpeakerSegmentsResource
           query: {
             _id: sessionId,
             owner: auth.principal,
-            status: "active",
+            status: { $in: ["active", "completed"] },
             revision: input.revision,
           },
         }) as any;
@@ -1565,6 +1994,17 @@ export class SpeakerSegmentsResource
         if (segmentIds.some((id) => !allowed.has(id))) {
           throw new Error(
             "Every selected segment must belong to this review window",
+          );
+        }
+        if (
+          session.status === "completed" &&
+          (session.window ?? []).some((item: any) =>
+            segmentIds.includes(String(item.segmentId)) &&
+            item.status === "pending"
+          )
+        ) {
+          throw new Error(
+            "Completed sessions only allow corrections to saved answers",
           );
         }
         const objectIds = segmentIds.map((id) => new ObjectId(id));
@@ -1590,7 +2030,9 @@ export class SpeakerSegmentsResource
               clientRequestId: input.clientRequestId,
               author: auth.principal,
               segmentIds: objectIds,
+              targetProfileIds: session.targetProfileIds ?? [],
               originalGroups: session.groups,
+              outcome: "assigned",
               profileId: input.profileId ? new ObjectId(input.profileId) : null,
               excludedProfileIds: input.excludedProfileIds.map((id) =>
                 new ObjectId(id)
@@ -1709,6 +2151,173 @@ export class SpeakerSegmentsResource
           session: await hydrateReviewSession(mongo, latestSession),
         };
       }
+      case "commit-review-skip": {
+        const sessionId = new ObjectId(input.sessionId);
+        const existing = await mongo({
+          action: "findOne",
+          collection: "speaker_review_decisions",
+          query: { sessionId, clientRequestId: input.clientRequestId },
+        }) as any;
+        if (existing?.status === "committed") {
+          const current = await mongo({
+            action: "findOne",
+            collection: "speaker_review_sessions",
+            query: { _id: sessionId, owner: auth.principal },
+          }) as any;
+          return {
+            decision: existing,
+            session: await hydrateReviewSession(mongo, current),
+          };
+        }
+        const session = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: {
+            _id: sessionId,
+            owner: auth.principal,
+            status: { $in: ["active", "completed"] },
+            revision: input.revision,
+          },
+        }) as any;
+        if (!session) {
+          throw new Error(
+            "Review session changed elsewhere; reload to continue",
+          );
+        }
+        const segmentIds = [...new Set(input.segmentIds)];
+        const selected = new Set(segmentIds);
+        const selectedItems = (session.window ?? []).filter((item: any) =>
+          selected.has(String(item.segmentId))
+        );
+        if (selectedItems.length !== segmentIds.length) {
+          throw new Error(
+            "Every skipped segment must belong to this review window",
+          );
+        }
+        if (
+          selectedItems.some((item: any) => item.status === "reviewed") &&
+          (!input.replacesDecisionId ||
+            selectedItems.some((item: any) =>
+              String(item.decisionId ?? "") !== input.replacesDecisionId
+            ))
+        ) {
+          throw new Error(
+            "The reviewed answer changed; reopen Edit before skipping it",
+          );
+        }
+        const objectIds = segmentIds.map((id) => new ObjectId(id));
+        const now = new Date();
+        const decisionId = existing?._id ?? new ObjectId();
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_decisions",
+          query: { sessionId, clientRequestId: input.clientRequestId },
+          update: {
+            $setOnInsert: {
+              _id: decisionId,
+              sessionId,
+              clientRequestId: input.clientRequestId,
+              author: auth.principal,
+              segmentIds: objectIds,
+              targetProfileIds: session.targetProfileIds ?? [],
+              outcome: "skipped",
+              profileId: null,
+              excludedProfileIds: [],
+              ...(input.replacesDecisionId
+                ? {
+                  supersedesDecisionId: new ObjectId(
+                    input.replacesDecisionId,
+                  ),
+                }
+                : {}),
+              source: segmentIds.length > 1
+                ? "review_batch_skip"
+                : "review_single_skip",
+              status: "building",
+              createdAt: now,
+            },
+            $set: { updatedAt: now },
+          },
+          options: { upsert: true },
+        });
+        const window = (session.window ?? []).map((item: any) =>
+          selected.has(String(item.segmentId))
+            ? { ...item, status: "skipped", decisionId }
+            : item
+        );
+        const reviewedRemoved =
+          selectedItems.filter((item: any) => item.status === "reviewed")
+            .length;
+        const skippedAdded =
+          selectedItems.filter((item: any) => item.status !== "skipped").length;
+        const activeSegmentId = selected.has(String(session.activeSegmentId))
+          ? nextPendingSegmentId(window, segmentIds.at(-1))
+          : String(session.activeSegmentId ?? "") || null;
+        const updated = await mongo({
+          action: "updateOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId, revision: input.revision },
+          update: {
+            $set: {
+              window,
+              reviewedCount: Math.max(
+                0,
+                Number(session.reviewedCount ?? 0) - reviewedRemoved,
+              ),
+              skippedCount: Number(session.skippedCount ?? 0) + skippedAdded,
+              windowReviewedCount: window.filter((item: any) =>
+                item.status === "reviewed"
+              ).length,
+              windowSkippedCount:
+                window.filter((item: any) => item.status === "skipped").length,
+              activeSegmentId: activeSegmentId
+                ? new ObjectId(activeSegmentId)
+                : null,
+              updatedAt: now,
+              lastOpenedAt: now,
+            },
+            $inc: { revision: 1 },
+          },
+        }) as any;
+        if (updated.matchedCount !== 1) {
+          await mongo({
+            action: "updateOne",
+            collection: "speaker_review_decisions",
+            query: { _id: decisionId, status: "building" },
+            update: { $set: { status: "conflicted", updatedAt: new Date() } },
+          });
+          throw new Error(
+            "Review session changed elsewhere; reload to continue",
+          );
+        }
+        await mongo({
+          action: "deleteMany",
+          collection: "speaker_annotations",
+          query: { segmentId: { $in: objectIds }, source: "manual" },
+        });
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_review_decisions",
+          query: { _id: decisionId, status: "building" },
+          update: {
+            $set: {
+              status: "committed",
+              annotationCount: 0,
+              committedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          },
+        });
+        const latestSession = await mongo({
+          action: "findOne",
+          collection: "speaker_review_sessions",
+          query: { _id: sessionId },
+        }) as any;
+        return {
+          decision: { _id: decisionId, status: "committed", segmentIds },
+          session: await hydrateReviewSession(mongo, latestSession),
+        };
+      }
       case "revise-review-decision": {
         const sessionId = new ObjectId(input.sessionId);
         const existing = await mongo({
@@ -1777,7 +2386,7 @@ export class SpeakerSegmentsResource
           query: {
             _id: sessionId,
             owner: auth.principal,
-            status: "active",
+            status: { $in: ["active", "completed"] },
             revision: input.revision,
           },
         }) as any;
@@ -1787,8 +2396,9 @@ export class SpeakerSegmentsResource
           );
         }
         const segmentIds = [...new Set(input.segmentIds)];
+        const previousWindow = session.window ?? [];
         let decisionId = existing?._id ?? new ObjectId();
-        let window = applyReviewDecisionRevision(session.window ?? [], {
+        let window = applyReviewDecisionRevision(previousWindow, {
           segmentIds,
           replacesDecisionId: input.replacesDecisionId,
           decisionId,
@@ -1815,7 +2425,9 @@ export class SpeakerSegmentsResource
               clientRequestId: input.clientRequestId,
               author: auth.principal,
               segmentIds: objectIds,
+              targetProfileIds: session.targetProfileIds ?? [],
               originalGroups: session.groups,
+              outcome: "assigned",
               profileId: input.profileId ? new ObjectId(input.profileId) : null,
               excludedProfileIds: input.excludedProfileIds.map((id) =>
                 new ObjectId(id)
@@ -1842,7 +2454,7 @@ export class SpeakerSegmentsResource
           throw new Error("Review decision could not be claimed");
         }
         decisionId = persistedDecision._id;
-        window = applyReviewDecisionRevision(session.window ?? [], {
+        window = applyReviewDecisionRevision(previousWindow, {
           segmentIds,
           replacesDecisionId: input.replacesDecisionId,
           decisionId,
@@ -1854,6 +2466,20 @@ export class SpeakerSegmentsResource
           update: {
             $set: {
               window,
+              reviewedCount: Number(session.reviewedCount ?? 0) +
+                window.filter((item: any) => item.status === "reviewed")
+                  .length -
+                previousWindow.filter((item: any) => item.status === "reviewed")
+                  .length,
+              skippedCount: Number(session.skippedCount ?? 0) +
+                window.filter((item: any) => item.status === "skipped").length -
+                previousWindow.filter((item: any) => item.status === "skipped")
+                  .length,
+              windowReviewedCount: window.filter((item: any) =>
+                item.status === "reviewed"
+              ).length,
+              windowSkippedCount:
+                window.filter((item: any) => item.status === "skipped").length,
               updatedAt: new Date(),
               lastOpenedAt: new Date(),
             },
@@ -1884,6 +2510,11 @@ export class SpeakerSegmentsResource
             );
           }
         }
+        await mongo({
+          action: "deleteMany",
+          collection: "speaker_annotations",
+          query: { segmentId: { $in: objectIds }, source: "manual" },
+        });
         await commitReviewDecisionArtifacts(mongo, persistedDecision, segments);
         const latestSession = await mongo({
           action: "findOne",
@@ -1964,9 +2595,30 @@ export class SpeakerSegmentsResource
           segmentIds: decision.segmentIds ?? [],
           decisionId: input.decisionId,
         });
+        const restoredIds = new Set(
+          (decision.segmentIds ?? []).map((segmentId: unknown) =>
+            String(segmentId)
+          ),
+        );
+        const restoredReviewedCount = (session.window ?? []).filter((
+          item: any,
+        ) =>
+          restoredIds.has(String(item.segmentId)) &&
+          String(item.decisionId ?? "") === input.decisionId &&
+          item.status === "reviewed"
+        ).length;
+        const restoredSkippedCount = (session.window ?? []).filter((
+          item: any,
+        ) =>
+          restoredIds.has(String(item.segmentId)) &&
+          String(item.decisionId ?? "") === input.decisionId &&
+          item.status === "skipped"
+        ).length;
         const window = restored.window;
         const windowReviewedCount =
           window.filter((item: any) => item.status === "reviewed").length;
+        const windowSkippedCount =
+          window.filter((item: any) => item.status === "skipped").length;
         const updated = await mongo({
           action: "updateOne",
           collection: "speaker_review_sessions",
@@ -1977,9 +2629,14 @@ export class SpeakerSegmentsResource
               reviewedCount: Math.max(
                 0,
                 Number(session.reviewedCount ?? 0) -
-                  restored.restoredCount,
+                  restoredReviewedCount,
+              ),
+              skippedCount: Math.max(
+                0,
+                Number(session.skippedCount ?? 0) - restoredSkippedCount,
               ),
               windowReviewedCount,
+              windowSkippedCount,
               activeSegmentId: restored.firstRestored,
               updatedAt: new Date(),
               lastOpenedAt: new Date(),

@@ -124,6 +124,15 @@ describe("VoiceIdentityReviewPlayer", () => {
     expect(props.onDecision).not.toHaveBeenCalled();
   });
 
+  it("keeps Skip available while editing and exposes a separate cancel action", () => {
+    const { props } = renderPlayer({ editingLabel: "Andrew Kislov" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(props.onDecision).toHaveBeenCalledWith("skip");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
+    expect(props.onCancelEdit).toHaveBeenCalledOnce();
+  });
+
   it("assigns visible alternate profiles by button or numbered shortcut", () => {
     const { props } = renderPlayer({ canEdit: true });
 

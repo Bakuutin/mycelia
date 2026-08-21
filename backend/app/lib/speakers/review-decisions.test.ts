@@ -7,6 +7,7 @@ import {
   applyReviewDecisionRevision,
   attachReviewDecisionSummaries,
   latestReviewAnnotationsBySegment,
+  prepareReviewCandidates,
   restoreReviewDecision,
 } from "./review-sessions.ts";
 
@@ -187,6 +188,7 @@ Deno.test("review hydration exposes assigned and deleted profile names", () => {
 
   assertEquals(hydrated[0].decisionSummary, {
     decisionId: assignedDecisionId,
+    outcome: "assigned",
     profileId: otherProfileId,
     profileName: "Belka",
     excludedProfileIds: [skyProfileId],
@@ -228,6 +230,67 @@ Deno.test("review windows take candidates across recordings before repeating one
 
   assertEquals(selected.map((item) => item._id), ["a1", "b1", "c1"]);
   assertEquals(remaining.map((item) => item._id), ["a2", "a3"]);
+});
+
+Deno.test("clean review candidates exclude sub-second fragments and overlapping duplicates", () => {
+  const prepared = prepareReviewCandidates([
+    {
+      _id: "short",
+      original_id: "recording-a",
+      runId: "legacy-v0",
+      start: new Date("2026-08-12T08:00:00.000Z"),
+      end: new Date("2026-08-12T08:00:00.200Z"),
+    },
+    {
+      _id: "contained",
+      original_id: "recording-a",
+      runId: "legacy-v0",
+      start: new Date("2026-08-12T08:00:01.000Z"),
+      end: new Date("2026-08-12T08:00:03.000Z"),
+    },
+    {
+      _id: "canonical",
+      original_id: "recording-a",
+      runId: "legacy-v0",
+      start: new Date("2026-08-12T08:00:01.100Z"),
+      end: new Date("2026-08-12T08:00:04.000Z"),
+    },
+  ]);
+
+  assertEquals(prepared.candidates.map((item) => item._id), ["canonical"]);
+  assertEquals(prepared.candidates[0].reviewQuality?.duplicateCount, 1);
+  assertEquals(prepared.stats.shortExcluded, 1);
+  assertEquals(prepared.stats.duplicateExcluded, 1);
+});
+
+Deno.test("a skipped review item can be corrected to a speaker label", () => {
+  const revised = applyReviewDecisionRevision([
+    {
+      segmentId,
+      status: "skipped",
+      decisionId: "66b000000000000000000099",
+    },
+  ], {
+    segmentIds: [segmentId],
+    replacesDecisionId: "66b000000000000000000099",
+    decisionId: "66b000000000000000000100",
+  });
+
+  assertEquals(revised, [{
+    segmentId,
+    status: "reviewed",
+    decisionId: "66b000000000000000000100",
+  }]);
+  assert(
+    speakerSegmentsRequestSchema.safeParse({
+      action: "commit-review-skip",
+      sessionId,
+      revision: 2,
+      clientRequestId: "correct-to-noise",
+      segmentIds: [segmentId],
+      replacesDecisionId: "66b000000000000000000099",
+    }).success,
+  );
 });
 
 Deno.test("calibration save accepts evidence selection but rejects client metrics", () => {

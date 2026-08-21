@@ -344,6 +344,22 @@ export function VoiceIdentityReviewPlayer({
 
       <div className="grid gap-5 p-4 sm:p-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div className="space-y-5">
+          {editingLabel && (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-sm">
+              <span>
+                Editing previous answer:{" "}
+                <strong>{editingLabel}</strong>. Choose a new speaker or Skip
+                for noise.
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => stopThen(onCancelEdit)}
+              >
+                Cancel edit
+              </Button>
+            </div>
+          )}
           {audioUrl
             ? (
               <div className="rounded-lg border bg-muted/20 p-3">
@@ -378,16 +394,11 @@ export function VoiceIdentityReviewPlayer({
               variant="ghost"
               className="h-14 px-4 text-muted-foreground"
               disabled={pending}
-              onClick={() =>
-                stopThen(() =>
-                  editingLabel ? onCancelEdit() : onDecision("skip")
-                )}
-              title={editingLabel
-                ? "Cancel correction"
-                : "Keep this segment unlabeled and continue (S)"}
+              onClick={() => stopThen(() => onDecision("skip"))}
+              title="Keep this segment unlabeled and exclude it from calibration (S)"
             >
               <SkipForward className="mr-1 h-4 w-4" />
-              {editingLabel ? "Cancel" : "Skip"}
+              Skip
             </Button>
             <Button
               size="lg"

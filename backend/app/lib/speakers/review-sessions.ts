@@ -27,8 +27,22 @@ export type ReviewGroupingOptions = {
   maxSegments?: number;
 };
 
+export type ReviewQualityOptions = {
+  minDurationSeconds?: number;
+  deduplicateOverlaps?: boolean;
+  duplicateOverlapRatio?: number;
+};
+
+export type ReviewQualityStats = {
+  input: number;
+  accepted: number;
+  shortExcluded: number;
+  duplicateExcluded: number;
+};
+
 export type ReviewDecisionSummary = {
   decisionId: string;
+  outcome: "assigned" | "skipped";
   profileId: string | null;
   profileName: string | null;
   excludedProfileIds: string[];
@@ -73,7 +87,7 @@ export function applyReviewDecisionRevision<
       String(candidate.segmentId) === segmentId
     );
     if (
-      !item || item.status !== "reviewed" ||
+      !item || !["reviewed", "skipped"].includes(item.status) ||
       String(item.decisionId ?? "") !== input.replacesDecisionId
     ) {
       throw new Error("Review decision changed elsewhere; reload to continue");
@@ -81,7 +95,7 @@ export function applyReviewDecisionRevision<
   }
   return window.map((item) =>
     selected.has(String(item.segmentId))
-      ? { ...item, decisionId: input.decisionId }
+      ? { ...item, status: "reviewed", decisionId: input.decisionId }
       : item
   );
 }
@@ -117,6 +131,7 @@ export function attachReviewDecisionSummaries<
   window: T[],
   decisions: Array<{
     _id: unknown;
+    outcome?: unknown;
     profileId?: unknown;
     excludedProfileIds?: unknown[];
     source?: unknown;
@@ -142,6 +157,7 @@ export function attachReviewDecisionSummaries<
       ...item,
       decisionSummary: {
         decisionId,
+        outcome: decision.outcome === "skipped" ? "skipped" : "assigned",
         profileId,
         profileName: profileId
           ? profileNames.get(profileId) ?? "Deleted profile"
@@ -162,6 +178,108 @@ const DEFAULT_GROUPING = {
   maxDurationSeconds: 30,
   maxSegments: 20,
 } as const;
+
+const DEFAULT_QUALITY = {
+  minDurationSeconds: 1,
+  deduplicateOverlaps: true,
+  duplicateOverlapRatio: 0.8,
+} as const;
+
+function durationMs(segment: ReviewSegment): number {
+  return Math.max(
+    0,
+    new Date(segment.end).getTime() - new Date(segment.start).getTime(),
+  );
+}
+
+function overlapRatio(a: ReviewSegment, b: ReviewSegment): number {
+  const intersection = Math.max(
+    0,
+    Math.min(new Date(a.end).getTime(), new Date(b.end).getTime()) -
+      Math.max(new Date(a.start).getTime(), new Date(b.start).getTime()),
+  );
+  const shorter = Math.min(durationMs(a), durationMs(b));
+  return shorter > 0 ? intersection / shorter : 0;
+}
+
+function qualityRecordingKey(segment: ReviewSegment): string {
+  const originalId = String(segment.original_id ?? segment.original ?? "");
+  if (!originalId) return `segment:${String(segment._id)}`;
+  return [
+    originalId,
+    segment.runId ?? "",
+    segment.embeddingSpaceId ?? "",
+  ].join(":");
+}
+
+export function prepareReviewCandidates<T extends ReviewSegment>(
+  input: T[],
+  overrides: ReviewQualityOptions = {},
+): {
+  candidates: Array<T & { reviewQuality?: { duplicateCount: number } }>;
+  stats: ReviewQualityStats;
+} {
+  const options = { ...DEFAULT_QUALITY, ...overrides };
+  const minimumMs = Math.max(0, options.minDurationSeconds * 1_000);
+  const sorted = [...input].sort((a, b) =>
+    new Date(a.start).getTime() - new Date(b.start).getTime()
+  );
+  const shortExcluded = sorted.filter((segment) =>
+    durationMs(segment) < minimumMs
+  );
+  const eligible = sorted.filter((segment) => durationMs(segment) >= minimumMs);
+  if (!options.deduplicateOverlaps) {
+    return {
+      candidates: eligible,
+      stats: {
+        input: input.length,
+        accepted: eligible.length,
+        shortExcluded: shortExcluded.length,
+        duplicateExcluded: 0,
+      },
+    };
+  }
+
+  const accepted: Array<T & { reviewQuality?: { duplicateCount: number } }> =
+    [];
+  let duplicateExcluded = 0;
+  for (const candidate of eligible) {
+    const key = qualityRecordingKey(candidate);
+    const duplicateIndex = accepted.findLastIndex((previous) => {
+      if (qualityRecordingKey(previous) !== key) return false;
+      if (new Date(previous.end) <= new Date(candidate.start)) return false;
+      return overlapRatio(previous, candidate) >=
+        options.duplicateOverlapRatio;
+    });
+    if (duplicateIndex < 0) {
+      accepted.push(candidate);
+      continue;
+    }
+    duplicateExcluded += 1;
+    const previous = accepted[duplicateIndex];
+    const previousDuplicateCount = previous.reviewQuality?.duplicateCount ?? 0;
+    if (durationMs(candidate) > durationMs(previous)) {
+      accepted[duplicateIndex] = {
+        ...candidate,
+        reviewQuality: { duplicateCount: previousDuplicateCount + 1 },
+      };
+    } else {
+      previous.reviewQuality = { duplicateCount: previousDuplicateCount + 1 };
+    }
+  }
+
+  return {
+    candidates: accepted.sort((a, b) =>
+      new Date(a.start).getTime() - new Date(b.start).getTime()
+    ),
+    stats: {
+      input: input.length,
+      accepted: accepted.length,
+      shortExcluded: shortExcluded.length,
+      duplicateExcluded,
+    },
+  };
+}
 
 function segmentKey(segment: ReviewSegment) {
   return {

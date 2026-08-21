@@ -44,8 +44,10 @@ type ReviewWindowItem = {
   groupId?: string;
   status: "pending" | "skipped" | "reviewed";
   decisionId?: unknown;
+  quality?: { duplicateCount?: number };
   decisionSummary?: {
     decisionId: string;
+    outcome: "assigned" | "skipped";
     profileId: string | null;
     profileName: string | null;
     excludedProfileIds: string[];
@@ -84,6 +86,12 @@ type ReviewSession = {
   hasMore?: boolean;
   backlogEstimate: number;
   backlogEstimateCapped?: boolean;
+  qualityStats?: {
+    input: number;
+    accepted: number;
+    shortExcluded: number;
+    duplicateExcluded: number;
+  };
   preferences?: {
     autoPlay?: boolean;
     groupMode?: boolean;
@@ -95,7 +103,31 @@ type ReviewSession = {
     rangeMode: "fixed" | "all_before";
     start: Date | string;
     end: Date | string;
+    quality?: {
+      minDurationSeconds: number;
+      deduplicateOverlaps: boolean;
+    };
   };
+};
+
+type ReviewHistoryItem = {
+  decisionId: string;
+  outcome: "assigned" | "skipped";
+  assignedProfileId: string | null;
+  assignedProfileName: string | null;
+  excludedProfileIds: string[];
+  excludedProfileNames: string[];
+  updatedAt: Date | string | null;
+  sessionId: string | null;
+  sessionName: string;
+  sessionStatus: string | null;
+  segment: VoiceIdentityReviewSegment;
+};
+
+type ReviewHistoryResponse = {
+  items: ReviewHistoryItem[];
+  scannedDecisions: number;
+  hasMore: boolean;
 };
 
 type ReviewSessionSummary = Omit<
@@ -239,6 +271,19 @@ export default function VoiceIdentityReviewPage() {
   const [newCandidateMode, setNewCandidateMode] = useState<
     "reviewable" | "auto_matched"
   >("reviewable");
+  const [newQualityMode, setNewQualityMode] = useState<"clean" | "all">(
+    "clean",
+  );
+  const [showReviewHistory, setShowReviewHistory] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<
+    "all" | "assigned" | "skipped"
+  >("all");
+  const [sessionItemFilter, setSessionItemFilter] = useState<
+    "all" | "pending" | "reviewed" | "skipped" | "short"
+  >("all");
+  const [historyEditingItem, setHistoryEditingItem] = useState<
+    ReviewHistoryItem | null
+  >(null);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [autoPlayNext, setAutoPlayNext] = useState(() => {
@@ -345,6 +390,24 @@ export default function VoiceIdentityReviewPage() {
         limit: 20,
       }) as Promise<ReviewSessionSummary[]>,
   });
+  const reviewHistoryQueryKey = [
+    "speaker-review-history",
+    reviewProfileId,
+  ] as const;
+  const {
+    data: reviewHistory,
+    isLoading: reviewHistoryLoading,
+    isFetching: reviewHistoryFetching,
+  } = useQuery<ReviewHistoryResponse>({
+    queryKey: reviewHistoryQueryKey,
+    enabled: Boolean(reviewProfileId && showReviewHistory),
+    queryFn: () =>
+      callResource("speaker-segments", {
+        action: "list-review-history",
+        profileId: reviewProfileId,
+        limit: 200,
+      }) as Promise<ReviewHistoryResponse>,
+  });
 
   useEffect(() => {
     if (sessionsLoading) return;
@@ -420,6 +483,9 @@ export default function VoiceIdentityReviewPage() {
           : [],
         rangeMode: newRange === "all" ? "all_before" : "fixed",
         candidateMode: newCandidateMode,
+        quality: newQualityMode === "clean"
+          ? { minDurationSeconds: 1, deduplicateOverlaps: true }
+          : { minDurationSeconds: 0, deduplicateOverlaps: false },
         limit: 100,
         preferences: {
           autoPlay: autoPlayNext,
@@ -451,6 +517,7 @@ export default function VoiceIdentityReviewPage() {
       setSelectedSessionId(id);
       queryClient.setQueryData(["speaker-review-session", id], session);
       void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+      void queryClient.invalidateQueries({ queryKey: reviewHistoryQueryKey });
       setShowNewSession(false);
       setHistory([]);
       toast.success(
@@ -462,6 +529,89 @@ export default function VoiceIdentityReviewPage() {
         error instanceof Error
           ? error.message
           : "Could not create review session",
+      ),
+  });
+
+  const skipDecision = useMutation({
+    mutationFn: async (
+      {
+        segmentIds,
+        replacesDecisionId,
+      }: { segmentIds: string[]; replacesDecisionId?: string },
+    ) => {
+      if (!reviewSession || !selectedSessionId) {
+        throw new Error("Review session is not loaded");
+      }
+      return await callResource("speaker-segments", {
+        action: "commit-review-skip",
+        sessionId: selectedSessionId,
+        revision: reviewSession.revision,
+        clientRequestId: crypto.randomUUID(),
+        segmentIds,
+        ...(replacesDecisionId ? { replacesDecisionId } : {}),
+      }) as { decision: { _id: unknown }; session: ReviewSession };
+    },
+    onSuccess: ({ decision, session }) => {
+      const decisionId = normalizeObjectId(decision._id);
+      queryClient.setQueryData(sessionQueryKey, session);
+      if (decisionId) setHistory((current) => [...current, { decisionId }]);
+      setEditingSegmentId(null);
+      setPlayOnMount(autoPlayNext && Boolean(session.activeSegmentId));
+      void refetchIdentityStatus();
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker-calibration-preview"],
+      });
+      void queryClient.invalidateQueries({ queryKey: reviewHistoryQueryKey });
+      void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Could not skip segment",
+      );
+      void refetch();
+    },
+  });
+
+  const reviseHistory = useMutation({
+    mutationFn: async (
+      input: {
+        item: ReviewHistoryItem;
+        outcome: "assigned" | "skipped";
+        assignedProfileId?: string;
+        excludedProfileIds?: string[];
+      },
+    ) => {
+      if (!reviewProfileId) throw new Error("Choose a review profile");
+      return await callResource("speaker-segments", {
+        action: "revise-review-history",
+        profileId: reviewProfileId,
+        segmentId: normalizeObjectId(input.item.segment._id),
+        replacesDecisionId: input.item.decisionId,
+        clientRequestId: crypto.randomUUID(),
+        outcome: input.outcome,
+        ...(input.assignedProfileId
+          ? { assignedProfileId: input.assignedProfileId }
+          : {}),
+        excludedProfileIds: input.excludedProfileIds ?? [],
+      }) as ReviewHistoryResponse;
+    },
+    onSuccess: (response) => {
+      queryClient.setQueryData(reviewHistoryQueryKey, response);
+      setHistoryEditingItem(null);
+      void refetch();
+      void refetchIdentityStatus();
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker-calibration-preview"],
+      });
+      void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+      void queryClient.invalidateQueries({ queryKey: reviewHistoryQueryKey });
+      toast.success("Previous review answer corrected");
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not correct review history",
       ),
   });
 
@@ -555,6 +705,7 @@ export default function VoiceIdentityReviewPage() {
         queryKey: ["speaker-calibration-preview"],
       });
       void queryClient.invalidateQueries({ queryKey: sessionsQueryKey });
+      void queryClient.invalidateQueries({ queryKey: reviewHistoryQueryKey });
     },
     onError: (error) => {
       toast.error(
@@ -784,6 +935,37 @@ export default function VoiceIdentityReviewPage() {
       ),
     [reviewSession?.segments],
   );
+  const durationForItem = (item: ReviewWindowItem) => {
+    const segment = segmentById.get(normalizeObjectId(item.segmentId) ?? "");
+    return segment
+      ? Math.max(
+        0,
+        (new Date(segment.end).getTime() -
+          new Date(segment.start).getTime()) / 1_000,
+      )
+      : 0;
+  };
+  const pendingShortIds = windowItems.filter((item) =>
+    item.status === "pending" && durationForItem(item) < 1
+  ).map((item) => normalizeObjectId(item.segmentId)).filter(
+    (id): id is string => Boolean(id),
+  );
+  const visibleWindowItems = windowItems.filter((item) => {
+    if (sessionItemFilter === "all") return true;
+    if (sessionItemFilter === "short") return durationForItem(item) < 1;
+    return item.status === sessionItemFilter;
+  });
+  const visibleReviewHistory = (reviewHistory?.items ?? []).filter((item) =>
+    historyFilter === "all" || item.outcome === historyFilter
+  );
+  const reviewHistoryLabel = (item: ReviewHistoryItem) => {
+    if (item.outcome === "skipped") return "Skipped / noise";
+    if (item.assignedProfileName) return item.assignedProfileName;
+    if (item.excludedProfileIds.includes(reviewProfileId ?? "")) {
+      return `Not ${reviewProfile?.name ?? "target"}`;
+    }
+    return "Manual label";
+  };
   const activeId = normalizeObjectId(reviewSession?.activeSegmentId) ??
     normalizeObjectId(
       windowItems.find((item) => item.status === "pending")?.segmentId,
@@ -830,7 +1012,7 @@ export default function VoiceIdentityReviewPage() {
     }
     : activeSegment;
   const reviewPending = label.isPending || createReviewProfile.isPending ||
-    undo.isPending ||
+    skipDecision.isPending || undo.isPending ||
     updatePosition.isPending ||
     completeSession.isPending || loadNextWindow.isPending;
   const setAutoPlayPreference = (enabled: boolean) => {
@@ -866,8 +1048,7 @@ export default function VoiceIdentityReviewPage() {
   const beginEdit = (item: ReviewWindowItem) => {
     const id = normalizeObjectId(item.segmentId);
     if (
-      !id || item.status !== "reviewed" || !item.decisionSummary ||
-      reviewPending
+      !id || !["reviewed", "skipped"].includes(item.status) || reviewPending
     ) {
       return;
     }
@@ -894,16 +1075,13 @@ export default function VoiceIdentityReviewPage() {
         : {}),
     });
   };
-  const skipActive = () => {
-    if (!activeId || reviewPending) return;
-    const nextPending = [
-      ...windowItems.slice(activeIndex + 1),
-      ...windowItems.slice(0, activeIndex),
-    ]
-      .find((item) => item.status === "pending");
-    updatePosition.mutate({
-      skipSegmentId: activeId,
-      activeSegmentId: normalizeObjectId(nextPending?.segmentId) ?? null,
+  const skipCurrent = () => {
+    if (!reviewId || reviewPending) return;
+    skipDecision.mutate({
+      segmentIds: [reviewId],
+      ...(editingSegmentId && reviewItem?.decisionSummary
+        ? { replacesDecisionId: reviewItem.decisionSummary.decisionId }
+        : {}),
     });
   };
   const undoLast = () => {
@@ -1258,7 +1436,7 @@ export default function VoiceIdentityReviewPage() {
           </div>
 
           {(showNewSession || (!sessionsLoading && sessions.length === 0)) && (
-            <div className="grid gap-2 rounded-lg border border-dashed p-3 md:grid-cols-[13rem_12rem_1fr_auto]">
+            <div className="grid gap-2 rounded-lg border border-dashed p-3 md:grid-cols-[13rem_13rem_12rem_1fr_auto]">
               <label className="text-xs text-muted-foreground">
                 Candidates
                 <select
@@ -1271,6 +1449,22 @@ export default function VoiceIdentityReviewPage() {
                 >
                   <option value="reviewable">Uncertain + unclassified</option>
                   <option value="auto_matched">Audit automatic matches</option>
+                </select>
+              </label>
+              <label className="text-xs text-muted-foreground">
+                Audio quality
+                <select
+                  className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                  value={newQualityMode}
+                  onChange={(event) =>
+                    setNewQualityMode(
+                      event.target.value as typeof newQualityMode,
+                    )}
+                >
+                  <option value="clean">
+                    Clear speech · ≥1s · deduplicate
+                  </option>
+                  <option value="all">All fragments · diagnostic</option>
                 </select>
               </label>
               <label className="text-xs text-muted-foreground">
@@ -1362,6 +1556,13 @@ export default function VoiceIdentityReviewPage() {
                 </span>
                 <span>{reviewSession.loadedCount} items in this window</span>
                 <span>{reviewSession.groups.length} playback groups</span>
+                {reviewSession.qualityStats && (
+                  <span>
+                    Quality filter hid{" "}
+                    {reviewSession.qualityStats.shortExcluded} short ·{" "}
+                    {reviewSession.qualityStats.duplicateExcluded} overlapping
+                  </span>
+                )}
                 <span>
                   Backlog estimate:{" "}
                   {reviewSession.backlogEstimateCapped ? "at least " : ""}
@@ -1379,6 +1580,13 @@ export default function VoiceIdentityReviewPage() {
                 for noise, humming you cannot identify, clipped speech, or two
                 overlapping voices. Skipped audio is saved in the session but
                 excluded from calibration.
+                {!reviewSession.querySnapshot?.quality && (
+                  <>
+                    {" "}This older session predates automatic quality
+                    filtering; use the Short filter or start a new clean-speech
+                    session.
+                  </>
+                )}
               </div>
               {windowItems.every((item) => item.status !== "pending") &&
                 reviewSession.status === "active" && (
@@ -1438,25 +1646,28 @@ export default function VoiceIdentityReviewPage() {
                   sessionTotal={reviewSession.sessionLoadedCount ??
                     reviewSession.loadedCount}
                   pending={reviewPending || decisionSegmentIds.length === 0 ||
-                    reviewSession.status !== "active"}
+                    (reviewSession.status !== "active" && !editingSegmentId) ||
+                    Boolean(historyEditingItem)}
                   autoPlayNext={autoPlayNext}
                   playOnMount={playOnMount}
                   canPrevious={!editingSegmentId && activeIndex > 0}
                   canNext={!editingSegmentId &&
                     activeIndex < windowItems.length - 1}
                   canUndo={history.length > 0}
-                  canEdit={reviewItem?.status === "reviewed" &&
-                    Boolean(reviewItem.decisionSummary) && !editingSegmentId}
+                  canEdit={Boolean(reviewItem) &&
+                    ["reviewed", "skipped"].includes(reviewItem.status) &&
+                    !editingSegmentId}
                   editingLabel={editingSegmentId
-                    ? reviewItem?.decisionSummary?.profileName ?? "Not Sky"
+                    ? reviewItem?.status === "skipped"
+                      ? "Skipped"
+                      : reviewItem?.decisionSummary?.profileName ?? "Not Sky"
                     : null}
                   alternateProfiles={alternateProfiles}
                   creatingProfile={createReviewProfile.isPending}
                   onDecision={(state) => {
                     if (reviewPending) return;
                     if (state === "skip") {
-                      if (editingSegmentId) cancelEdit();
-                      else skipActive();
+                      skipCurrent();
                     } else if (state === "me") {
                       if (reviewProfileId) {
                         saveAssignment({
@@ -1512,11 +1723,56 @@ export default function VoiceIdentityReviewPage() {
                   onAutoPlayChange={setAutoPlayPreference}
                 />
               )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">
+                    Current window · all {windowItems.length} items
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Edit works for labels and skips. Previous windows are in
+                    Reviewed history below.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    className="h-9 rounded-md border bg-background px-2 text-sm"
+                    value={sessionItemFilter}
+                    onChange={(event) =>
+                      setSessionItemFilter(
+                        event.target.value as typeof sessionItemFilter,
+                      )}
+                    aria-label="Filter current review items"
+                  >
+                    <option value="all">All items</option>
+                    <option value="pending">Remaining</option>
+                    <option value="reviewed">Labeled</option>
+                    <option value="skipped">Skipped</option>
+                    <option value="short">Shorter than 1 second</option>
+                  </select>
+                  {pendingShortIds.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reviewPending}
+                      onClick={() =>
+                        skipDecision.mutate({
+                          segmentIds: pendingShortIds,
+                        })}
+                    >
+                      Skip {pendingShortIds.length} short remaining
+                    </Button>
+                  )}
+                </div>
+              </div>
               <div
                 className="max-h-[28rem] overflow-y-auto rounded-lg border"
                 aria-label="Review session items"
               >
-                {windowItems.map((item, index) => {
+                {visibleWindowItems.map((item) => {
+                  const index = windowItems.findIndex((candidate) =>
+                    normalizeObjectId(candidate.segmentId) ===
+                      normalizeObjectId(item.segmentId)
+                  );
                   const id = normalizeObjectId(item.segmentId) ?? "";
                   const segment = segmentById.get(id);
                   if (!segment) return null;
@@ -1603,6 +1859,11 @@ export default function VoiceIdentityReviewPage() {
                             {duration < 1
                               ? " · very short; skip if unclear/noise"
                               : ""}
+                            {item.quality?.duplicateCount
+                              ? ` · ${item.quality.duplicateCount} overlapping duplicate${
+                                item.quality.duplicateCount === 1 ? "" : "s"
+                              } hidden`
+                              : ""}
                           </span>
                           <span
                             className={item.decisionSummary
@@ -1622,8 +1883,7 @@ export default function VoiceIdentityReviewPage() {
                           variant="ghost"
                           className="mr-2 h-8"
                           aria-label={`Edit segment ${index + 1}`}
-                          disabled={item.status !== "reviewed" ||
-                            !item.decisionSummary || reviewPending}
+                          disabled={item.status === "pending" || reviewPending}
                           onClick={() => beginEdit(item)}
                         >
                           Edit
@@ -1632,9 +1892,223 @@ export default function VoiceIdentityReviewPage() {
                     </div>
                   );
                 })}
+                {visibleWindowItems.length === 0 && (
+                  <div className="p-6 text-center text-sm text-muted-foreground">
+                    No items match this filter.
+                  </div>
+                )}
               </div>
             </>
           )}
+          <div className="rounded-lg border">
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3">
+              <div>
+                <p className="text-sm font-medium">
+                  Reviewed history · all saved sessions
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Reopen any previous answer, listen again, and change the
+                  speaker or mark it as noise.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setShowReviewHistory((value) => !value);
+                  setHistoryEditingItem(null);
+                  useAudioPlaybackStore.getState().stopActive();
+                }}
+              >
+                {showReviewHistory ? "Hide history" : "Open history"}
+              </Button>
+            </div>
+            {showReviewHistory && (
+              <div className="space-y-3 border-t p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <select
+                    className="h-9 rounded-md border bg-background px-2 text-sm"
+                    value={historyFilter}
+                    onChange={(event) =>
+                      setHistoryFilter(
+                        event.target.value as typeof historyFilter,
+                      )}
+                    aria-label="Filter reviewed history"
+                  >
+                    <option value="all">All previous answers</option>
+                    <option value="assigned">Speaker labels</option>
+                    <option value="skipped">Skipped / noise</option>
+                  </select>
+                  <span className="text-xs text-muted-foreground">
+                    {reviewHistoryFetching
+                      ? "Refreshing…"
+                      : visibleReviewHistory.length + " recent segments"}
+                  </span>
+                </div>
+                {reviewHistoryLoading && (
+                  <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading review history…
+                  </div>
+                )}
+                {historyEditingItem && (
+                  <VoiceIdentityReviewPlayer
+                    key={"history-" + historyEditingItem.decisionId}
+                    segment={historyEditingItem.segment}
+                    profileName={reviewProfile?.name ?? "target profile"}
+                    position={1}
+                    remaining={0}
+                    sessionAnswered={1}
+                    sessionTotal={1}
+                    pending={reviseHistory.isPending ||
+                      createReviewProfile.isPending}
+                    autoPlayNext={false}
+                    playOnMount={false}
+                    canPrevious={false}
+                    canNext={false}
+                    canUndo={false}
+                    canEdit={false}
+                    editingLabel={reviewHistoryLabel(historyEditingItem)}
+                    alternateProfiles={alternateProfiles}
+                    creatingProfile={createReviewProfile.isPending}
+                    onDecision={(state) => {
+                      if (!reviewProfileId) return;
+                      if (state === "skip") {
+                        reviseHistory.mutate({
+                          item: historyEditingItem,
+                          outcome: "skipped",
+                        });
+                      } else if (state === "me") {
+                        reviseHistory.mutate({
+                          item: historyEditingItem,
+                          outcome: "assigned",
+                          assignedProfileId: reviewProfileId,
+                        });
+                      } else {
+                        reviseHistory.mutate({
+                          item: historyEditingItem,
+                          outcome: "assigned",
+                          excludedProfileIds: [reviewProfileId],
+                        });
+                      }
+                    }}
+                    onAssignProfile={(assignedProfileId) => {
+                      if (!reviewProfileId) return;
+                      reviseHistory.mutate({
+                        item: historyEditingItem,
+                        outcome: "assigned",
+                        assignedProfileId,
+                        excludedProfileIds: [reviewProfileId],
+                      });
+                    }}
+                    onCreateProfile={async (name) => {
+                      if (!reviewProfileId) return;
+                      const segmentId = normalizeObjectId(
+                        historyEditingItem.segment._id,
+                      );
+                      if (!segmentId) throw new Error("Segment is unavailable");
+                      const profile = await createReviewProfile.mutateAsync({
+                        name,
+                        segmentIds: [segmentId],
+                      });
+                      const assignedProfileId = normalizeObjectId(profile._id);
+                      if (!assignedProfileId) {
+                        throw new Error("New speaker profile has no valid ID");
+                      }
+                      await reviseHistory.mutateAsync({
+                        item: historyEditingItem,
+                        outcome: "assigned",
+                        assignedProfileId,
+                        excludedProfileIds: [reviewProfileId],
+                      });
+                    }}
+                    onPrevious={() => {}}
+                    onNext={() => {}}
+                    onUndo={() => {}}
+                    onEdit={() => {}}
+                    onCancelEdit={() => {
+                      useAudioPlaybackStore.getState().stopActive();
+                      setHistoryEditingItem(null);
+                    }}
+                    onAutoPlayChange={() => {}}
+                  />
+                )}
+                {!reviewHistoryLoading && (
+                  <div
+                    className="max-h-[24rem] overflow-y-auto rounded-md border"
+                    aria-label="Reviewed history items"
+                  >
+                    {visibleReviewHistory.map((item) => {
+                      const duration = Math.max(
+                        0,
+                        (new Date(item.segment.end).getTime() -
+                          new Date(item.segment.start).getTime()) / 1_000,
+                      );
+                      const startMs = new Date(item.segment.start).getTime();
+                      const endMs = new Date(item.segment.end).getTime();
+                      return (
+                        <div
+                          key={item.decisionId + "-" +
+                            normalizeObjectId(item.segment._id)}
+                          className="grid min-w-[46rem] grid-cols-[10rem_4rem_minmax(8rem,1fr)_10rem_auto_auto] items-center gap-2 border-b px-3 py-2 text-xs last:border-b-0"
+                        >
+                          <span>
+                            {new Date(item.segment.start).toLocaleString()}
+                          </span>
+                          <span
+                            className={duration < 1
+                              ? "font-medium text-amber-600"
+                              : ""}
+                          >
+                            {duration.toFixed(1)}s
+                          </span>
+                          <span className="truncate text-muted-foreground">
+                            {item.sessionName} ·{" "}
+                            {item.segment.speaker ?? "speaker unknown"}
+                          </span>
+                          <span
+                            className={item.outcome === "skipped"
+                              ? "text-amber-600"
+                              : "font-medium text-green-600"}
+                          >
+                            {reviewHistoryLabel(item)}
+                          </span>
+                          <Link
+                            className="text-primary hover:underline"
+                            to={"/timeline?start=" + (startMs - 5_000) +
+                              "&end=" + (endMs + 5_000)}
+                          >
+                            Timeline
+                          </Link>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              useAudioPlaybackStore.getState().stopActive();
+                              setHistoryEditingItem(item);
+                            }}
+                          >
+                            Listen / edit
+                          </Button>
+                        </div>
+                      );
+                    })}
+                    {visibleReviewHistory.length === 0 && (
+                      <div className="p-6 text-center text-sm text-muted-foreground">
+                        No saved answers match this filter.
+                      </div>
+                    )}
+                  </div>
+                )}
+                {reviewHistory?.hasMore && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing the 200 most recent current answers. Older answers
+                    remain stored.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
       <Card ref={calibrationSectionRef}>

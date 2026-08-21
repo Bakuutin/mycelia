@@ -48,8 +48,14 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
 
 1. `/settings/voice-identity`: re-enroll Sky from all saved samples.
 2. Create an **Uncertain + unclassified** review session. Its 100-item windows
-   are stratified across source recordings. Label at least 100 compatible pilot
-   segments (40 Sky, 40 not-Sky, plus borderline/mixed).
+   are stratified across source recordings. Keep the default **Clear speech ·
+   ≥1s · deduplicate** quality filter; use **All fragments** only to diagnose
+   raw diarization. Label at least 100 compatible pilot segments (40 Sky, 40
+   not-Sky, plus borderline/mixed).
+   - Use **Skip** for noise, clipped/ambiguous speech and overlapping speakers.
+   - Use **Edit** to change any saved label or Skip.
+   - Use **Reviewed history** to reopen answers from older windows/sessions and
+     listen, correct the speaker, or replace the label with Skip.
 3. Save validated thresholds. The server accepts only the selected Fit/Check
    recording IDs and recomputes thresholds and metrics itself. Only
    `server-computed-v1` records with at least 98% independent Check precision
