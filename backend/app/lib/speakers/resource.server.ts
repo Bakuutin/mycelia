@@ -40,6 +40,93 @@ import {
 const objectId = z.string().refine(ObjectId.isValid, "Invalid ObjectId");
 const range = { start: zDateOrString(), end: zDateOrString() };
 const profileName = z.string().trim().min(1).max(120);
+const SPEAKER_REVIEW_SOURCE_INDEX = "speaker_review_source_scan";
+const SPEAKER_REVIEW_RANGE_INDEX = "speaker_review_range_scan";
+const uniqueReviewStrings = (maximum: number) =>
+  z.array(z.string().trim().min(1).max(256)).max(maximum).transform((
+    values,
+  ) => [...new Set(values)]);
+const uniqueReviewObjectIds = (maximum: number) =>
+  z.array(objectId).max(maximum).transform((values) => [...new Set(values)]);
+const reviewSourceShape = {
+  targetProfileIds: z.array(objectId).length(1),
+  sourceMode: z.enum([
+    "all_matching",
+    "selected_recordings",
+    "timeline_range",
+    "diarization_generation",
+  ]).default("all_matching"),
+  embeddingSpaceIds: uniqueReviewStrings(1).default([]),
+  runIds: uniqueReviewStrings(1).default([]),
+  recordingIds: uniqueReviewObjectIds(500).default([]),
+  rangeMode: z.enum(["fixed", "all_before"]).default("fixed"),
+  candidateMode: z.enum(["reviewable", "auto_matched"]).default(
+    "reviewable",
+  ),
+  quality: z.object({
+    minDurationSeconds: z.number().min(0).max(10).default(1),
+    deduplicateOverlaps: z.boolean().default(true),
+  }).default({ minDurationSeconds: 1, deduplicateOverlaps: true }),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
+};
+
+function validateReviewSource(
+  value: {
+    sourceMode:
+      | "all_matching"
+      | "selected_recordings"
+      | "timeline_range"
+      | "diarization_generation";
+    rangeMode: "fixed" | "all_before";
+    start?: Date | string;
+    end?: Date | string;
+    runIds: string[];
+    recordingIds: string[];
+  },
+  context: z.RefinementCtx,
+  options: { allowEmptySelectedRecordings: boolean },
+) {
+  const issue = (path: string, message: string) =>
+    context.addIssue({ code: "custom", path: [path], message });
+  if (value.rangeMode === "fixed" && !(value.start && value.end)) {
+    issue("rangeMode", "A fixed review source requires start and end");
+  }
+  if (value.sourceMode === "diarization_generation") {
+    if (value.runIds.length !== 1) {
+      issue("runIds", "Choose exactly one diarization generation");
+    }
+    if (value.recordingIds.length > 0) {
+      issue(
+        "recordingIds",
+        "A diarization generation cannot also select recordings",
+      );
+    }
+    return;
+  }
+  if (value.runIds.length > 0) {
+    issue("runIds", "Only a diarization-generation source may select a run");
+  }
+  if (value.sourceMode === "selected_recordings") {
+    if (
+      !options.allowEmptySelectedRecordings && value.recordingIds.length === 0
+    ) {
+      issue("recordingIds", "Select at least one recording");
+    }
+    return;
+  }
+  if (value.recordingIds.length > 0) {
+    issue(
+      "recordingIds",
+      "Only a selected-recordings source may include recording IDs",
+    );
+  }
+  if (
+    value.sourceMode === "timeline_range" && value.rangeMode !== "fixed"
+  ) {
+    issue("rangeMode", "A Timeline source requires a fixed range");
+  }
+}
 const PROFILE_COLORS = [
   "#3b82f6",
   "#ef4444",
@@ -102,21 +189,18 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("delete-annotation"), id: objectId }),
   z.object({
+    action: z.literal("preview-review-session"),
+    ...reviewSourceShape,
+    previewLimit: z.number().int().min(1).max(10).default(5),
+  }).superRefine((value, context) =>
+    validateReviewSource(value, context, {
+      allowEmptySelectedRecordings: true,
+    })
+  ),
+  z.object({
     action: z.literal("create-review-session"),
     name: z.string().max(120).optional(),
-    targetProfileIds: z.array(objectId).min(1),
-    embeddingSpaceIds: z.array(z.string().min(1)).default([]),
-    runIds: z.array(z.string().min(1)).default([]),
-    rangeMode: z.enum(["fixed", "all_before"]).default("fixed"),
-    candidateMode: z.enum(["reviewable", "auto_matched"]).default(
-      "reviewable",
-    ),
-    quality: z.object({
-      minDurationSeconds: z.number().min(0).max(10).default(1),
-      deduplicateOverlaps: z.boolean().default(true),
-    }).default({ minDurationSeconds: 1, deduplicateOverlaps: true }),
-    start: zDateOrString().optional(),
-    end: zDateOrString().optional(),
+    ...reviewSourceShape,
     limit: z.number().int().min(1).max(100).default(10),
     preferences: z.object({
       autoPlay: z.boolean().default(true),
@@ -129,10 +213,10 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
       groupMode: true,
       compactMode: true,
     }),
-  }).refine(
-    (value) =>
-      value.rangeMode === "all_before" || Boolean(value.start && value.end),
-    "A fixed review session requires start and end",
+  }).superRefine((value, context) =>
+    validateReviewSource(value, context, {
+      allowEmptySelectedRecordings: false,
+    })
   ),
   z.object({
     action: z.literal("list-review-sessions"),
@@ -366,34 +450,190 @@ async function assertProfileNameAvailable(mongo: any, name: string) {
   }
 }
 
-async function findReviewCandidates(
+type ReviewAutomaticIdentityContext = {
+  calibrationId: string;
+  profileRevision: number;
+  embeddingSpaceId: string;
+};
+
+type ResolvedReviewCandidateContext = {
+  embeddingSpaceIds: string[];
+  automaticIdentity: ReviewAutomaticIdentityContext | null;
+};
+
+export async function resolveReviewCandidateContext(
   mongo: any,
-  start: Date,
-  end: Date,
-  limit: number,
-  candidateMode: "reviewable" | "auto_matched" = "reviewable",
+  targetProfileId: string,
+  requested: string[],
+  options: {
+    sourceMode:
+      | "all_matching"
+      | "selected_recordings"
+      | "timeline_range"
+      | "diarization_generation";
+    runIds: string[];
+    candidateMode: "reviewable" | "auto_matched";
+  },
+): Promise<ResolvedReviewCandidateContext> {
+  const profile = await mongo({
+    action: "findOne",
+    collection: "speaker_profiles",
+    query: { _id: new ObjectId(targetProfileId) },
+    options: { projection: { name: 1, revision: 1, embeddingSpaceId: 1 } },
+  }) as any;
+  if (!profile) throw new Error("Review target profile not found");
+  const profileSpace = String(profile.embeddingSpaceId ?? "").trim();
+  if (!profileSpace || ["unknown", "legacy-unknown"].includes(profileSpace)) {
+    throw new Error(
+      (profile.name ?? "Voice profile") +
+        " must be re-enrolled before scoped review",
+    );
+  }
+  if (requested.length > 0 && !requested.includes(profileSpace)) {
+    throw new Error(
+      "Review embedding space does not match " +
+        (profile.name ?? "the target profile"),
+    );
+  }
+  if (options.runIds.length > 0) {
+    const run = await mongo({
+      action: "findOne",
+      collection: "diarization_runs",
+      query: { runId: options.runIds[0] },
+      options: {
+        projection: { runId: 1, status: 1, embeddingSpaceId: 1 },
+      },
+    }) as any;
+    if (!run || run.status !== "active") {
+      throw new Error("The selected diarization generation is not active");
+    }
+    if (run.embeddingSpaceId !== profileSpace) {
+      throw new Error(
+        "The selected diarization generation uses a different embedding space",
+      );
+    }
+  }
+  let automaticIdentity: ReviewAutomaticIdentityContext | null = null;
+  if (options.candidateMode === "auto_matched") {
+    const calibrations = await mongo({
+      action: "find",
+      collection: "speaker_calibrations",
+      query: { profileId: targetProfileId },
+      options: { sort: { createdAt: -1 }, limit: 20 },
+    }) as any[];
+    const profileRevision = Number(profile.revision ?? 1);
+    const calibration = findUsableCalibration(calibrations, {
+      profileId: targetProfileId,
+      profileRevision,
+      embeddingSpaceId: profileSpace,
+    });
+    if (!calibration) {
+      throw new Error(
+        "Audit automatic matches requires a current server-validated calibration",
+      );
+    }
+    automaticIdentity = {
+      calibrationId: String(calibration.calibrationId),
+      profileRevision,
+      embeddingSpaceId: profileSpace,
+    };
+  }
+  return { embeddingSpaceIds: [profileSpace], automaticIdentity };
+}
+
+type ReviewCandidateScope = {
+  embeddingSpaceIds?: string[];
+  runIds?: string[];
+  recordingIds?: string[];
+};
+
+function safeObjectIdValues(ids: string[]): Array<string | ObjectId> {
+  return [...new Set(ids)].filter(ObjectId.isValid).flatMap((id) => [
+    id,
+    new ObjectId(id),
+  ]);
+}
+
+function buildReviewIdentityFilter(
+  candidateMode: "reviewable" | "auto_matched",
   targetProfileId?: string,
-  cursor?: { start: Date | string; segmentId: string } | null,
-): Promise<any[]> {
-  const profileValues = targetProfileId
+  automaticIdentity?: ReviewAutomaticIdentityContext | null,
+): Record<string, unknown> {
+  const profileValues = targetProfileId && ObjectId.isValid(targetProfileId)
     ? [targetProfileId, new ObjectId(targetProfileId)]
     : [];
-  const identityFilter = candidateMode === "auto_matched"
-    ? {
+  if (candidateMode === "auto_matched") {
+    if (!automaticIdentity || profileValues.length === 0) {
+      throw new Error(
+        "Audit automatic matches requires a current identity calibration",
+      );
+    }
+    return {
       "speakerIdentity.state": "matched",
+      "speakerIdentity.calibrationId": automaticIdentity.calibrationId,
+      "speakerIdentity.profileRevision": automaticIdentity.profileRevision,
+      "speakerIdentity.embeddingSpaceId": automaticIdentity.embeddingSpaceId,
+      "speakerIdentity.source": "automatic",
+      "speakerIdentity.validity": "verified",
       $or: [
         { "speakerIdentity.profileId": { $in: profileValues } },
         { "speakerIdentity.topCandidate.profileId": { $in: profileValues } },
-        { "matched_speaker.profile_id": { $in: profileValues } },
-      ],
-    }
-    : {
-      $or: [
-        { "speakerIdentity.state": "uncertain" },
-        { speakerIdentity: { $exists: false } },
-        { "speakerIdentity.identityState": { $exists: false } },
       ],
     };
+  }
+  return {
+    $or: [
+      { "speakerIdentity.state": "uncertain" },
+      { "speakerIdentity.identityState": "unclassified" },
+      { speakerIdentity: { $exists: false } },
+      { "speakerIdentity.identityState": { $exists: false } },
+    ],
+  };
+}
+
+function buildStoredReviewScopeQuery(
+  scope: ReviewCandidateScope,
+  candidateMode: "reviewable" | "auto_matched",
+  targetProfileId?: string,
+  automaticIdentity?: ReviewAutomaticIdentityContext | null,
+): Record<string, unknown> {
+  const query: Record<string, unknown> = { lifecycleStatus: "active" };
+  if (scope.embeddingSpaceIds?.length) {
+    query.embeddingSpaceId = { $in: scope.embeddingSpaceIds };
+  }
+  if (scope.runIds?.length) query.runId = { $in: scope.runIds };
+  if (scope.recordingIds?.length) {
+    const recordingValues = safeObjectIdValues(scope.recordingIds);
+    if (recordingValues.length === 0) return { _id: { $exists: false } };
+    query.$or = [
+      { original_id: { $in: recordingValues } },
+      { original: { $in: recordingValues } },
+    ];
+  }
+  query.$and = [
+    buildReviewIdentityFilter(
+      candidateMode,
+      targetProfileId,
+      automaticIdentity,
+    ),
+  ];
+  return query;
+}
+
+export function buildReviewCandidateQuery(
+  start: Date,
+  end: Date,
+  candidateMode: "reviewable" | "auto_matched" = "reviewable",
+  targetProfileId?: string,
+  cursor?: { start: Date | string; segmentId: string } | null,
+  scope: ReviewCandidateScope = {},
+  automaticIdentity?: ReviewAutomaticIdentityContext | null,
+): Record<string, unknown> {
+  const identityFilter = buildReviewIdentityFilter(
+    candidateMode,
+    targetProfileId,
+    automaticIdentity,
+  );
   const cursorFilter = cursor
     ? {
       $or: [
@@ -405,29 +645,89 @@ async function findReviewCandidates(
       ],
     }
     : null;
-  const candidates = await mongo({
+  const scopedConditions: Record<string, unknown>[] = [identityFilter];
+  if (cursorFilter) scopedConditions.push(cursorFilter);
+  if (scope.embeddingSpaceIds?.length) {
+    scopedConditions.push({
+      embeddingSpaceId: { $in: scope.embeddingSpaceIds },
+    });
+  }
+  if (scope.runIds?.length) {
+    scopedConditions.push({ runId: { $in: scope.runIds } });
+  }
+  if (scope.recordingIds?.length) {
+    const recordingValues = safeObjectIdValues(scope.recordingIds);
+    if (recordingValues.length === 0) {
+      scopedConditions.push({ _id: { $exists: false } });
+    } else {
+      scopedConditions.push({
+        $or: [
+          { original_id: { $in: recordingValues } },
+          { original: { $in: recordingValues } },
+        ],
+      });
+    }
+  }
+  return {
+    lifecycleStatus: "active",
+    start: { $lt: end },
+    end: { $gt: start },
+    $and: scopedConditions,
+  };
+}
+
+async function findReviewCandidates(
+  mongo: any,
+  start: Date,
+  end: Date,
+  limit: number,
+  candidateMode: "reviewable" | "auto_matched" = "reviewable",
+  targetProfileId?: string,
+  cursor?: { start: Date | string; segmentId: string } | null,
+  scope: ReviewCandidateScope = {},
+  automaticIdentity?: ReviewAutomaticIdentityContext | null,
+): Promise<ReviewCandidateScan> {
+  const scanLimit = Math.min(Math.max(limit, 1), 5_000);
+  const scanHint = scope.runIds?.length
+    ? "speaker_identity_campaign_scan"
+    : scope.recordingIds?.length
+    ? undefined
+    : start.getTime() > 0
+    ? SPEAKER_REVIEW_RANGE_INDEX
+    : SPEAKER_REVIEW_SOURCE_INDEX;
+  const rawCandidates = await mongo({
     action: "find",
     collection: "diarizations",
-    query: {
-      lifecycleStatus: "active",
-      start: { $lt: end },
-      end: { $gt: start },
-      $and: cursorFilter ? [identityFilter, cursorFilter] : [identityFilter],
-    },
+    query: buildReviewCandidateQuery(
+      start,
+      end,
+      candidateMode,
+      targetProfileId,
+      cursor,
+      scope,
+      automaticIdentity,
+    ),
     options: {
       sort: { start: 1, _id: 1 },
-      limit: Math.min(Math.max(limit, 1), 5_000),
+      limit: scanLimit,
       projection: { embedding: 0 },
+      ...(scanHint ? { hint: scanHint } : {}),
+      maxTimeMS: 15_000,
     },
   }) as any[];
-  const candidateIds = candidates.map((segment) => segment._id);
-  if (candidateIds.length === 0) return [];
+  const scan = buildReviewScanMetadata(rawCandidates, scanLimit);
+  const candidateIds = rawCandidates.map((segment) => segment._id);
+  if (candidateIds.length === 0) return { ...scan, candidates: [] };
   const [annotations, skippedDecisions] = await Promise.all([
     mongo({
       action: "find",
       collection: "speaker_annotations",
       query: { segmentId: { $in: candidateIds } },
-      options: { projection: { segmentId: 1 }, limit: candidateIds.length },
+      options: {
+        projection: { segmentId: 1 },
+        limit: candidateIds.length,
+        maxTimeMS: 10_000,
+      },
     }),
     targetProfileId
       ? mongo({
@@ -442,6 +742,7 @@ async function findReviewCandidates(
         options: {
           projection: { segmentIds: 1 },
           limit: candidateIds.length,
+          maxTimeMS: 10_000,
         },
       })
       : Promise.resolve([]),
@@ -452,7 +753,33 @@ async function findReviewCandidates(
       (decision.segmentIds ?? []).map(String)
     ),
   ]);
-  return candidates.filter((segment) => !excluded.has(String(segment._id)));
+  return {
+    ...scan,
+    candidates: rawCandidates.filter((segment) =>
+      !excluded.has(String(segment._id))
+    ),
+  };
+}
+
+type ReviewCandidateScan = {
+  candidates: any[];
+  rawScannedCount: number;
+  capped: boolean;
+  nextCursor: { start: Date | string; segmentId: string } | null;
+};
+
+export function buildReviewScanMetadata(
+  rawCandidates: any[],
+  scanLimit: number,
+): Omit<ReviewCandidateScan, "candidates"> {
+  const last = rawCandidates.at(-1);
+  return {
+    rawScannedCount: rawCandidates.length,
+    capped: rawCandidates.length >= scanLimit,
+    nextCursor: last
+      ? { start: last.start, segmentId: String(last._id) }
+      : null,
+  };
 }
 
 export function stratifyReviewCandidates(
@@ -492,6 +819,9 @@ async function loadBufferedReviewCandidates(
   mongo: any,
   ids: unknown[],
   targetProfileId?: string,
+  scope: ReviewCandidateScope = {},
+  candidateMode: "reviewable" | "auto_matched" = "reviewable",
+  automaticIdentity?: ReviewAutomaticIdentityContext | null,
 ): Promise<any[]> {
   const objectIds = ids.map(String).filter(ObjectId.isValid).map((id) =>
     new ObjectId(id)
@@ -500,7 +830,15 @@ async function loadBufferedReviewCandidates(
   const candidates = await mongo({
     action: "find",
     collection: "diarizations",
-    query: { _id: { $in: objectIds }, lifecycleStatus: "active" },
+    query: {
+      _id: { $in: objectIds },
+      ...buildStoredReviewScopeQuery(
+        scope,
+        candidateMode,
+        targetProfileId,
+        automaticIdentity,
+      ),
+    },
     options: { projection: { embedding: 0 }, limit: objectIds.length },
   }) as any[];
   const [annotations, skippedDecisions] = await Promise.all([
@@ -1390,6 +1728,148 @@ export class SpeakerSegmentsResource
           collection: "speaker_annotations",
           query: { _id: new ObjectId(input.id) },
         });
+      case "preview-review-session": {
+        const now = new Date();
+        const snapshotStart = input.rangeMode === "all_before"
+          ? new Date(0)
+          : new Date(input.start!);
+        const requestedEnd = input.rangeMode === "all_before"
+          ? now
+          : new Date(input.end!);
+        const snapshotEnd = requestedEnd > now ? now : requestedEnd;
+        if (!(snapshotStart < snapshotEnd)) {
+          throw new Error("Review range must end after it starts");
+        }
+        const resolvedContext = await resolveReviewCandidateContext(
+          mongo,
+          input.targetProfileIds[0],
+          input.embeddingSpaceIds,
+          {
+            sourceMode: input.sourceMode,
+            runIds: input.runIds,
+            candidateMode: input.candidateMode,
+          },
+        );
+        const embeddingSpaceIds = resolvedContext.embeddingSpaceIds;
+        const scope = {
+          embeddingSpaceIds,
+          runIds: input.runIds,
+          recordingIds: input.recordingIds,
+        };
+        const candidateScan = await findReviewCandidates(
+          mongo,
+          snapshotStart,
+          snapshotEnd,
+          5_000,
+          input.candidateMode,
+          input.targetProfileIds[0],
+          null,
+          scope,
+          resolvedContext.automaticIdentity,
+        );
+        const prepared = prepareReviewCandidates(
+          candidateScan.candidates,
+          input.quality,
+        );
+        const { selected: sampleSegments } = stratifyReviewCandidates(
+          prepared.candidates,
+          input.previewLimit,
+        );
+        const recordingMap = new Map<string, {
+          id: string;
+          eligibleSegments: number;
+          start: Date;
+          end: Date;
+        }>();
+        for (const segment of prepared.candidates) {
+          const id = String(segment.original_id ?? segment.original ?? "");
+          if (!ObjectId.isValid(id)) continue;
+          const segmentStart = new Date(segment.start);
+          const segmentEnd = new Date(segment.end);
+          const current = recordingMap.get(id);
+          recordingMap.set(
+            id,
+            current
+              ? {
+                ...current,
+                eligibleSegments: current.eligibleSegments + 1,
+                start: segmentStart < current.start
+                  ? segmentStart
+                  : current.start,
+                end: segmentEnd > current.end ? segmentEnd : current.end,
+              }
+              : {
+                id,
+                eligibleSegments: 1,
+                start: segmentStart,
+                end: segmentEnd,
+              },
+          );
+        }
+        const recordingIds = [...recordingMap.keys()];
+        const sourceFiles = recordingIds.length === 0 ? [] : await mongo({
+          action: "find",
+          collection: "source_files",
+          query: {
+            _id: {
+              $in: recordingIds.map((id) => new ObjectId(id)),
+            },
+          },
+          options: {
+            projection: {
+              path: 1,
+              filename: 1,
+              name: 1,
+              start: 1,
+              updatedAt: 1,
+            },
+            limit: recordingIds.length,
+            maxTimeMS: 10_000,
+          },
+        }) as any[];
+        const sourceById = new Map(
+          sourceFiles.map((source) => [String(source._id), source]),
+        );
+        const recordings = [...recordingMap.values()].map((recording) => {
+          const source = sourceById.get(recording.id);
+          return {
+            ...recording,
+            name: source?.name ?? source?.filename ?? source?.path ?? null,
+            path: source?.path ?? null,
+          };
+        }).sort((a, b) =>
+          b.eligibleSegments - a.eligibleSegments ||
+          a.start.getTime() - b.start.getTime()
+        );
+        return {
+          sourceMode: input.sourceMode,
+          range: { start: snapshotStart, end: snapshotEnd },
+          embeddingSpaceIds,
+          runIds: input.runIds,
+          recordingIds: input.recordingIds,
+          scope: {
+            sourceMode: input.sourceMode,
+            targetProfileIds: input.targetProfileIds,
+            embeddingSpaceIds,
+            runIds: input.runIds,
+            recordingIds: input.recordingIds,
+            rangeMode: "fixed",
+            candidateMode: input.candidateMode,
+            quality: input.quality,
+            start: snapshotStart,
+            end: snapshotEnd,
+          },
+          counts: {
+            eligibleSegments: prepared.candidates.length,
+            recordings: recordings.length,
+            scannedSegments: candidateScan.rawScannedCount,
+            capped: candidateScan.capped,
+          },
+          qualityStats: prepared.stats,
+          recordings,
+          sampleSegments,
+        };
+      }
       case "create-review-session": {
         const now = new Date();
         const snapshotStart = input.rangeMode === "all_before"
@@ -1402,20 +1882,40 @@ export class SpeakerSegmentsResource
         if (!(snapshotStart < snapshotEnd)) {
           throw new Error("Review range must end after it starts");
         }
-        const candidatePool = await findReviewCandidates(
+        const resolvedContext = await resolveReviewCandidateContext(
+          mongo,
+          input.targetProfileIds[0],
+          input.embeddingSpaceIds,
+          {
+            sourceMode: input.sourceMode,
+            runIds: input.runIds,
+            candidateMode: input.candidateMode,
+          },
+        );
+        const embeddingSpaceIds = resolvedContext.embeddingSpaceIds;
+        const candidateScan = await findReviewCandidates(
           mongo,
           snapshotStart,
           snapshotEnd,
           5_000,
           input.candidateMode,
           input.targetProfileIds[0],
+          null,
+          {
+            embeddingSpaceIds,
+            runIds: input.runIds,
+            recordingIds: input.recordingIds,
+          },
+          resolvedContext.automaticIdentity,
         );
-        const prepared = prepareReviewCandidates(candidatePool, input.quality);
+        const prepared = prepareReviewCandidates(
+          candidateScan.candidates,
+          input.quality,
+        );
         const { selected: candidates, remaining } = stratifyReviewCandidates(
           prepared.candidates,
           input.limit,
         );
-        const lastScannedCandidate = candidatePool.at(-1);
         const groups = groupReviewSegments(candidates);
         const groupBySegment = new Map(
           groups.flatMap((group) =>
@@ -1432,9 +1932,11 @@ export class SpeakerSegmentsResource
           targetProfileIds: input.targetProfileIds.map((id) =>
             new ObjectId(id)
           ),
-          embeddingSpaceIds: input.embeddingSpaceIds,
+          embeddingSpaceIds,
           runIds: input.runIds,
+          recordingIds: input.recordingIds.map((id) => new ObjectId(id)),
           querySnapshot: {
+            sourceMode: input.sourceMode,
             identityState: input.candidateMode,
             candidateMode: input.candidateMode,
             rangeMode: input.rangeMode,
@@ -1443,6 +1945,10 @@ export class SpeakerSegmentsResource
             snapshotEnd,
             sort: { start: 1, _id: 1 },
             quality: input.quality,
+            embeddingSpaceIds,
+            runIds: input.runIds,
+            recordingIds: input.recordingIds.map((id) => new ObjectId(id)),
+            automaticIdentity: resolvedContext.automaticIdentity,
           },
           window: candidates.map((segment) => ({
             segmentId: segment._id,
@@ -1463,16 +1969,11 @@ export class SpeakerSegmentsResource
           windowReviewedCount: 0,
           windowSkippedCount: 0,
           backlogEstimate: prepared.candidates.length,
-          backlogEstimateCapped: candidatePool.length >= 5_000,
+          backlogEstimateCapped: candidateScan.capped,
           qualityStats: prepared.stats,
-          hasMore: remaining.length > 0 || candidatePool.length >= 5_000,
-          hasMoreBeyondCursor: candidatePool.length >= 5_000,
-          nextCursor: lastScannedCandidate
-            ? {
-              start: lastScannedCandidate.start,
-              segmentId: String(lastScannedCandidate._id),
-            }
-            : null,
+          hasMore: remaining.length > 0 || candidateScan.capped,
+          hasMoreBeyondCursor: candidateScan.capped,
+          nextCursor: candidateScan.nextCursor,
           activeSegmentId: candidates[0]?._id ?? null,
           grouping: {
             version: "nearby-speaker-v1",
@@ -1730,23 +2231,68 @@ export class SpeakerSegmentsResource
           throw new Error("Review or skip every item in this window first");
         }
         const snapshot = session.querySnapshot;
+        const targetProfileId = String(session.targetProfileIds?.[0] ?? "");
+        const candidateMode = snapshot.candidateMode ?? "reviewable";
+        const scope = {
+          embeddingSpaceIds: snapshot.embeddingSpaceIds ??
+            session.embeddingSpaceIds ?? [],
+          runIds: snapshot.runIds ?? session.runIds ?? [],
+          recordingIds: (
+            snapshot.recordingIds ?? session.recordingIds ?? []
+          ).map(String),
+        };
+        const sourceMode = snapshot.sourceMode ??
+          (scope.runIds.length > 0
+            ? "diarization_generation"
+            : scope.recordingIds.length > 0
+            ? "selected_recordings"
+            : "all_matching");
+        const resolvedContext = await resolveReviewCandidateContext(
+          mongo,
+          targetProfileId,
+          scope.embeddingSpaceIds.map(String),
+          {
+            sourceMode,
+            runIds: scope.runIds.map(String),
+            candidateMode,
+          },
+        );
+        scope.embeddingSpaceIds = resolvedContext.embeddingSpaceIds;
+        const frozenAutomaticIdentity = snapshot.automaticIdentity as
+          | ReviewAutomaticIdentityContext
+          | null
+          | undefined;
+        if (
+          frozenAutomaticIdentity &&
+          JSON.stringify(frozenAutomaticIdentity) !==
+            JSON.stringify(resolvedContext.automaticIdentity)
+        ) {
+          throw new Error(
+            "This automatic-match review session is stale; create a new session",
+          );
+        }
         const buffered = await loadBufferedReviewCandidates(
           mongo,
           session.candidateBufferIds ?? [],
-          String(session.targetProfileIds?.[0] ?? ""),
+          targetProfileId,
+          scope,
+          candidateMode,
+          resolvedContext.automaticIdentity,
         );
-        const fetched = buffered.length === 0 &&
+        const fetchedScan = buffered.length === 0 &&
             Boolean(session.hasMoreBeyondCursor ?? session.hasMore)
           ? await findReviewCandidates(
             mongo,
             new Date(snapshot.start),
             new Date(snapshot.snapshotEnd ?? snapshot.end),
             5_000,
-            snapshot.candidateMode ?? "reviewable",
-            String(session.targetProfileIds?.[0] ?? ""),
+            candidateMode,
+            targetProfileId,
             session.nextCursor,
+            scope,
+            resolvedContext.automaticIdentity,
           )
-          : [];
+          : null;
         const prepared = buffered.length > 0
           ? {
             candidates: buffered,
@@ -1758,7 +2304,7 @@ export class SpeakerSegmentsResource
             },
           }
           : prepareReviewCandidates(
-            fetched,
+            fetchedScan?.candidates ?? [],
             snapshot.quality ?? {
               minDurationSeconds: 0,
               deduplicateOverlaps: false,
@@ -1781,11 +2327,10 @@ export class SpeakerSegmentsResource
           status: "pending",
           ...(segment.reviewQuality ? { quality: segment.reviewQuality } : {}),
         }));
-        const lastScannedCandidate = fetched.at(-1);
         const hasMoreBeyondCursor = buffered.length > 0
           ? Boolean(session.hasMoreBeyondCursor ?? session.hasMore)
-          : fetched.length >= 5_000;
-        const completed = candidates.length === 0;
+          : Boolean(fetchedScan?.capped);
+        const completed = candidates.length === 0 && !hasMoreBeyondCursor;
         const result = await mongo({
           action: "updateOne",
           collection: "speaker_review_sessions",
@@ -1816,12 +2361,7 @@ export class SpeakerSegmentsResource
               },
               hasMore: remaining.length > 0 || hasMoreBeyondCursor,
               hasMoreBeyondCursor,
-              nextCursor: lastScannedCandidate
-                ? {
-                  start: lastScannedCandidate.start,
-                  segmentId: String(lastScannedCandidate._id),
-                }
-                : session.nextCursor,
+              nextCursor: fetchedScan?.nextCursor ?? session.nextCursor,
               status: completed ? "completed" : "active",
               ...(completed ? { completedAt: new Date() } : {}),
               updatedAt: new Date(),

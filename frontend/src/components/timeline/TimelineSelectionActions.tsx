@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Tooltip,
   TooltipContent,
@@ -12,6 +13,7 @@ import {
   Maximize2,
   Play,
   UserRoundPlus,
+  UsersRound,
   Wand2,
 } from "lucide-react";
 import { SummarizeDialog } from "@/components/dialogs/SummarizeDialog";
@@ -108,6 +110,25 @@ export function TimelineSelectionActions({
         startDate={startDate}
         endDate={endDate}
       />
+
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button asChild variant="outline" size="icon">
+              <Link
+                to={"/settings/voice-identity?reviewSource=timeline&newSession=1&start=" +
+                  startDate.getTime() + "&end=" + endDate.getTime()}
+              >
+                <UsersRound className="h-4 w-4" />
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Review diarized voices from this exact range</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Review voices</span>
+      </div>
 
       {isShortRange && (
         <>

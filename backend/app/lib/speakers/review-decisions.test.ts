@@ -1,5 +1,13 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@^1.0.15";
 import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "jsr:@std/assert@^1.0.15";
+import {
+  buildReviewCandidateQuery,
+  buildReviewScanMetadata,
+  resolveReviewCandidateContext,
   speakerSegmentsRequestSchema,
   stratifyReviewCandidates,
 } from "./resource.server.ts";
@@ -15,6 +23,7 @@ const sessionId = "66b000000000000000000050";
 const segmentId = "66b000000000000000000001";
 const skyProfileId = "66b000000000000000000010";
 const otherProfileId = "66b000000000000000000020";
+const recordingId = "66b000000000000000000030";
 
 Deno.test("review decision assigns another profile while excluding the calibration target", () => {
   const result = speakerSegmentsRequestSchema.safeParse({
@@ -230,6 +239,227 @@ Deno.test("review windows take candidates across recordings before repeating one
 
   assertEquals(selected.map((item) => item._id), ["a1", "b1", "c1"]);
   assertEquals(remaining.map((item) => item._id), ["a2", "a3"]);
+});
+
+Deno.test("review candidate query enforces generation, embedding space, recording, and range", () => {
+  const start = new Date("2026-08-01T00:00:00Z");
+  const end = new Date("2026-08-02T00:00:00Z");
+  const query = buildReviewCandidateQuery(
+    start,
+    end,
+    "reviewable",
+    skyProfileId,
+    null,
+    {
+      runIds: ["generation-7"],
+      embeddingSpaceIds: ["space-v2"],
+      recordingIds: [recordingId],
+    },
+  ) as any;
+
+  assertEquals(query.lifecycleStatus, "active");
+  assertEquals(query.start, { $lt: end });
+  assertEquals(query.end, { $gt: start });
+  assert(
+    query.$and.some((condition: any) =>
+      condition.runId?.$in?.includes("generation-7")
+    ),
+  );
+  assert(
+    query.$and.some((condition: any) =>
+      condition.embeddingSpaceId?.$in?.includes("space-v2")
+    ),
+  );
+  assert(
+    query.$and.some((condition: any) =>
+      condition.$or?.some((branch: any) =>
+        branch.original_id?.$in?.some((value: unknown) =>
+          String(value) === recordingId
+        )
+      )
+    ),
+  );
+  const identity = query.$and[0].$or as Array<Record<string, unknown>>;
+  assert(
+    identity.some((condition) =>
+      condition["speakerIdentity.identityState"] === "unclassified"
+    ),
+  );
+});
+
+Deno.test("review source schema keeps discovery permissive and create strict", () => {
+  const source = {
+    targetProfileIds: [skyProfileId],
+    sourceMode: "selected_recordings",
+    embeddingSpaceIds: ["space-v2"],
+    runIds: [],
+    recordingIds: [],
+    rangeMode: "fixed",
+    start: new Date("2026-08-01T00:00:00Z"),
+    end: new Date("2026-08-02T00:00:00Z"),
+  };
+  const preview = speakerSegmentsRequestSchema.safeParse({
+    action: "preview-review-session",
+    ...source,
+  });
+  const create = speakerSegmentsRequestSchema.safeParse({
+    action: "create-review-session",
+    ...source,
+  });
+
+  assert(preview.success);
+  assert(!create.success);
+
+  const selected = speakerSegmentsRequestSchema.safeParse({
+    action: "create-review-session",
+    ...source,
+    recordingIds: [recordingId, recordingId],
+  });
+  assert(selected.success);
+  if (selected.success && selected.data.action === "create-review-session") {
+    assertEquals(selected.data.recordingIds, [recordingId]);
+  }
+
+  const mixed = speakerSegmentsRequestSchema.safeParse({
+    action: "create-review-session",
+    ...source,
+    recordingIds: [recordingId],
+    runIds: ["generation-7"],
+  });
+  assert(!mixed.success);
+
+  const generationWithoutRun = speakerSegmentsRequestSchema.safeParse({
+    action: "create-review-session",
+    ...source,
+    sourceMode: "diarization_generation",
+    recordingIds: [],
+  });
+  assert(!generationWithoutRun.success);
+
+  const timelineWithoutFixedRange = speakerSegmentsRequestSchema.safeParse({
+    action: "create-review-session",
+    ...source,
+    sourceMode: "timeline_range",
+    recordingIds: [],
+    rangeMode: "all_before",
+    start: undefined,
+    end: undefined,
+  });
+  assert(!timelineWithoutFixedRange.success);
+
+  const frozenGeneration = speakerSegmentsRequestSchema.safeParse({
+    action: "create-review-session",
+    ...source,
+    sourceMode: "diarization_generation",
+    recordingIds: [],
+    runIds: ["generation-7"],
+  });
+  assert(frozenGeneration.success);
+});
+
+Deno.test("automatic-match review query is pinned to verified calibration provenance", () => {
+  const query = buildReviewCandidateQuery(
+    new Date("2026-08-01T00:00:00Z"),
+    new Date("2026-08-02T00:00:00Z"),
+    "auto_matched",
+    skyProfileId,
+    null,
+    { embeddingSpaceIds: ["space-v2"] },
+    {
+      calibrationId: "sky-r7",
+      profileRevision: 7,
+      embeddingSpaceId: "space-v2",
+    },
+  ) as any;
+  const identity = query.$and[0];
+  assertEquals(identity["speakerIdentity.calibrationId"], "sky-r7");
+  assertEquals(identity["speakerIdentity.profileRevision"], 7);
+  assertEquals(identity["speakerIdentity.embeddingSpaceId"], "space-v2");
+  assertEquals(identity["speakerIdentity.source"], "automatic");
+  assertEquals(identity["speakerIdentity.validity"], "verified");
+  assertThrows(() =>
+    buildReviewCandidateQuery(
+      new Date("2026-08-01T00:00:00Z"),
+      new Date("2026-08-02T00:00:00Z"),
+      "auto_matched",
+      skyProfileId,
+    )
+  );
+});
+
+Deno.test("review scan cursor and cap use raw candidates before exclusions", () => {
+  const raw = [
+    { _id: "raw-a", start: new Date("2026-08-01T00:00:00Z") },
+    { _id: "raw-b", start: new Date("2026-08-01T00:00:01Z") },
+  ];
+  assertEquals(buildReviewScanMetadata(raw, 2), {
+    rawScannedCount: 2,
+    capped: true,
+    nextCursor: { start: raw[1].start, segmentId: "raw-b" },
+  });
+});
+
+Deno.test("review generation resolution requires an active compatible run", async () => {
+  const requests: any[] = [];
+  const mongo = async (request: any) => {
+    requests.push(request);
+    if (request.collection === "speaker_profiles") {
+      return {
+        _id: skyProfileId,
+        name: "Sky",
+        revision: 7,
+        embeddingSpaceId: "space-v2",
+      };
+    }
+    if (request.collection === "diarization_runs") {
+      return {
+        runId: "generation-7",
+        status: "active",
+        embeddingSpaceId: "space-v2",
+      };
+    }
+    throw new Error("Unexpected Mongo request");
+  };
+  const resolved = await resolveReviewCandidateContext(
+    mongo,
+    skyProfileId,
+    ["space-v2"],
+    {
+      sourceMode: "diarization_generation",
+      runIds: ["generation-7"],
+      candidateMode: "reviewable",
+    },
+  );
+  assertEquals(resolved.embeddingSpaceIds, ["space-v2"]);
+  assert(
+    requests.some((request) => request.collection === "diarization_runs"),
+  );
+
+  await assertRejects(() =>
+    resolveReviewCandidateContext(
+      async (request: any) => {
+        if (request.collection === "speaker_profiles") {
+          return {
+            name: "Sky",
+            revision: 7,
+            embeddingSpaceId: "space-v2",
+          };
+        }
+        return {
+          runId: "generation-7",
+          status: "ready",
+          embeddingSpaceId: "space-v2",
+        };
+      },
+      skyProfileId,
+      ["space-v2"],
+      {
+        sourceMode: "diarization_generation",
+        runIds: ["generation-7"],
+        candidateMode: "reviewable",
+      },
+    )
+  );
 });
 
 Deno.test("clean review candidates exclude sub-second fragments and overlapping duplicates", () => {
