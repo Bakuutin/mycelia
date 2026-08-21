@@ -5,7 +5,13 @@ import { authenticateOr401 } from "@/lib/auth/core.server.ts";
 import { getFsResource } from "@/lib/mongo/fs.server.ts";
 
 const DEFAULT_BUCKET = "uploads";
-const ALLOWED_BUCKETS = ["uploads", "voice_samples", "location_files"];
+const ALLOWED_BUCKETS = [
+  "uploads",
+  "voice_samples",
+  "location_files",
+  "media_previews",
+  "media_originals",
+];
 
 function contentTypeForExtension(ext: string): string {
   switch (ext.toLowerCase()) {
@@ -23,6 +29,15 @@ function contentTypeForExtension(ext: string): string {
       return "audio/ogg";
     case "webm":
       return "audio/webm";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "pdf":
+      return "application/pdf";
     default:
       return "application/octet-stream";
   }
@@ -68,6 +83,9 @@ export async function apiFilesIdHandler(req: Request, res: Response) {
     const contentType = contentTypeForExtension(ext || "");
 
     res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=300");
     res.send(Buffer.from(data));
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {

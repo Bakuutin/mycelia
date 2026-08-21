@@ -42,6 +42,8 @@ import CreateJobPage from "./pages/CreateJobPage";
 import ConversationsPage from "./pages/ConversationsPage";
 import AudioPipelinePage from "./pages/AudioPipelinePage";
 import SummaryHistoryPage from "./pages/SummaryHistoryPage";
+import MediaPage from "./pages/MediaPage";
+import GoogleCloudSettingsPage from "./pages/settings/GoogleCloudSettingsPage";
 
 export const router = createBrowserRouter([
   {
@@ -145,6 +147,10 @@ export const router = createBrowserRouter([
         element: <ObjectsPage />,
       },
       {
+        path: "media",
+        element: <MediaPage />,
+      },
+      {
         path: "objects/create",
         element: <CreateObjectPage />,
       },
@@ -207,6 +213,10 @@ export const router = createBrowserRouter([
           {
             path: "maps",
             element: <MapsSettingsPage />,
+          },
+          {
+            path: "google-cloud",
+            element: <GoogleCloudSettingsPage />,
           },
           {
             path: "voice-profiles",

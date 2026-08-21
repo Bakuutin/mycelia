@@ -17,6 +17,7 @@ import { TimelineTimeZonesResource } from "@/lib/timezones/resource.server.ts";
 import { LocationResource } from "@/lib/location/resource.server.ts";
 import { SpeakerSegmentsResource } from "@/lib/speakers/resource.server.ts";
 import { ChatResource } from "@/lib/chat/resource.server.ts";
+import { MediaResource } from "@/lib/media/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -36,6 +37,7 @@ const resources = [
   LocationResource,
   SpeakerSegmentsResource,
   ChatResource,
+  MediaResource,
 ];
 
 export async function setupResources(): Promise<void> {

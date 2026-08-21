@@ -153,6 +153,49 @@ When a change is not visible:
    may have changed: `docker compose restart nginx`.
 6. Do not restart MongoDB or Redis for an application-code reload.
 
+#### Isolated Photo/PDF Knowledge development
+
+Use the media overlays when the feature must run without sharing the main
+checkout's Docker state. The overlay fixes the Compose project name to
+`mycelia-media-89da`, publishes `3211`/`4443`, removes the Mongo host port, uses
+distinct app image tags, and creates separate Mongo/Redis volumes.
+
+```bash
+cp .env.media.example .env.media.local
+# Set absolute MEDIA_SOURCE_HOST_PATH and replace development secrets.
+
+docker compose \
+  --env-file .env.media.local \
+  -f docker-compose.yml \
+  -f docker-compose.media-dev.yml \
+  up -d --build mongo redis backend frontend nginx
+```
+
+Verify the actual checkout and runtime before testing:
+
+```bash
+docker inspect mycelia-media-89da-backend-1 \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination .RW}}{{end}}'
+docker inspect mycelia-media-89da-frontend-1 \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination .RW}}{{end}}'
+
+docker compose \
+  --env-file .env.media.local \
+  -f docker-compose.yml \
+  -f docker-compose.media-dev.yml \
+  ps
+
+curl -fsS http://127.0.0.1:3211/readiness
+```
+
+The source folder must appear at `/media-source` with `RW=false`; backend must
+report `mode=dev`, frontend `mode=development`, and both must emit `[READY]`.
+Run `bash scripts/smoke-media-local.sh` to verify analyze → confirm → protected
+WebP retrieval without queueing recognition. Add `docker-compose.media-gcp.yml`
+only for the later ADC/GCP phase. Full setup and the provider-neutral
+visual-understanding/embedding contract, $1/month promo-credit guard, and
+optional OCR paths are in [docs/MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+
 #### Objects browse and Timeline density rollout
 
 The Objects page does not run MongoDB aggregation pipelines in the browser. Each

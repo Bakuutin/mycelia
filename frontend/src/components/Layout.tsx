@@ -4,6 +4,7 @@ import {
   Clock,
   FileText,
   Home,
+  Images,
   Map as MapIcon,
   MessageSquare,
   Mic,
@@ -94,6 +95,17 @@ const Layout = () => {
                   >
                     <Package className="w-4 h-4" />
                     Objects
+                  </Link>
+                  <Link
+                    to="/media"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname.startsWith("/media")
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    }`}
+                  >
+                    <Images className="w-4 h-4" />
+                    Media
                   </Link>
                   <Link
                     to="/jobs"

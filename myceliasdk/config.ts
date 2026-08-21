@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { zDateOrString, zObjectId } from "./zod-json-schema.ts";
+import { zMediaKnowledgeConfig } from "./media.ts";
 
 export const zProviderConfig = z.object({
   baseUrl: z.string().optional(),
@@ -229,6 +230,7 @@ export const zServerConfig = z.object({
   transcription: zTranscriptionProviderConfig.optional().nullable(),
   transcriptionProfiles: zTranscriptionProfilesConfig.optional().nullable(),
   diarizationProfiles: zDiarizationProfilesConfig.optional().nullable(),
+  mediaKnowledge: zMediaKnowledgeConfig.optional().nullable(),
   // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({

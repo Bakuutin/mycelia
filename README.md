@@ -46,6 +46,21 @@ your own words.
   derived from your movements; manual location assignment for ranges without
   data. See [LOCATIONS.md](docs/LOCATIONS.md) for the full manual.
 
+### Photo & PDF Knowledge
+
+- Preview-first import from a read-only mounted folder. Originals stay outside
+  Mycelia by default; the database keeps a content hash, source-relative path,
+  extracted metadata, and compact GridFS WebP previews.
+- Recognition is provider-neutral and can be queued separately from import. Its
+  primary Google preset uses multimodal Gemini Flash-Lite through Vertex AI in
+  EU for Russian structured visual descriptions and semantic search. The same
+  Open Media API contract supports a self-hosted visual model.
+- Cloud Vision labels/objects and EU OCR are optional tasks. Versioned visual
+  descriptions, embeddings, OCR pages, annotations, provenance, usage,
+  deduplication, and independent removal of previews, derived analysis, or the
+  source reference are stored separately. See
+  [MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+
 ### AI Chat
 
 - Chat with your memory using a curated tool catalogue, with Auto, No tools, and
