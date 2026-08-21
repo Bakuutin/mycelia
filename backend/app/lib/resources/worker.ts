@@ -835,6 +835,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       updatedOn: job.updatedAt?.getTime(),
       queueState,
       queuePresent: queueJob != null,
+      queueAdmission: job.queueAdmission,
       ...(modelProvenance && { modelProvenance }),
     };
   }

@@ -10,6 +10,7 @@ import { isJobRunningLocally } from "./processor.ts";
 import { canTrustMissingQueueRecords } from "./orphan-reaper.ts";
 import { releaseStaleAudioChunkClaims } from "./audio-claim-reaper.ts";
 import { releaseCompletedSummarizationClaims } from "./summarization-claim-reaper.ts";
+import { DIARIZATOR_WAITING_FOR_SLOT } from "./diarizator-admission.ts";
 
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
@@ -265,9 +266,12 @@ export class MaintenanceManager {
       collection: "jobs",
       query: {
         state: "waiting",
-        createdAt: { $lte: cutoff },
+        $or: [
+          { createdAt: { $lte: cutoff } },
+          { "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT },
+        ],
       },
-      options: { limit: 500 },
+      options: { sort: { priority: 1, createdAt: 1 }, limit: 500 },
     });
 
     if (waitingJobs.length === 0) {
@@ -313,6 +317,7 @@ export class MaintenanceManager {
           jobId,
           jobType,
           jobData: job.data,
+          priority: job.priority,
         }, auth);
       } catch (err) {
         console.warn(
@@ -331,6 +336,8 @@ export class MaintenanceManager {
           $set: {
             state: "waiting",
             requeuedAt: new Date(),
+            "queueAdmission.state": "admitted",
+            "queueAdmission.admittedAt": new Date(),
             updatedAt: new Date(),
           },
           $unset: {

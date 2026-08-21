@@ -30,6 +30,13 @@ export type JobInfo = {
   updatedOn?: number;
   queueState?: string | null;
   queuePresent?: boolean;
+  queueAdmission?: {
+    state?: "waiting_for_diarizator_slot" | "admitted";
+    reason?: string;
+    priority?: number;
+    queuedAt?: string;
+    admittedAt?: string;
+  };
   modelProvenance?: Array<{
     stage: string;
     requestedModel?: string;

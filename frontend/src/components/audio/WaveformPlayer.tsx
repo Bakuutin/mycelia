@@ -13,6 +13,50 @@ import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api";
 import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 
+type CachedWaveformAudio = {
+  arrayBuffer: ArrayBuffer;
+  contentType: string;
+};
+
+const waveformAudioCache = new Map<string, Promise<CachedWaveformAudio>>();
+const MAX_WAVEFORM_AUDIO_CACHE_ITEMS = 8;
+
+function loadWaveformAudio(
+  audioUrl: string,
+  signal?: AbortSignal,
+): Promise<CachedWaveformAudio> {
+  const cached = waveformAudioCache.get(audioUrl);
+  if (cached) return cached;
+  const request = apiClient.fetch(audioUrl, signal ? { signal } : undefined)
+    .then(async (response) => ({
+      arrayBuffer: await response.arrayBuffer(),
+      contentType: response.headers.get("content-type") || "audio/wav",
+    }));
+  // React Strict Mode intentionally aborts the first mounted effect. Do not
+  // put an abortable component request in the shared cache, otherwise its
+  // rejected promise poisons the second mount. Background preloads have no
+  // component signal and are safe to share.
+  if (signal) return request;
+  const cachedRequest = request.catch((error) => {
+    waveformAudioCache.delete(audioUrl);
+    throw error;
+  });
+  waveformAudioCache.set(audioUrl, cachedRequest);
+  while (waveformAudioCache.size > MAX_WAVEFORM_AUDIO_CACHE_ITEMS) {
+    const oldest = waveformAudioCache.keys().next().value;
+    if (typeof oldest !== "string") break;
+    waveformAudioCache.delete(oldest);
+  }
+  return cachedRequest;
+}
+
+/** Warm authenticated audio while the reviewer is still listening. */
+export function preloadWaveformAudio(audioUrl: string): void {
+  void loadWaveformAudio(audioUrl).catch(() => {
+    // The mounted player will retry and render its normal error state.
+  });
+}
+
 interface WaveformPlayerProps {
   audioUrl: string;
   duration?: number;
@@ -113,15 +157,15 @@ export const WaveformPlayer = forwardRef<
 
       try {
         // Fetch audio with auth headers
-        const response = await apiClient.fetch(audioUrl, {
-          signal: controller.signal,
-        });
-        const arrayBuffer = await response.arrayBuffer();
+        const { arrayBuffer, contentType } = await loadWaveformAudio(
+          audioUrl,
+          controller.signal,
+        );
         if (disposed) return;
 
         // Create a blob URL for the Audio element
         const blob = new Blob([arrayBuffer], {
-          type: response.headers.get("content-type") || "audio/wav",
+          type: contentType,
         });
         const blobUrl = URL.createObjectURL(blob);
         loadedBlobUrl = blobUrl;

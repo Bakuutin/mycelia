@@ -893,7 +893,10 @@ export default function JobDetailPage() {
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="outline">
-                  {job.queuePresent
+                  {job.queueAdmission?.state ===
+                      "waiting_for_diarizator_slot"
+                    ? "waiting for diarizator slot"
+                    : job.queuePresent
                     ? (job.queueState || "unknown")
                     : "not present"}
                 </Badge>
@@ -903,6 +906,14 @@ export default function JobDetailPage() {
                   </span>
                 )}
               </div>
+              {job.queueAdmission?.state ===
+                  "waiting_for_diarizator_slot" && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Priority P{job.queueAdmission.priority ?? "?"}. It will start
+                  automatically at the next safe batch boundary; no running
+                  diarization request is interrupted.
+                </p>
+              )}
             </div>
             <div>
               <div className="text-sm text-muted-foreground mb-1">Type</div>

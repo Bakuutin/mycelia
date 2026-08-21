@@ -154,7 +154,9 @@ function durationSeconds(segment: VoiceIdentityReviewSegment): number {
     : 0;
 }
 
-function buildAudioUrl(segment: VoiceIdentityReviewSegment): string | null {
+export function buildVoiceReviewAudioUrl(
+  segment: VoiceIdentityReviewSegment,
+): string | null {
   const originalId = normalizeObjectId(segment.original_id ?? segment.original);
   const start = new Date(segment.start).getTime() / 1000;
   const end = new Date(segment.end).getTime() / 1000;
@@ -204,7 +206,7 @@ export function VoiceIdentityReviewPlayer({
   const id = normalizeObjectId(segment._id);
   const originalId = normalizeObjectId(segment.original_id ?? segment.original);
   const duration = durationSeconds(segment);
-  const audioUrl = buildAudioUrl(segment);
+  const audioUrl = buildVoiceReviewAudioUrl(segment);
   const score = segment.speakerIdentity?.primaryScore;
   const hasScore = typeof score === "number" && Number.isFinite(score);
   const sessionPercent = sessionTotal > 0

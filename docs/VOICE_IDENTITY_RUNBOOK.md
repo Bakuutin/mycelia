@@ -59,7 +59,9 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
    - Assigning another speaker remembers that profile for the next segment and
      moves recently used profiles to the top of profile selectors.
    - The waveform has one global active player and a visible playhead; changing
-     the review segment stops and disposes the previous clip.
+     the review segment stops and disposes the previous clip. The next three
+     pending clips/groups are fetched into a bounded browser cache, so autoplay
+     normally starts without another audio download wait.
 3. Save validated thresholds. The server accepts only the selected Fit/Check
    recording IDs and recomputes thresholds and metrics itself. Only
    `server-computed-v1` records with at least 98% independent Check precision
@@ -71,11 +73,13 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
 6. Expand by bounded ranges. `speakerIdentity` is idempotent for run/profile
    revision/calibration and continues with a cursor.
 
-When **Save current clip as voice sample** succeeds in storing the audio but
-all diarizator slots are reserved, keep the dialog open and use **Retry profile
-update**. The stored clip is reused rather than uploaded again. If the dialog
-was closed, use **Profiles & samples → Rebuild** to combine every saved sample
-attached to that profile.
+Enrollment and profile re-enrollment share a priority admission queue with
+diarization. When all diarizator slots are busy, the job remains **Waiting for
+diarizator slot** and starts automatically at the next safe batch boundary; the
+active model request is never interrupted. Profile rebuild/enrollment runs
+before live diarization, generation builds, and historical backfill. Once the
+profile job finishes, deferred diarization is admitted automatically. Jobs and
+Job Details show the admission priority and waiting state.
 
 Absence of `speakerIdentity` means not evaluated. After evaluation, every
 eligible segment is `matched`, `rejected` or `uncertain`. Automatic decisions

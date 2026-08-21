@@ -16,6 +16,7 @@ import {
   voiceIdentityKeys,
 } from "@/lib/voiceIdentity";
 import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
+import { preloadWaveformAudio } from "@/components/audio/WaveformPlayer";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -34,6 +35,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
+  buildVoiceReviewAudioUrl,
   VoiceIdentityReviewPlayer,
   type VoiceIdentityReviewSegment,
 } from "./VoiceIdentityReviewPlayer";
@@ -1026,6 +1028,39 @@ export default function VoiceIdentityReviewPage() {
       end: activeGroup.end,
     }
     : activeSegment;
+  useEffect(() => {
+    if (!reviewSession || editingSegmentId || windowItems.length === 0) return;
+    const urls = new Set<string>();
+    for (
+      let index = activeIndex + 1;
+      index < windowItems.length && urls.size < 3;
+      index += 1
+    ) {
+      const item = windowItems[index];
+      if (item.status !== "pending") continue;
+      const segmentId = normalizeObjectId(item.segmentId);
+      const segment = segmentId ? segmentById.get(segmentId) : undefined;
+      if (!segment) continue;
+      const group = groupMode && item.groupId
+        ? reviewSession.groups.find((candidate) =>
+          candidate.groupId === item.groupId
+        )
+        : undefined;
+      const preloadSegment = group
+        ? { ...segment, start: group.start, end: group.end }
+        : segment;
+      const url = buildVoiceReviewAudioUrl(preloadSegment);
+      if (url) urls.add(url);
+    }
+    urls.forEach(preloadWaveformAudio);
+  }, [
+    activeIndex,
+    editingSegmentId,
+    groupMode,
+    reviewSession,
+    segmentById,
+    windowItems,
+  ]);
   const reviewPending = label.isPending || createReviewProfile.isPending ||
     skipDecision.isPending || undo.isPending ||
     updatePosition.isPending ||
@@ -1131,7 +1166,10 @@ export default function VoiceIdentityReviewPage() {
       });
     },
     onSuccess: () =>
-      toast.success("Sky re-enrollment queued from all saved samples"),
+      toast.success("Sky re-enrollment queued from all saved samples", {
+        description:
+          "It starts automatically at the next safe diarization batch boundary.",
+      }),
     onError: (error) =>
       toast.error(
         error instanceof Error

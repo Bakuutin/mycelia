@@ -37,6 +37,11 @@ import {
   isLlmModelAlias,
   selectLlmJobProvider,
 } from "@/lib/llm/provider-routing.ts";
+import {
+  DIARIZATOR_WAITING_FOR_SLOT,
+  getDiarizatorAdmissionPriority,
+  isDiarizatorSlotUnavailable,
+} from "./diarizator-admission.ts";
 
 const queues = new Map<string, Queue<JobData>>();
 const queueEvents = new Map<string, QueueEvents>();
@@ -366,6 +371,7 @@ export async function persistAndAddJobRecord(input: {
       type: input.parsedData.type,
       data: input.parsedData,
       state: "waiting",
+      ...(input.priority == null ? {} : { priority: input.priority }),
       attempts: 0,
       trigger: input.trigger,
       ...(input.restartedFromJobId
@@ -404,6 +410,7 @@ export async function reserveAndAddPersistedDiarizatorJob(input: {
   queue: QueuePersistence;
   jobId: string;
   jobData: JobData;
+  priority?: number;
 }, dependencies: DiarizatorRouteReservationDependencies = {}): Promise<
   Job<JobData>
 > {
@@ -436,6 +443,7 @@ export async function reserveAndAddPersistedDiarizatorJob(input: {
         queue: input.queue,
         jobId: input.jobId,
         jobData: input.jobData,
+        priority: input.priority,
         reservationSignal: signal,
       }),
   }, dependencies);
@@ -446,6 +454,7 @@ export async function requeuePersistedJob(input: {
   jobId: string;
   jobType: string;
   jobData: JobData;
+  priority?: number;
 }, authOverride?: Auth): Promise<Job<JobData>> {
   if (input.jobData.type !== input.jobType) {
     throw new Error(
@@ -475,18 +484,111 @@ export async function requeuePersistedJob(input: {
       .filter((id): id is string => Boolean(id)) ?? [],
   );
 
+  const routes = applyDiarizatorHealthConstraints(
+    resolveDiarizatorRoutes(config),
+    diarizator?.routes,
+  );
+  const savedProviderId = input.jobData.routingContext?.providerProfileId;
+  if (!savedProviderId) {
+    const mongo = await getMongoResource(auth);
+    return await reserveDiarizatorRouteAndCommit({
+      routes,
+      healthyIds,
+      commit: async (selected, _load, signal) => {
+        const snapshot = buildDiarizatorJobSnapshot(
+          {
+            providerProfileId: selected.id,
+            providerProfileName: selected.name,
+            baseUrl: selected.baseUrl,
+          },
+          input.jobData.routingContext,
+          new Date().toISOString(),
+        );
+        const routedData = jobRegistry.validateJobData({
+          ...input.jobData,
+          diarizationServerUrl: snapshot.diarizationServerUrl,
+          routingContext: snapshot.routingContext,
+        });
+        await mongo({
+          action: "updateOne",
+          collection: "jobs",
+          query: { _id: new ObjectId(input.jobId), state: "waiting" },
+          update: {
+            $set: {
+              data: routedData,
+              routingContext: snapshot.routingContext,
+              "queueAdmission.state": "admitted",
+              "queueAdmission.admittedAt": new Date(),
+              updatedAt: new Date(),
+            },
+          },
+        });
+        return await addQueueJobWithReconciliation({
+          queue,
+          jobId: input.jobId,
+          jobData: routedData,
+          priority: input.priority,
+          reservationSignal: signal,
+        });
+      },
+    });
+  }
+
   return await reserveAndAddPersistedDiarizatorJob({
-    routes: applyDiarizatorHealthConstraints(
-      resolveDiarizatorRoutes(config),
-      diarizator?.routes,
-    ),
+    routes,
     healthyIds,
     queue,
     jobId: input.jobId,
     // Preserve legacy snapshots exactly. In particular, do not inject a new
     // maxSequenceChunks value into jobs whose timeout must remain 15 minutes.
     jobData: input.jobData,
+    priority: input.priority,
   });
+}
+
+async function persistDeferredDiarizatorJob(input: {
+  mongo: MongoOperation;
+  jobId: string;
+  parsedData: JobData;
+  priority: number;
+  trigger: Record<string, unknown>;
+  requestedProviderId?: string;
+  restartedFromJobId?: string;
+  reason: string;
+}): Promise<Job<JobData>> {
+  const createdAt = new Date();
+  await input.mongo({
+    action: "insertOne",
+    collection: "jobs",
+    doc: {
+      _id: new ObjectId(input.jobId),
+      type: input.parsedData.type,
+      data: input.parsedData,
+      state: "waiting",
+      priority: input.priority,
+      attempts: 0,
+      trigger: input.trigger,
+      queueAdmission: {
+        state: DIARIZATOR_WAITING_FOR_SLOT,
+        reason: input.reason,
+        priority: input.priority,
+        requestedProviderId: input.requestedProviderId,
+        queuedAt: createdAt,
+      },
+      ...(input.restartedFromJobId
+        ? { restartedFromJobId: input.restartedFromJobId }
+        : {}),
+      createdAt,
+      updatedAt: createdAt,
+    },
+  });
+  // Callers only require the stable id/data reference. The common admission
+  // reconciler will create the real BullMQ record when a route slot is free.
+  return {
+    id: input.jobId,
+    data: input.parsedData,
+    opts: { priority: input.priority },
+  } as Job<JobData>;
 }
 
 export async function enqueueJob(
@@ -861,6 +963,9 @@ export async function enqueueJob(
     ...trigger,
     principal: auth.principal,
   };
+  const diarizatorPriority = DIARIZATION_ROUTED_JOB_TYPES.has(parsedData.type)
+    ? getDiarizatorAdmissionPriority(parsedData, options?.priority)
+    : options?.priority;
 
   const persist = (
     finalData: JobData,
@@ -871,44 +976,81 @@ export async function enqueueJob(
       queue,
       jobId,
       parsedData: finalData,
-      priority: options?.priority,
+      priority: diarizatorPriority,
       trigger: triggerWithPrincipal,
       restartedFromJobId: options?.restartedFromJobId,
       reservationSignal,
     });
 
   if (diarizatorRoutes && healthyDiarizatorIds) {
-    return await reserveDiarizatorRouteAndCommit({
-      routes: diarizatorRoutes,
-      healthyIds: healthyDiarizatorIds,
-      requestedProviderId: requestedDiarizatorProviderId,
-      commit: async (selected, load, signal) => {
-        const snapshot = buildDiarizatorJobSnapshot(
-          {
-            providerProfileId: selected.id,
-            providerProfileName: selected.name,
-            baseUrl: selected.baseUrl,
-          },
-          parsedData.routingContext,
-          new Date().toISOString(),
-        );
-        const routedData = jobRegistry.validateJobData({
-          ...parsedData,
-          diarizationServerUrl: snapshot.diarizationServerUrl,
-          routingContext: snapshot.routingContext,
-        });
-        const job = await persist(routedData, signal);
-        console.info(
-          `[queue] Reserved diarizator route ${selected.name} for job ${jobId}`,
-          {
-            providerProfileId: selected.id,
-            loadBefore: load[selected.id] ?? 0,
-            concurrency: selected.concurrency,
-          },
-        );
-        return job;
+    const priority = diarizatorPriority ?? 20;
+    const olderHigherPriority = await mongo({
+      action: "findOne",
+      collection: "jobs",
+      query: {
+        state: "waiting",
+        "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT,
+        priority: { $lte: priority },
       },
+      options: { projection: { _id: 1 }, sort: { priority: 1, createdAt: 1 } },
     });
+    if (olderHigherPriority) {
+      return await persistDeferredDiarizatorJob({
+        mongo,
+        jobId,
+        parsedData,
+        priority,
+        trigger: triggerWithPrincipal,
+        requestedProviderId: requestedDiarizatorProviderId,
+        restartedFromJobId: options?.restartedFromJobId,
+        reason: "A higher-priority diarizator job is already waiting",
+      });
+    }
+    try {
+      return await reserveDiarizatorRouteAndCommit({
+        routes: diarizatorRoutes,
+        healthyIds: healthyDiarizatorIds,
+        requestedProviderId: requestedDiarizatorProviderId,
+        commit: async (selected, load, signal) => {
+          const snapshot = buildDiarizatorJobSnapshot(
+            {
+              providerProfileId: selected.id,
+              providerProfileName: selected.name,
+              baseUrl: selected.baseUrl,
+            },
+            parsedData.routingContext,
+            new Date().toISOString(),
+          );
+          const routedData = jobRegistry.validateJobData({
+            ...parsedData,
+            diarizationServerUrl: snapshot.diarizationServerUrl,
+            routingContext: snapshot.routingContext,
+          });
+          const job = await persist(routedData, signal);
+          console.info(
+            `[queue] Reserved diarizator route ${selected.name} for job ${jobId}`,
+            {
+              providerProfileId: selected.id,
+              loadBefore: load[selected.id] ?? 0,
+              concurrency: selected.concurrency,
+            },
+          );
+          return job;
+        },
+      });
+    } catch (error) {
+      if (!isDiarizatorSlotUnavailable(error)) throw error;
+      return await persistDeferredDiarizatorJob({
+        mongo,
+        jobId,
+        parsedData,
+        priority,
+        trigger: triggerWithPrincipal,
+        requestedProviderId: requestedDiarizatorProviderId,
+        restartedFromJobId: options?.restartedFromJobId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   return await persist(parsedData);
