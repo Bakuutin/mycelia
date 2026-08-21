@@ -1,0 +1,13 @@
+**
+!frontend/
+!frontend/**
+!myceliasdk/
+!myceliasdk/**
+
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+frontend/.vite-cache/
+frontend/.ruff_cache/
+frontend/.DS_Store

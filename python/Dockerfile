@@ -10,15 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install uv
+RUN pip install --no-cache-dir uv
 
 COPY python/pyproject.toml python/uv.lock ./
 
-RUN uv export --frozen --no-hashes > /tmp/requirements.txt && \
-    uv pip install --system -r /tmp/requirements.txt
+RUN --mount=type=cache,id=mycelia-python-uv,target=/root/.cache/uv,sharing=locked \
+    uv export --frozen --no-hashes > /tmp/requirements.txt && \
+    uv pip install --system --link-mode=copy -r /tmp/requirements.txt && \
+    rm -f /tmp/requirements.txt
 
 COPY python/ .
 
 # Run the worker server
 CMD ["uvicorn", "worker_server:app", "--host", "0.0.0.0", "--port", "8000"]
-

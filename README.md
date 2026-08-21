@@ -536,7 +536,7 @@ You can reconfigure these settings anytime in Settings.
 
 See **[DEVELOPMENT.md](DEVELOPMENT.md)** for:
 
-- Docker dev mode with hot reload
+- Docker dev/prod modes, hot reload, and the rebuild/recreate matrix
 - Parallel development on two branches (second frontend or a second full stack)
 - Native development setup (Deno + Vite)
 - Python tooling (audio import, STT, conversation extraction)

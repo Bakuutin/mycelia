@@ -83,7 +83,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: bakuutin/mycelia-frontend:dev
+    image: bakuutin/mycelia-frontend:${FRONTEND_MODE:-prod}
     build:
       context: .
       dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}

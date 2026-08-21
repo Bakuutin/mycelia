@@ -1,0 +1,11 @@
+**
+!backend/
+!backend/**
+!myceliasdk/
+!myceliasdk/**
+
+backend/node_modules/
+backend/**/__pycache__/
+backend/.ruff_cache/
+backend/*.log*
+backend/.DS_Store

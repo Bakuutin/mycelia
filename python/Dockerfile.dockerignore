@@ -1,0 +1,12 @@
+**
+!python/
+!python/**
+
+python/.venv/
+python/**/.venv/
+python/**/__pycache__/
+python/.pytest_cache/
+python/.ruff_cache/
+python/logs/
+python/**/*.log*
+python/.DS_Store

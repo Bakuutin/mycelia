@@ -30,8 +30,38 @@ Both variables are optional and default to production mode if not set. In dev
 mode, frontend changes are handled by Vite HMR and backend changes restart the
 Deno process through `deno --watch`.
 
-Note: If you've made changes to the `Dockerfile` or `package.json`/`deno.json`
-dependencies, you might still need to run `docker compose build` again
+`FRONTEND_MODE` selects both `Dockerfile.dev`/`Dockerfile.prod` and a separate
+local frontend image tag. Switching it therefore requires a frontend build and
+recreation, followed by an nginx restart. `BACKEND_TASK` changes only the
+container command; switching it requires backend recreation but no image build.
+
+After the stack has been created once, switch to dev without rebuilding the
+unchanged backend image:
+
+```bash
+FRONTEND_MODE=dev docker compose build frontend
+FRONTEND_MODE=dev BACKEND_TASK=dev \
+  docker compose up -d --no-deps --force-recreate frontend backend
+docker compose restart nginx
+```
+
+Use this rebuild matrix to avoid unnecessary work:
+
+| Change                        | Dev mode                                     | Production mode                                                                      |
+| ----------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `frontend/src`                | Vite HMR; no build/recreate                  | Build and recreate `frontend`, then restart nginx                                    |
+| Backend source                | Deno watcher reloads it                      | Recreate `backend`, then restart nginx; no image build for the bind-mounted checkout |
+| Python source                 | Recreate `python-worker`; no image build     | Same                                                                                 |
+| `FRONTEND_MODE`               | Build/recreate `frontend`, restart nginx     | Same                                                                                 |
+| `BACKEND_TASK`                | Recreate `backend`, restart nginx            | Same; no image build                                                                 |
+| Dockerfile or dependency lock | Build and recreate only the affected service | Same                                                                                 |
+| Runtime `.env` value          | Recreate only affected services              | Same                                                                                 |
+
+Backend, frontend, and python-worker builds use Dockerfile-specific allowlists.
+Only their source tree (plus `myceliasdk` where needed) enters the build
+context; worktrees, database files, logs, local virtual environments,
+`node_modules`, and existing frontend output cannot invalidate application-image
+layers.
 
 #### Readiness and reload diagnostics
 

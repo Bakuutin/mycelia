@@ -1,6 +1,7 @@
 FROM denoland/deno:2.9.5@sha256:b429777c3dcff34a6488f365a1537db1640b2d48379b60f5e6206be034472463
 
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 5173
 WORKDIR /app
@@ -9,5 +10,5 @@ COPY ./backend/deno.lock /app/deno.lock
 COPY ./backend/deno.json /app/deno.json
 RUN DENO_FUTURE=1 deno install --lock=deno.lock
 COPY ./myceliasdk /myceliasdk
-COPY ./backend . /app/
+COPY ./backend/. /app/
 CMD ["deno", "run", "-A", "server.ts", "serve", "--prod"]

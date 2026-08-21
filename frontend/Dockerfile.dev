@@ -9,8 +9,9 @@ WORKDIR /app
 # Copy lockfiles and config first for better caching
 COPY ./frontend/deno.json ./frontend/deno.lock ./frontend/package.json ./frontend/package-lock.json ./
 
-# Pre-resolve npm packages Vite needs into node_modules via Deno
-RUN deno cache --node-modules-dir --lock=deno.lock --reload npm:vite
+# Resolve the complete locked dependency graph before the bind-mounted source
+# starts Vite so container recreation does not reinstall application packages.
+RUN deno install --frozen
 
 # Copy myceliasdk for import resolution
 COPY ./myceliasdk ./myceliasdk
