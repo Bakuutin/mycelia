@@ -194,7 +194,8 @@ Run `bash scripts/smoke-media-local.sh` to verify analyze → confirm → protec
 WebP retrieval without queueing recognition. Add `docker-compose.media-gcp.yml`
 only for the later ADC/GCP phase. Full setup and the provider-neutral
 visual-understanding/embedding contract, $1/month promo-credit guard, and
-visible committed/reserved cost ledger, plus optional OCR paths are in
+visible committed/reserved cost ledger, multipart managed uploads, EXIF/GPS
+extraction, and preview-confirm deletion of managed originals are in
 [docs/MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
 
 #### Objects browse and Timeline density rollout
@@ -646,6 +647,7 @@ port)
 ### Tech Stack
 
 - **Deno** runtime with npm compatibility
+- **FFmpeg/ffprobe and ExifTool** for local media previews and metadata
 - **React 18** + TypeScript
 - **Vite** for build tooling
 - **Zustand** for state management

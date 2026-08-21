@@ -6,12 +6,16 @@ import MediaPage from "./MediaPage";
 
 const userEvent = (userEventLib as any).default || userEventLib;
 
-vi.mock("@/lib/api", () => ({ callResource: vi.fn() }));
+vi.mock("@/lib/api", () => ({
+  callResource: vi.fn(),
+  apiClient: { postForm: vi.fn() },
+}));
 vi.mock("@/components/media/AuthenticatedMediaImage", () => ({
   AuthenticatedMediaImage: (props: any) => <img {...props} />,
 }));
 
 const mockCallResource = vi.mocked(api.callResource);
+const mockPostForm = vi.mocked(api.apiClient.postForm);
 
 describe("MediaPage local-only import", () => {
   beforeEach(() => {
@@ -67,12 +71,48 @@ describe("MediaPage local-only import", () => {
     });
   });
 
+  it("uploads files as managed originals before confirmation", async () => {
+    const user = userEvent.setup();
+    mockPostForm.mockResolvedValue({
+      importId: "upload-import-1",
+      storageMode: "managed_original",
+      grossEstimateUsd: 0,
+      provider: { name: "Metadata only", providerType: "none" },
+      requestedTasks: [],
+      items: [{
+        fileName: "garden.jpg",
+        kind: "image",
+        byteLength: 1024,
+        pageCount: 1,
+        estimatedGrossUsd: 0,
+        sha256: "a".repeat(64),
+        thumbnailUrl: "/api/files/upload-thumb",
+      }],
+    });
+    render(<MediaPage />);
+
+    const input = await screen.findByLabelText("Choose files");
+    await user.upload(
+      input,
+      new File([new Uint8Array([1, 2, 3])], "garden.jpg", {
+        type: "image/jpeg",
+      }),
+    );
+
+    await waitFor(() => expect(mockPostForm).toHaveBeenCalledTimes(1));
+    const [path, form] = mockPostForm.mock.calls[0];
+    expect(path).toBe("/api/media/imports/analyze");
+    expect((form as FormData).get("files")).toBeInstanceOf(File);
+    expect(await screen.findByText("Managed original")).toBeTruthy();
+    expect(screen.getByText("garden.jpg")).toBeTruthy();
+  });
+
   it("imports and renders a staged card without queueing recognition", async () => {
     const user = userEvent.setup();
     render(<MediaPage />);
 
     await user.click(
-      await screen.findByRole("button", { name: "Analyze locally" }),
+      await screen.findByRole("button", { name: "Analyze mounted path" }),
     );
     expect(mockCallResource).toHaveBeenCalledWith("media", {
       action: "analyzeSource",
@@ -124,12 +164,99 @@ describe("MediaPage local-only import", () => {
     render(<MediaPage />);
 
     expect(
-      await screen.findByRole("switch", {
+      (await screen.findByRole("switch", {
         name: "Visual understanding (primary)",
-      }),
-    ).toHaveAttribute("data-state", "checked");
+      })).getAttribute("data-state"),
+    ).toBe("checked");
     expect(
-      screen.getByRole("switch", { name: "Extract text (OCR)" }),
-    ).toHaveAttribute("data-state", "unchecked");
+      screen.getByRole("switch", { name: "Extract text (OCR)" }).getAttribute(
+        "data-state",
+      ),
+    ).toBe("unchecked");
+  });
+
+  it("requires a deletion preview before deleting a managed original", async () => {
+    let deleted = false;
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "status") {
+        return Promise.resolve({
+          enabled: true,
+          sourceConfigured: false,
+          profiles: [],
+        });
+      }
+      if (input.action === "listAssets") {
+        return Promise.resolve({
+          assets: [{
+            _id: "asset-managed",
+            fileName: "managed.jpg",
+            kind: "image",
+            status: "ready",
+            storageMode: deleted ? "preview_only" : "managed_original",
+            managedOriginal: deleted
+              ? undefined
+              : { bucket: "media_originals", fileId: "file-1" },
+            thumbnailUrl: "/api/files/thumb",
+          }],
+        });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: {
+            _id: "asset-managed",
+            fileName: "managed.jpg",
+            kind: "image",
+            status: "ready",
+            storageMode: deleted ? "preview_only" : "managed_original",
+            managedOriginal: deleted
+              ? undefined
+              : { bucket: "media_originals", fileId: "file-1" },
+            previewUrl: "/api/files/preview",
+            byteLength: 2_000_000,
+            metadata: {},
+          },
+          runs: [{ _id: "run-1", state: "ready" }],
+        });
+      }
+      if (input.action === "previewOriginalDeletion") {
+        return Promise.resolve({
+          canDelete: true,
+          deletionPreviewId: "deletion-preview-1",
+          byteLength: 2_000_000,
+          previewReady: true,
+          analysisReady: true,
+        });
+      }
+      if (input.action === "confirmOriginalDeletion") {
+        deleted = true;
+        return Promise.resolve({ success: true, storageMode: "preview_only" });
+      }
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    render(<MediaPage />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Open details" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Review original deletion" }),
+    );
+    expect(mockCallResource).toHaveBeenCalledWith("media", {
+      action: "previewOriginalDeletion",
+      assetId: "asset-managed",
+    });
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Permanently delete managed original",
+      }),
+    );
+    expect(mockCallResource).toHaveBeenCalledWith("media", {
+      action: "confirmOriginalDeletion",
+      deletionPreviewId: "deletion-preview-1",
+      confirm: true,
+    });
+    expect(await screen.findByText(/managed original was deleted/i))
+      .toBeTruthy();
   });
 });

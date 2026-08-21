@@ -13,7 +13,7 @@ import {
   createWebpPreview,
   inspectLocalMedia,
   mediaSourceConfigured,
-  readLocalMedia,
+  prepareUploadedMedia,
   resolveMediaSourcePath,
   scanMediaSource,
 } from "./local.server.ts";
@@ -101,6 +101,15 @@ const deleteDerivedSchema = z.object({
   target: z.enum(["previews", "analysis", "source_reference"]),
   confirm: z.literal(true),
 });
+const previewOriginalDeletionSchema = z.object({
+  action: z.literal("previewOriginalDeletion"),
+  assetId: z.string().refine(ObjectId.isValid),
+});
+const confirmOriginalDeletionSchema = z.object({
+  action: z.literal("confirmOriginalDeletion"),
+  deletionPreviewId: z.string().refine(ObjectId.isValid),
+  confirm: z.literal(true),
+});
 
 const mediaRequestSchema = z.discriminatedUnion("action", [
   statusSchema,
@@ -113,6 +122,8 @@ const mediaRequestSchema = z.discriminatedUnion("action", [
   processAssetSchema,
   testConnectorSchema,
   deleteDerivedSchema,
+  previewOriginalDeletionSchema,
+  confirmOriginalDeletionSchema,
 ]);
 
 type MediaRequest = z.infer<typeof mediaRequestSchema>;
@@ -236,6 +247,15 @@ async function deleteGridFs(
   );
 }
 
+async function deleteGridFsStrict(
+  db: Db,
+  bucketName: string,
+  id: unknown,
+): Promise<void> {
+  if (!id) throw new Error("GridFS file id is required");
+  await new GridFSBucket(db, { bucketName }).delete(objectId(id));
+}
+
 function previewResponse(item: any) {
   return {
     ...item,
@@ -244,6 +264,307 @@ function previewResponse(item: any) {
     thumbnailUrl: item.thumbnail?.fileId
       ? `/api/files/${item.thumbnail.fileId}?bucket=media_previews`
       : undefined,
+  };
+}
+
+const STAGED_ORIGINAL_TTL_MS = 60 * 60 * 1000;
+
+function extensionForMime(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "application/pdf") return "pdf";
+  return "bin";
+}
+
+async function cleanupExpiredStagedOriginals(db: Db): Promise<void> {
+  const expired = await db.collection("media_originals.files").find({
+    "metadata.state": "staging",
+    "metadata.expiresAt": { $lte: new Date() },
+  }, { projection: { _id: 1 } }).limit(500).toArray();
+  await Promise.all(
+    expired.map((file) => deleteGridFs(db, "media_originals", file._id)),
+  );
+}
+
+async function cleanupExpiredStagedPreviews(db: Db): Promise<void> {
+  const expired = await db.collection("media_previews.files").find({
+    "metadata.state": "staging",
+    "metadata.expiresAt": { $lte: new Date() },
+  }, { projection: { _id: 1 } }).limit(1_000).toArray();
+  await Promise.all(
+    expired.map((file) => deleteGridFs(db, "media_previews", file._id)),
+  );
+}
+
+async function deleteStagedOriginal(
+  db: Db,
+  id: unknown,
+  importId: ObjectId,
+): Promise<void> {
+  if (!id) return;
+  const file = await db.collection("media_originals.files").findOne({
+    _id: objectId(id),
+    "metadata.state": "staging",
+    "metadata.importId": importId,
+  }, { projection: { _id: 1 } });
+  if (file) await deleteGridFs(db, "media_originals", file._id);
+}
+
+async function deleteStagedPreview(
+  db: Db,
+  id: unknown,
+  importId: ObjectId,
+): Promise<void> {
+  if (!id) return;
+  const file = await db.collection("media_previews.files").findOne({
+    _id: objectId(id),
+    "metadata.state": "staging",
+    "metadata.importId": importId,
+  }, { projection: { _id: 1 } });
+  if (file) await deleteGridFs(db, "media_previews", file._id);
+}
+
+async function promoteStagedPreviews(
+  db: Db,
+  importId: ObjectId,
+  assetId: ObjectId,
+  item: any,
+): Promise<void> {
+  const ids = [item.thumbnail?.fileId, item.preview?.fileId].filter(Boolean);
+  for (const id of ids) {
+    const promoted = await db.collection("media_previews.files").updateOne(
+      {
+        _id: objectId(id),
+        "metadata.state": "staging",
+        "metadata.importId": importId,
+      },
+      {
+        $set: {
+          "metadata.state": "canonical",
+          "metadata.assetId": assetId,
+          "metadata.confirmedAt": new Date(),
+        },
+        $unset: { "metadata.expiresAt": "" },
+      },
+    );
+    if (promoted.matchedCount !== 1) {
+      throw new Error("Media preview could not be finalized");
+    }
+  }
+}
+
+export type MediaUploadInput = {
+  fileName: string;
+  declaredMimeType?: string;
+  bytes?: Uint8Array;
+  readBytes?: () => Promise<Uint8Array>;
+};
+
+export async function analyzeMediaUploads(
+  auth: Auth,
+  files: MediaUploadInput[],
+  options: {
+    profileId?: string;
+    requestedTasks?: MediaRecognitionTask[];
+  } = {},
+): Promise<unknown> {
+  const db = await getRootDB();
+  const config = await loadMediaConfig();
+  if (!config.enabled) throw new Error("Media Knowledge is disabled");
+  if (files.length === 0) {
+    throw new Error("At least one media file is required");
+  }
+  if (files.length > config.limits.maxFilesPerImport) {
+    throw new Error(
+      `Import has ${files.length} files; maximum is ${config.limits.maxFilesPerImport}`,
+    );
+  }
+  await Promise.all([
+    cleanupExpiredStagedOriginals(db),
+    cleanupExpiredStagedPreviews(db),
+  ]);
+
+  const profile = options.profileId
+    ? selectProfile(config, options.profileId)
+    : undefined;
+  const requestedTasks = profile
+    ? normalizeRequestedTasks({ requestedTasks: options.requestedTasks })
+    : [];
+  if (profile) assertTasksAllowed(profile, requestedTasks);
+
+  const importId = new ObjectId();
+  const expiresAt = new Date(Date.now() + STAGED_ORIGINAL_TTL_MS);
+  const items: any[] = [];
+  const stagedFileIds: ObjectId[] = [];
+  const previewFileIds: ObjectId[] = [];
+  let grossEstimateUsd = 0;
+
+  try {
+    for (const file of files) {
+      let originalId: ObjectId | undefined;
+      let thumbnailId: ObjectId | undefined;
+      let previewId: ObjectId | undefined;
+      try {
+        const fileBytes = file.bytes ?? await file.readBytes?.();
+        if (!fileBytes) throw new Error("Uploaded media bytes are missing");
+        const prepared = await prepareUploadedMedia(
+          fileBytes,
+          file.fileName,
+          config.limits,
+        );
+        const inspected = prepared.inspection;
+        const duplicate = await db.collection("media_assets").findOne({
+          owner: auth.principal,
+          sha256: inspected.sha256,
+        }, { projection: { _id: 1, status: 1 } });
+        const estimate = profile
+          ? estimateMediaGrossUsd(
+            inspected.kind,
+            inspected.pageCount,
+            requestedTasks,
+            profile,
+          )
+          : 0;
+        grossEstimateUsd += estimate;
+
+        const item: any = {
+          fileName: inspected.fileName,
+          kind: inspected.kind,
+          mimeType: inspected.mimeType,
+          declaredMimeType: file.declaredMimeType,
+          byteLength: inspected.byteLength,
+          sha256: inspected.sha256,
+          pageCount: inspected.pageCount,
+          width: inspected.width,
+          height: inspected.height,
+          capturedAt: inspected.capturedAt,
+          metadata: inspected.metadata,
+          duplicateAssetId: duplicate?._id,
+          duplicateStatus: duplicate?.status,
+          estimatedGrossUsd: estimate,
+        };
+
+        if (!duplicate) {
+          originalId = await uploadGridFs(
+            db,
+            "media_originals",
+            `${importId}/${inspected.sha256}/original.${
+              extensionForMime(inspected.mimeType)
+            }`,
+            fileBytes,
+            {
+              state: "staging",
+              importId,
+              owner: auth.principal,
+              sha256: inspected.sha256,
+              mimeType: inspected.mimeType,
+              originalName: inspected.fileName,
+              extension: extensionForMime(inspected.mimeType),
+              createdAt: new Date(),
+              expiresAt,
+            },
+          );
+          stagedFileIds.push(originalId);
+          item.managedOriginal = {
+            bucket: "media_originals",
+            fileId: originalId,
+          };
+          if (prepared.thumbnail && prepared.preview) {
+            thumbnailId = await uploadGridFs(
+              db,
+              "media_previews",
+              `${importId}/${inspected.sha256}/thumbnail_256.webp`,
+              prepared.thumbnail.data,
+              {
+                state: "staging",
+                importId,
+                sha256: inspected.sha256,
+                role: "thumbnail",
+                expiresAt,
+              },
+            );
+            previewFileIds.push(thumbnailId);
+            previewId = await uploadGridFs(
+              db,
+              "media_previews",
+              `${importId}/${inspected.sha256}/preview_1280.webp`,
+              prepared.preview.data,
+              {
+                state: "staging",
+                importId,
+                sha256: inspected.sha256,
+                role: "preview",
+                expiresAt,
+              },
+            );
+            previewFileIds.push(previewId);
+            item.thumbnail = {
+              bucket: "media_previews",
+              fileId: thumbnailId,
+              mimeType: "image/webp",
+              width: prepared.thumbnail.width,
+              height: prepared.thumbnail.height,
+              byteLength: prepared.thumbnail.data.byteLength,
+            };
+            item.preview = {
+              bucket: "media_previews",
+              fileId: previewId,
+              mimeType: "image/webp",
+              width: prepared.preview.width,
+              height: prepared.preview.height,
+              byteLength: prepared.preview.data.byteLength,
+            };
+          }
+        }
+        items.push(item);
+      } catch (error) {
+        await Promise.all([
+          deleteGridFs(db, "media_originals", originalId),
+          deleteGridFs(db, "media_previews", thumbnailId),
+          deleteGridFs(db, "media_previews", previewId),
+        ]);
+        items.push({ fileName: file.fileName, error: safeError(error) });
+      }
+    }
+    if (!items.some((item) => !item.error)) {
+      throw new Error("No supported media files could be prepared");
+    }
+    assertMediaPerImportBudget(config, grossEstimateUsd);
+    await db.collection("media_imports").insertOne({
+      _id: importId,
+      owner: auth.principal,
+      status: "preview",
+      source: { type: "upload" },
+      profileSnapshot: profile ?? null,
+      requestedTasks,
+      grossEstimateUsd,
+      items,
+      createdAt: new Date(),
+      expiresAt,
+    });
+  } catch (error) {
+    await Promise.all([
+      ...stagedFileIds.map((id) => deleteGridFs(db, "media_originals", id)),
+      ...previewFileIds.map((id) => deleteGridFs(db, "media_previews", id)),
+    ]);
+    throw error;
+  }
+
+  return {
+    importId,
+    expiresAt,
+    storageMode: "managed_original",
+    grossEstimateUsd,
+    provider: profile
+      ? {
+        id: profile.id,
+        name: profile.name,
+        providerType: profile.providerType,
+      }
+      : { id: null, name: "Metadata only", providerType: "none" },
+    requestedTasks,
+    items: items.map(previewResponse),
   };
 }
 
@@ -601,6 +922,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
 
       case "analyzeSource": {
         if (!config.enabled) throw new Error("Media Knowledge is disabled");
+        await cleanupExpiredStagedPreviews(db);
         const profile = input.profileId
           ? selectProfile(config, input.profileId)
           : undefined;
@@ -615,6 +937,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
         }
 
         const importId = new ObjectId();
+        const expiresAt = new Date(Date.now() + STAGED_ORIGINAL_TTL_MS);
         const items: any[] = [];
         const previewSourcePaths: Array<string | undefined> = [];
         let grossEstimateUsd = 0;
@@ -674,14 +997,26 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
               "media_previews",
               `${importId}/${item.sha256}/thumbnail_256.webp`,
               thumb.data,
-              { importId, sha256: item.sha256, role: "thumbnail" },
+              {
+                state: "staging",
+                importId,
+                sha256: item.sha256,
+                role: "thumbnail",
+                expiresAt,
+              },
             );
             previewId = await uploadGridFs(
               db,
               "media_previews",
               `${importId}/${item.sha256}/preview_1280.webp`,
               large.data,
-              { importId, sha256: item.sha256, role: "preview" },
+              {
+                state: "staging",
+                importId,
+                sha256: item.sha256,
+                role: "preview",
+                expiresAt,
+              },
             );
             item.thumbnail = {
               bucket: "media_previews",
@@ -710,7 +1045,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             };
           }
         }
-        const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
         await db.collection("media_imports").insertOne({
           _id: importId,
           owner: auth.principal,
@@ -769,29 +1103,60 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
         const duplicates: any[] = [];
         for (const item of record.items ?? []) {
           if (item.error) continue;
+          const cleanupStagedItem = async () => {
+            await Promise.all([
+              deleteStagedOriginal(
+                db,
+                item.managedOriginal?.fileId,
+                importId,
+              ),
+              deleteStagedPreview(db, item.thumbnail?.fileId, importId),
+              deleteStagedPreview(db, item.preview?.fileId, importId),
+            ]);
+          };
           const existing = await db.collection("media_assets").findOne({
             owner: auth.principal,
             sha256: item.sha256,
           });
           if (existing) {
             duplicates.push(existing._id);
+            const itemAlreadyLinked = (
+              String(existing.managedOriginal?.fileId ?? "") ===
+                String(item.managedOriginal?.fileId ?? "") &&
+              Boolean(item.managedOriginal?.fileId)
+            ) || (
+              String(existing.thumbnail?.fileId ?? "") ===
+                String(item.thumbnail?.fileId ?? "") &&
+              Boolean(item.thumbnail?.fileId)
+            );
+            if (!itemAlreadyLinked) {
+              await cleanupStagedItem();
+            }
             continue;
           }
           const assetId = new ObjectId();
           const now = new Date();
+          const isManagedUpload = record.source?.type === "upload";
+          if (isManagedUpload && !item.managedOriginal?.fileId) {
+            throw new Error("Uploaded original is missing from staging");
+          }
           const asset = {
             _id: assetId,
             owner: auth.principal,
             kind: item.kind,
-            storageMode: "external_reference",
+            storageMode: isManagedUpload
+              ? "managed_original"
+              : "external_reference",
             fileName: item.fileName,
             mimeType: item.mimeType,
             byteLength: item.byteLength,
             sha256: item.sha256,
-            source: {
-              sourceRootId: "default",
-              relativePath: item.relativePath,
-            },
+            ...(isManagedUpload ? { managedOriginal: item.managedOriginal } : {
+              source: {
+                sourceRootId: "default",
+                relativePath: item.relativePath,
+              },
+            }),
             pageCount: item.pageCount,
             width: item.width,
             height: item.height,
@@ -813,10 +1178,45 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
                 sha256: item.sha256,
               });
               if (raced) duplicates.push(raced._id);
+              const itemAlreadyLinked = (
+                String(raced?.managedOriginal?.fileId ?? "") ===
+                  String(item.managedOriginal?.fileId ?? "") &&
+                Boolean(item.managedOriginal?.fileId)
+              ) || (
+                String(raced?.thumbnail?.fileId ?? "") ===
+                  String(item.thumbnail?.fileId ?? "") &&
+                Boolean(item.thumbnail?.fileId)
+              );
+              if (!itemAlreadyLinked) {
+                await cleanupStagedItem();
+              }
               continue;
             }
             throw error;
           }
+          if (isManagedUpload) {
+            const promoted = await db.collection("media_originals.files")
+              .updateOne(
+                {
+                  _id: objectId(item.managedOriginal.fileId),
+                  "metadata.state": "staging",
+                  "metadata.importId": importId,
+                },
+                {
+                  $set: {
+                    "metadata.state": "canonical",
+                    "metadata.assetId": assetId,
+                    "metadata.confirmedAt": now,
+                  },
+                  $unset: { "metadata.expiresAt": "" },
+                },
+              );
+            if (promoted.matchedCount !== 1) {
+              await db.collection("media_assets").deleteOne({ _id: assetId });
+              throw new Error("Uploaded original could not be finalized");
+            }
+          }
+          await promoteStagedPreviews(db, importId, assetId, item);
           await db.collection("media_metadata_versions").insertOne({
             assetId,
             version: 1,
@@ -1536,12 +1936,186 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             },
           );
         } else {
+          if (!asset.source?.relativePath) {
+            throw new Error("Media asset has no external source reference");
+          }
           await db.collection("media_assets").updateOne(
             { _id: asset._id },
-            { $unset: { source: "" }, $set: { updatedAt: new Date() } },
+            {
+              $unset: { source: "" },
+              $set: {
+                storageMode: "preview_only",
+                sourceReferenceForgottenAt: new Date(),
+                updatedAt: new Date(),
+              },
+            },
           );
         }
         return { success: true };
+      }
+
+      case "previewOriginalDeletion": {
+        const asset = await db.collection("media_assets").findOne({
+          _id: new ObjectId(input.assetId),
+          owner: auth.principal,
+        });
+        if (!asset) throw new Error("Media asset not found");
+        if (
+          asset.storageMode !== "managed_original" ||
+          !asset.managedOriginal?.fileId
+        ) {
+          throw new Error("This asset has no managed original to delete");
+        }
+        const [original, previewFile, readyRun] = await Promise.all([
+          db.collection("media_originals.files").findOne({
+            _id: objectId(asset.managedOriginal.fileId),
+            "metadata.state": "canonical",
+          }, { projection: { _id: 1, length: 1 } }),
+          asset.preview?.fileId || asset.thumbnail?.fileId
+            ? db.collection("media_previews.files").findOne({
+              _id: objectId(asset.preview?.fileId ?? asset.thumbnail.fileId),
+            }, { projection: { _id: 1 } })
+            : null,
+          asset.currentRunId
+            ? db.collection("media_analysis_runs").findOne({
+              _id: asset.currentRunId,
+              state: "ready",
+            }, { projection: { _id: 1 } })
+            : null,
+        ]);
+        const blockers = [
+          !original ? "Managed original is missing" : null,
+          !previewFile ? "A stored preview is required" : null,
+          !readyRun ? "A completed analysis is required" : null,
+        ].filter(Boolean);
+        if (blockers.length > 0) {
+          return {
+            canDelete: false,
+            assetId: asset._id,
+            storageMode: asset.storageMode,
+            byteLength: Number(original?.length ?? asset.byteLength),
+            previewReady: Boolean(previewFile),
+            analysisReady: Boolean(readyRun),
+            blockers,
+          };
+        }
+        const deletionPreviewId = new ObjectId();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+        await db.collection("media_original_deletion_previews").insertOne({
+          _id: deletionPreviewId,
+          owner: auth.principal,
+          assetId: asset._id,
+          expectedFileId: objectId(asset.managedOriginal.fileId),
+          expectedSha256: asset.sha256,
+          expectedStorageMode: "managed_original",
+          byteLength: Number(original?.length ?? asset.byteLength),
+          previewReady: true,
+          analysisReady: true,
+          createdAt: new Date(),
+          expiresAt,
+        });
+        return {
+          canDelete: true,
+          deletionPreviewId,
+          expiresAt,
+          assetId: asset._id,
+          storageMode: asset.storageMode,
+          byteLength: Number(original?.length ?? asset.byteLength),
+          previewReady: true,
+          analysisReady: true,
+          retained: ["WebP previews", "metadata", "analysis", "search index"],
+        };
+      }
+
+      case "confirmOriginalDeletion": {
+        const previewId = new ObjectId(input.deletionPreviewId);
+        const deletion = await db.collection(
+          "media_original_deletion_previews",
+        ).findOne({
+          _id: previewId,
+          owner: auth.principal,
+          expiresAt: { $gt: new Date() },
+          confirmedAt: { $exists: false },
+        });
+        if (!deletion) {
+          throw new Error("Original deletion preview is missing or expired");
+        }
+        const asset = await db.collection("media_assets").findOne({
+          _id: objectId(deletion.assetId),
+          owner: auth.principal,
+        });
+        if (
+          !asset || asset.storageMode !== deletion.expectedStorageMode ||
+          asset.sha256 !== deletion.expectedSha256 ||
+          String(asset.managedOriginal?.fileId ?? "") !==
+            String(deletion.expectedFileId)
+        ) {
+          throw new Error("Original deletion preview is stale; review again");
+        }
+        await db.collection("media_assets").updateOne(
+          {
+            _id: asset._id,
+            storageMode: "managed_original",
+            "managedOriginal.fileId": deletion.expectedFileId,
+          },
+          {
+            $set: {
+              originalDeletionPending: {
+                previewId,
+                startedAt: new Date(),
+              },
+              updatedAt: new Date(),
+            },
+          },
+        );
+        await deleteGridFsStrict(
+          db,
+          "media_originals",
+          deletion.expectedFileId,
+        );
+        const deletedAt = new Date();
+        const receiptId = randomUUID();
+        const result = await db.collection("media_assets").updateOne(
+          {
+            _id: asset._id,
+            "originalDeletionPending.previewId": previewId,
+          },
+          {
+            $set: {
+              storageMode: "preview_only",
+              originalDeletedAt: deletedAt,
+              originalDeletionReceipt: {
+                receiptId,
+                previousStorageMode: "managed_original",
+                byteLength: deletion.byteLength,
+                sha256: deletion.expectedSha256,
+                deletedAt,
+              },
+              updatedAt: deletedAt,
+            },
+            $unset: { managedOriginal: "", originalDeletionPending: "" },
+          },
+        );
+        if (result.modifiedCount !== 1) {
+          throw new Error(
+            "Original was deleted but the asset state requires repair",
+          );
+        }
+        await db.collection("media_original_deletion_previews").updateOne(
+          { _id: previewId },
+          {
+            $set: { confirmedAt: deletedAt, receiptId },
+            $unset: { expiresAt: "" },
+          },
+        );
+        return {
+          success: true,
+          assetId: asset._id,
+          storageMode: "preview_only",
+          receiptId,
+          deletedAt,
+          retained: ["WebP previews", "metadata", "analysis", "search index"],
+        };
       }
     }
   }

@@ -87,7 +87,7 @@ export class ApiClient {
     }
 
     if (
-      !headers.has("Content-Type")
+      !headers.has("Content-Type") && !(options.body instanceof FormData)
     ) {
       headers.set("Content-Type", "application/json");
     }
@@ -139,6 +139,21 @@ export class ApiClient {
       body: JSON.stringify(data),
     });
     return response.json();
+  }
+
+  async postForm<T>(path: string, data: FormData): Promise<T> {
+    const response = await this.fetchRaw(path, {
+      method: "POST",
+      body: data,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = typeof payload?.error === "string"
+        ? payload.error
+        : `API request failed: ${response.status} ${response.statusText}`;
+      throw new Error(message);
+    }
+    return payload as T;
   }
 
   async getBlob(path: string): Promise<Blob> {

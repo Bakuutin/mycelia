@@ -10,6 +10,8 @@ compose=(
 )
 base_url="${MEDIA_SMOKE_BASE_URL:-http://127.0.0.1:3211}"
 smoke_owner="media-smoke-$(date +%s)-$$"
+smoke_tmp_dir="$(mktemp -d -t mycelia-media-smoke.XXXXXX)"
+trap 'rm -rf "$smoke_tmp_dir"' EXIT
 
 credentials="$(${compose[@]} exec -T backend deno run -A server.ts token-create \
   --owner "$smoke_owner" --name media-local-smoke)"
@@ -42,14 +44,14 @@ resource() {
 
 resource config '{"action":"patch","path":"mediaKnowledge","updates":{"enabled":true}}' >/dev/null
 analysis="$(resource media '{"action":"analyzeSource","relativePath":"."}')"
-import_id="$(printf '%s' "$analysis" | jq -r '.importId["$oid"] // .importId // empty')"
+import_id="$(printf '%s' "$analysis" | jq -r '.importId | if type == "object" then .["$oid"] else . end // empty')"
 if [[ -z "$import_id" ]]; then
   printf '%s\n' "$analysis" | jq . >&2
   exit 1
 fi
 
 confirmation="$(resource media "{\"action\":\"confirmImport\",\"importId\":\"$import_id\",\"consent\":true,\"queueRecognition\":false}")"
-asset_id="$(printf '%s' "$confirmation" | jq -r '.created[0].assetId["$oid"] // .created[0].assetId // empty')"
+asset_id="$(printf '%s' "$confirmation" | jq -r '.created[0].assetId | if type == "object" then .["$oid"] else . end // empty')"
 if [[ -z "$asset_id" ]]; then
   printf '%s\n' "$confirmation" | jq . >&2
   exit 1
@@ -63,11 +65,47 @@ if [[ -z "$preview_path" ]]; then
   exit 1
 fi
 
-preview_file="$(mktemp -t mycelia-media-preview.XXXXXX.webp)"
-trap 'rm -f "$preview_file"' EXIT
+preview_file="$smoke_tmp_dir/mounted-preview.webp"
 curl -fsS "$base_url$preview_path" -H "Authorization: Bearer $jwt" -o "$preview_file"
 preview_probe="$(ffprobe -v error -show_entries stream=codec_name,width,height -of json "$preview_file")"
 preview_sha256="$(shasum -a 256 "$preview_file" | awk '{print $1}')"
+
+managed_source="$smoke_tmp_dir/managed-upload.png"
+ffmpeg -v error -f lavfi -i color=c=blue:s=64x48 -frames:v 1 -y "$managed_source"
+managed_source_sha256="$(shasum -a 256 "$managed_source" | awk '{print $1}')"
+managed_analysis="$(curl -fsS -X POST "$base_url/api/media/imports/analyze" \
+  -H "Authorization: Bearer $jwt" \
+  -F "files=@$managed_source;type=image/png")"
+managed_import_id="$(printf '%s' "$managed_analysis" | jq -r '.importId | if type == "object" then .["$oid"] else . end // empty')"
+if [[ -z "$managed_import_id" ]]; then
+  printf '%s\n' "$managed_analysis" | jq . >&2
+  exit 1
+fi
+managed_confirmation="$(resource media "{\"action\":\"confirmImport\",\"importId\":\"$managed_import_id\",\"consent\":true,\"queueRecognition\":false}")"
+managed_asset_id="$(printf '%s' "$managed_confirmation" | jq -r '.created[0].assetId | if type == "object" then .["$oid"] else . end // empty')"
+if [[ -z "$managed_asset_id" ]]; then
+  printf '%s\n' "$managed_confirmation" | jq . >&2
+  exit 1
+fi
+managed_asset="$(resource media "{\"action\":\"getAsset\",\"assetId\":\"$managed_asset_id\"}")"
+managed_original_id="$(printf '%s' "$managed_asset" | jq -r '.asset.managedOriginal.fileId | if type == "object" then .["$oid"] else . end // empty')"
+managed_download="$smoke_tmp_dir/managed-download.png"
+curl -fsS "$base_url/api/files/$managed_original_id?bucket=media_originals" \
+  -H "Authorization: Bearer $jwt" -o "$managed_download"
+managed_download_sha256="$(shasum -a 256 "$managed_download" | awk '{print $1}')"
+if [[ "$managed_source_sha256" != "$managed_download_sha256" ]]; then
+  echo "Managed original hash mismatch" >&2
+  exit 1
+fi
+
+duplicate_analysis="$(curl -fsS -X POST "$base_url/api/media/imports/analyze" \
+  -H "Authorization: Bearer $jwt" \
+  -F "files=@$managed_source;type=image/png")"
+duplicate_id="$(printf '%s' "$duplicate_analysis" | jq -r '.items[0].duplicateAssetId | if type == "object" then .["$oid"] else . end // empty')"
+if [[ "$duplicate_id" != "$managed_asset_id" ]]; then
+  printf '%s\n' "$duplicate_analysis" | jq . >&2
+  exit 1
+fi
 
 jq -n \
   --arg importId "$import_id" \
@@ -79,4 +117,10 @@ jq -n \
   --arg thumbnailPath "$thumbnail_path" \
   --arg previewSha256 "$preview_sha256" \
   --argjson preview "$preview_probe" \
-  '{importId:$importId,assetId:$assetId,status:$status,storageMode:$storageMode,sourcePath:$sourcePath,previewPath:$previewPath,thumbnailPath:$thumbnailPath,previewSha256:$previewSha256,preview:$preview}'
+  --arg managedImportId "$managed_import_id" \
+  --arg managedAssetId "$managed_asset_id" \
+  --arg managedStorageMode "$(printf '%s' "$managed_asset" | jq -r '.asset.storageMode')" \
+  --arg managedOriginalId "$managed_original_id" \
+  --arg managedOriginalSha256 "$managed_download_sha256" \
+  --arg duplicateAssetId "$duplicate_id" \
+  '{mounted:{importId:$importId,assetId:$assetId,status:$status,storageMode:$storageMode,sourcePath:$sourcePath,previewPath:$previewPath,thumbnailPath:$thumbnailPath,previewSha256:$previewSha256,preview:$preview},managed:{importId:$managedImportId,assetId:$managedAssetId,storageMode:$managedStorageMode,originalId:$managedOriginalId,originalSha256:$managedOriginalSha256,duplicateAssetId:$duplicateAssetId}}'

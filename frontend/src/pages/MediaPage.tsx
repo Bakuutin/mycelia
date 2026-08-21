@@ -8,10 +8,11 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { callResource } from "@/lib/api";
+import { apiClient, callResource } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,6 +65,7 @@ export default function MediaPage() {
   const [results, setResults] = useState<any[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const [detail, setDetail] = useState<any>();
+  const [deletionPreview, setDeletionPreview] = useState<any>();
 
   const load = async () => {
     try {
@@ -114,6 +116,33 @@ export default function MediaPage() {
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Import analysis failed",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const analyzeUploads = async (files: File[]) => {
+    if (files.length === 0) return;
+    setBusy(true);
+    try {
+      const form = new FormData();
+      for (const file of files) form.append("files", file);
+      if (profileId) {
+        form.append("profileId", profileId);
+        form.append("requestedTasks", selectedTasks.join(","));
+      }
+      const result = await apiClient.postForm<any>(
+        "/api/media/imports/analyze",
+        form,
+      );
+      setPreview(result);
+      toast.success(
+        `Prepared ${result.items.length} upload(s); originals are staged until confirmation`,
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Upload analysis failed",
       );
     } finally {
       setBusy(false);
@@ -177,6 +206,7 @@ export default function MediaPage() {
       });
       setSelectedAssetId(assetId);
       setDetail(result);
+      setDeletionPreview(undefined);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to load media asset",
@@ -244,6 +274,52 @@ export default function MediaPage() {
     }
   };
 
+  const prepareOriginalDeletion = async () => {
+    if (!selectedAssetId) return;
+    setBusy(true);
+    try {
+      const result = await callResource("media", {
+        action: "previewOriginalDeletion",
+        assetId: selectedAssetId,
+      });
+      setDeletionPreview(result);
+      if (!result.canDelete) {
+        toast.error(
+          result.blockers?.join("; ") ?? "Original cannot be deleted",
+        );
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Deletion preview failed",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmOriginalDeletion = async () => {
+    if (!deletionPreview?.canDelete) return;
+    setBusy(true);
+    try {
+      await callResource("media", {
+        action: "confirmOriginalDeletion",
+        deletionPreviewId: String(deletionPreview.deletionPreviewId),
+        confirm: true,
+      });
+      toast.success(
+        "Managed original deleted; preview, metadata, analysis, and search data were retained",
+      );
+      setDeletionPreview(undefined);
+      await Promise.all([load(), openAsset(selectedAssetId)]);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Original deletion failed",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleTask = (task: RecognitionTask, enabled: boolean) => {
     setSelectedTasks((current) => {
       const next = enabled
@@ -288,7 +364,7 @@ export default function MediaPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Import from mounted read-only folder</CardTitle>
+          <CardTitle>Import photos and PDFs</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
@@ -382,15 +458,57 @@ export default function MediaPage() {
               )}
             </div>
           )}
-          <Button
-            onClick={analyze}
-            disabled={busy || !status?.enabled ||
-              !status?.sourceConfigured ||
-              Boolean(profileId && selectedTasks.length === 0)}
+          <div
+            className="rounded-md border-2 border-dashed p-6 text-center"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              void analyzeUploads(Array.from(event.dataTransfer.files));
+            }}
           >
-            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Analyze
-            locally
-          </Button>
+            <Upload className="mx-auto mb-2 h-6 w-6" />
+            <div className="font-medium">Upload managed originals</div>
+            <p className="mb-3 text-sm text-muted-foreground">
+              JPEG, PNG, WebP, or PDF. Mycelia checks the real file type,
+              deduplicates by SHA-256, and creates metadata-free WebP previews.
+            </p>
+            <label>
+              <span className="inline-flex h-10 cursor-pointer items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground">
+                Choose files
+              </span>
+              <input
+                className="sr-only"
+                type="file"
+                multiple
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                disabled={busy || !status?.enabled ||
+                  Boolean(profileId && selectedTasks.length === 0)}
+                onChange={(event) => {
+                  void analyzeUploads(Array.from(event.target.files ?? []));
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 rounded-md border p-3">
+            <div className="min-w-0 flex-1">
+              <div className="font-medium">Mounted read-only source</div>
+              <p className="text-xs text-muted-foreground">
+                Stores only a checked reference to the original; the source file
+                is never copied or deleted.
+              </p>
+            </div>
+            <Button
+              onClick={analyze}
+              variant="outline"
+              disabled={busy || !status?.enabled ||
+                !status?.sourceConfigured ||
+                Boolean(profileId && selectedTasks.length === 0)}
+            >
+              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Analyze mounted path
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -402,6 +520,11 @@ export default function MediaPage() {
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <Badge>{preview.provider.name}</Badge>
+              <Badge variant="outline">
+                {preview.storageMode === "managed_original"
+                  ? "Managed original"
+                  : "External reference"}
+              </Badge>
               <Badge variant="outline">
                 Maximum list price ${Number(preview.grossEstimateUsd).toFixed(
                   4,
@@ -436,7 +559,9 @@ export default function MediaPage() {
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {preview.items.map((item: any) => (
                 <div
-                  key={item.relativePath}
+                  key={`${item.sha256 ?? item.fileName}-${
+                    item.relativePath ?? "upload"
+                  }`}
                   className="overflow-hidden rounded-md border"
                 >
                   <AuthenticatedMediaImage
@@ -472,11 +597,13 @@ export default function MediaPage() {
               ))}
             </div>
             <div className="rounded-md bg-muted p-3 text-sm">
-              <ShieldCheck className="mr-2 inline h-4 w-4" />Confirmation stores
-              the selected files as external references and keeps their compact
-              previews. A provider receives file content only when recognition
-              is explicitly queued; local paths and EXIF are never included in
-              image requests.
+              <ShieldCheck className="mr-2 inline h-4 w-4" />
+              {preview.storageMode === "managed_original"
+                ? "Confirmation promotes staged originals into the separate media_originals store. You can later delete each original through a second preview-and-confirm step while retaining WebP previews, metadata, analysis, and search data."
+                : "Confirmation stores checked external references and compact previews. The referenced source files are never copied or deleted."}
+              {" "}
+              A provider receives content only when recognition is explicitly
+              queued; paths and EXIF are not included in image requests.
             </div>
             <Button onClick={confirm} disabled={busy}>
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -557,6 +684,7 @@ export default function MediaPage() {
               onClick={() => {
                 setSelectedAssetId("");
                 setDetail(undefined);
+                setDeletionPreview(undefined);
               }}
             >
               <X className="h-4 w-4" />
@@ -594,6 +722,7 @@ export default function MediaPage() {
                     onClick={processSelected}
                     disabled={busy || !profileId ||
                       selectedTasks.length === 0 ||
+                      !(detail.asset.source || detail.asset.managedOriginal) ||
                       ["queued", "processing"].includes(detail.asset.status)}
                   >
                     {busy
@@ -623,7 +752,65 @@ export default function MediaPage() {
                   >
                     <Trash2 className="mr-2 h-4 w-4" />Forget original reference
                   </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={prepareOriginalDeletion}
+                    disabled={busy ||
+                      detail.asset.storageMode !== "managed_original"}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />Review original deletion
+                  </Button>
                 </div>
+                {detail.asset.storageMode === "preview_only" && (
+                  <div className="rounded border border-amber-500/40 p-3 text-sm">
+                    The managed original was deleted. Compact previews,
+                    metadata, analysis, and search data remain available.
+                  </div>
+                )}
+                {deletionPreview && (
+                  <div className="space-y-3 rounded border border-destructive/50 p-3 text-sm">
+                    <div className="font-medium">Original deletion preview</div>
+                    <div>
+                      Original size: {(
+                        Number(deletionPreview.byteLength ?? 0) / 1_000_000
+                      ).toFixed(2)} MB · preview{" "}
+                      {deletionPreview.previewReady ? "ready" : "missing"}{" "}
+                      · analysis{" "}
+                      {deletionPreview.analysisReady ? "ready" : "missing"}
+                    </div>
+                    {deletionPreview.blockers?.length > 0 && (
+                      <ul className="list-disc pl-5 text-destructive">
+                        {deletionPreview.blockers.map((blocker: string) => (
+                          <li key={blocker}>{blocker}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {deletionPreview.canDelete && (
+                      <>
+                        <div>
+                          This permanently deletes only the managed original.
+                          WebP previews, local metadata, provider results, and
+                          search indexes are retained.
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="destructive"
+                            onClick={confirmOriginalDeletion}
+                            disabled={busy}
+                          >
+                            Permanently delete managed original
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => setDeletionPreview(undefined)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {!profileId && (
                   <p className="text-sm text-amber-700 dark:text-amber-300">
                     Select an enabled recognition provider above to process this

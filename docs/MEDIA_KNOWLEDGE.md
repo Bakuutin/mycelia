@@ -2,9 +2,10 @@
 
 Mycelia imports photos and PDFs in two explicit stages:
 
-1. `Analyze locally` reads a mounted source path, validates magic bytes and
-   limits, calculates SHA-256, extracts local metadata, and creates temporary
-   WebP previews. It does not call a recognition provider.
+1. Choose files (managed storage) or `Analyze mounted path` (read-only
+   reference). Mycelia validates magic bytes and limits, calculates SHA-256,
+   extracts local metadata with ExifTool/ffprobe, and creates temporary WebP
+   previews with metadata stripped. It does not call a recognition provider.
 2. `Confirm import` creates canonical media assets. Recognition is a separate
    opt-in switch, so an import can remain `staged` until Google Cloud or a
    self-hosted provider is ready.
@@ -17,11 +18,23 @@ confidence, warnings, and an embedding for semantic search. OCR, Vision labels,
 and Vision object localization are independent optional tasks. Local metadata
 extraction is always local and precedes that choice.
 
-The default storage mode is `external_reference`. The source mount is read-only.
-Mycelia stores the source-root ID, relative path, hash, technical metadata, and
-compact thumbnails/previews. It does not copy the original. If the source
-disappears or its hash changes, processing fails closed instead of silently
-recognizing a different file.
+Uploaded files use `managed_original`: the immutable original is promoted from
+one-hour staging into the separate `media_originals` GridFS bucket only after
+confirmation. The source-folder path uses `external_reference`: the mount is
+read-only and Mycelia stores only its source-root ID, relative path and hash.
+Both modes keep technical metadata, EXIF date/GPS when present, and compact
+WebP thumbnails/previews separately. SHA-256 deduplication applies across both
+import paths.
+
+An abandoned upload preview expires after one hour; its staged original and
+previews are removed by the next import cleanup. A managed original can be
+converted to `preview_only`, but only through `Review original deletion` and a
+second explicit confirmation. Mycelia first verifies a stored preview and a
+completed analysis, then permanently deletes only the GridFS original while
+retaining previews, metadata, provider results and search projections. Mounted
+source files are never deleted; forgetting their reference only changes the
+asset to `preview_only`. A preview-only asset cannot be reprocessed unless an
+original is imported again.
 
 ## Isolated media development stack
 
@@ -53,7 +66,8 @@ Open `http://127.0.0.1:3211`. HTTPS is also published on port `4443`, but uses
 the development self-signed certificate. Complete first-time setup, then open
 Settings → Google Cloud and enable Media Knowledge. A recognition profile is not
 required for local-only import. Open Media, keep `Queue recognition after
-import` off, analyze the relative path `.`, review the preview, and confirm.
+import` off, either upload files or analyze the relative path `.`, review the
+storage-mode badge and preview, and confirm.
 
 Automated local smoke test (it creates a test owner only inside the isolated
 database and never calls Google):
@@ -62,8 +76,12 @@ database and never calls Google):
 bash scripts/smoke-media-local.sh
 ```
 
-Expected result includes `status: staged`, `storageMode: external_reference`,
-the original relative path, and a valid WebP preview.
+Expected result contains two receipts. `mounted` includes `status: staged`,
+`storageMode: external_reference`, the relative path, and a valid WebP preview.
+`managed` includes `storageMode: managed_original`, a byte-for-byte verified
+original hash, and a duplicate receipt from uploading the same generated image
+again without creating a second canonical original. Original deletion remains
+blocked until that asset has a ready analysis.
 
 To verify the provider-neutral worker pipeline before granting Google IAM, add
 the development-only self-hosted contract mock:
