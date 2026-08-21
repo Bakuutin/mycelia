@@ -482,6 +482,13 @@ overlap.
 Source interval сохраняется вместе с sample. Другие профили добавляются тем же
 способом, но каждому нужна своя calibration в совместимом embedding space.
 
+Сохранение audio и постановка enrollment job — два отдельных подтверждаемых
+шага. Если все diarizator slots заняты, UI явно показывает, что sample уже
+сохранён и привязан к профилю, и предлагает **Retry profile update** без
+повторной загрузки или дубликата. После закрытия диалога тот же rebuild можно
+поставить через **Profiles & samples → Rebuild**; он использует все сохранённые
+samples этого профиля.
+
 Профиль без sample можно создать через **Voice Profiles → Add Profile → Create
 profile only**. Он уже доступен для ручных назначений, но automatic matching
 начинается только после добавления чистого sample и успешного enrollment.
@@ -495,6 +502,8 @@ Review queue содержит активные unclassified/uncertain segments:
 - **This is me** — positive Sky annotation;
 - **Not me** — Sky явно исключён;
 - **Assign profile** — сегмент сразу назначается существующему другому спикеру;
+- последний назначенный профиль остаётся выбранным для следующего segment, а
+  недавно использованные профили поднимаются вверх общего списка;
 - **New speaker** — создаёт другой профиль из embedding выбранного сегмента или
   безопасной группы и сразу назначает ему разметку; такой seed не считается
   сохранённым voice sample;
@@ -502,6 +511,8 @@ Review queue содержит активные unclassified/uncertain segments:
 - **Skip** сохраняется как отдельное review-решение и оставляет segment вне
   training/calibration;
 - autoplay и shortcuts двигают очередь;
+- playback всегда координируется как один активный clip; видимый playhead и
+  elapsed time сбрасываются при переходе к следующему segment;
 - review session, окно из 100 segments и текущая позиция сохраняются на backend,
   поэтому работу можно продолжить позже;
 - compact list показывает все 100 элементов текущего окна;

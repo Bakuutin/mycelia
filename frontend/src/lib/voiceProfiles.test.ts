@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildAttachSampleOperations,
   buildTimelineSampleMetadata,
+  orderVoiceProfilesByRecent,
+  readRecentVoiceProfileIds,
+  rememberVoiceProfile,
   summarizeVoiceSamples,
 } from "./voiceProfiles";
 
@@ -64,5 +67,29 @@ describe("timeline voice samples", () => {
       source_start: "2026-08-10T10:00:00.000Z",
       source_end: "2026-08-10T10:00:12.500Z",
     });
+  });
+});
+
+describe("recent voice profiles", () => {
+  it("keeps the most recently assigned speakers first across review clips", () => {
+    localStorage.clear();
+    rememberVoiceProfile("profile-belka");
+    rememberVoiceProfile("profile-andrew");
+
+    expect(readRecentVoiceProfileIds()).toEqual([
+      "profile-andrew",
+      "profile-belka",
+    ]);
+    expect(
+      orderVoiceProfilesByRecent([
+        { id: "profile-belka", name: "Belka" },
+        { id: "profile-bowie", name: "Bowie" },
+        { id: "profile-andrew", name: "Andrew" },
+      ], (profile) => profile.id).map((profile) => profile.id),
+    ).toEqual([
+      "profile-andrew",
+      "profile-belka",
+      "profile-bowie",
+    ]);
   });
 });

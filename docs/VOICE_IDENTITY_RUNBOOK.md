@@ -56,6 +56,10 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
    - Use **Edit** to change any saved label or Skip.
    - Use **Reviewed history** to reopen answers from older windows/sessions and
      listen, correct the speaker, or replace the label with Skip.
+   - Assigning another speaker remembers that profile for the next segment and
+     moves recently used profiles to the top of profile selectors.
+   - The waveform has one global active player and a visible playhead; changing
+     the review segment stops and disposes the previous clip.
 3. Save validated thresholds. The server accepts only the selected Fit/Check
    recording IDs and recomputes thresholds and metrics itself. Only
    `server-computed-v1` records with at least 98% independent Check precision
@@ -66,6 +70,12 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
    samples.
 6. Expand by bounded ranges. `speakerIdentity` is idempotent for run/profile
    revision/calibration and continues with a cursor.
+
+When **Save current clip as voice sample** succeeds in storing the audio but
+all diarizator slots are reserved, keep the dialog open and use **Retry profile
+update**. The stored clip is reused rather than uploaded again. If the dialog
+was closed, use **Profiles & samples → Rebuild** to combine every saved sample
+attached to that profile.
 
 Absence of `speakerIdentity` means not evaluated. After evaluation, every
 eligible segment is `matched`, `rejected` or `uncertain`. Automatic decisions

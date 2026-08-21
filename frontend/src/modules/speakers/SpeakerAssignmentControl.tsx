@@ -5,6 +5,11 @@ import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
 import { type SpeakerAssignmentScope } from "@/lib/speakerAssignment";
+import {
+  orderVoiceProfilesByRecent,
+  readRecentVoiceProfileIds,
+  rememberVoiceProfile,
+} from "@/lib/voiceProfiles";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -61,6 +66,9 @@ export function SpeakerAssignmentControl({
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<SpeakerAssignmentScope>("segment");
   const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [recentProfileIds, setRecentProfileIds] = useState(
+    readRecentVoiceProfileIds,
+  );
   const [saving, setSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
@@ -82,10 +90,31 @@ export function SpeakerAssignmentControl({
     normalizeObjectId(originalId) && speaker,
   );
   const currentProfileId = normalizeObjectId(matchedSpeaker?.profile_id) ?? "";
+  const orderedProfiles = useMemo(
+    () =>
+      orderVoiceProfilesByRecent(
+        profiles,
+        (profile) => normalizeObjectId(profile._id) ?? "",
+        recentProfileIds,
+      ),
+    [profiles, recentProfileIds],
+  );
 
   useEffect(() => {
-    setSelectedProfileId(currentProfileId);
+    if (currentProfileId) setSelectedProfileId(currentProfileId);
   }, [currentProfileId]);
+
+  useEffect(() => {
+    if (
+      selectedProfileId &&
+      profiles.some((profile) =>
+        normalizeObjectId(profile._id) === selectedProfileId
+      )
+    ) return;
+    setSelectedProfileId(
+      normalizeObjectId(orderedProfiles[0]?._id) ?? "",
+    );
+  }, [orderedProfiles, profiles, selectedProfileId]);
 
   useEffect(() => {
     if (!canAssignSpeakerGroup && scope === "speaker") setScope("segment");
@@ -123,7 +152,11 @@ export function SpeakerAssignmentControl({
         ...(profile ? { profileId: normalizeObjectId(profile._id) } : {}),
       });
 
-      setSelectedProfileId(profile ? normalizeObjectId(profile._id)! : "");
+      const assignedProfileId = profile ? normalizeObjectId(profile._id)! : "";
+      setSelectedProfileId(assignedProfileId);
+      if (assignedProfileId) {
+        setRecentProfileIds(rememberVoiceProfile(assignedProfileId));
+      }
       onChanged(matched);
       toast.success(
         profile ? `Assigned ${profile.name}` : "Speaker assignment cleared",
@@ -203,7 +236,7 @@ export function SpeakerAssignmentControl({
             />
           </SelectTrigger>
           <SelectContent>
-            {profiles.map((profile) => {
+            {orderedProfiles.map((profile) => {
               const profileId = normalizeObjectId(profile._id)!;
               return (
                 <SelectItem key={profileId} value={profileId}>

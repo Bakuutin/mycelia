@@ -6,6 +6,11 @@ import { callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import {
+  orderVoiceProfilesByRecent,
+  readRecentVoiceProfileIds,
+  rememberVoiceProfile,
+} from "@/lib/voiceProfiles";
+import {
   loadVoiceIdentityStatus,
   loadVoiceProfiles,
   voiceIdentityKeys,
@@ -294,6 +299,9 @@ export default function VoiceIdentityReviewPage() {
       return true;
     }
   });
+  const [recentProfileIds, setRecentProfileIds] = useState(
+    readRecentVoiceProfileIds,
+  );
   const calibrationSectionRef = useRef<HTMLDivElement>(null);
 
   const { data: profiles = [] } = useQuery<any[]>({
@@ -308,14 +316,21 @@ export default function VoiceIdentityReviewPage() {
   const reviewProfile = profiles.find((profile) =>
     normalizeObjectId(profile._id) === reviewProfileId
   );
-  const alternateProfiles = profiles
-    .filter((profile) => normalizeObjectId(profile._id) !== reviewProfileId)
-    .map((profile) => ({
-      id: normalizeObjectId(profile._id) ?? "",
-      name: String(profile.name ?? "Unnamed profile"),
-    }))
-    .filter((profile) => profile.id)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const alternateProfiles = orderVoiceProfilesByRecent(
+    profiles
+      .filter((profile) => normalizeObjectId(profile._id) !== reviewProfileId)
+      .map((profile) => ({
+        id: normalizeObjectId(profile._id) ?? "",
+        name: String(profile.name ?? "Unnamed profile"),
+      }))
+      .filter((profile) => profile.id)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    (profile) => profile.id,
+    recentProfileIds,
+  );
+  const rememberAssignedProfile = (assignedProfileId: string) => {
+    setRecentProfileIds(rememberVoiceProfile(assignedProfileId));
+  };
   const { data: identityStatus, refetch: refetchIdentityStatus } = useQuery<
     IdentityStatus
   >({
@@ -1681,6 +1696,7 @@ export default function VoiceIdentityReviewPage() {
                   }}
                   onAssignProfile={(assignedProfileId) => {
                     if (!reviewProfileId) return;
+                    rememberAssignedProfile(assignedProfileId);
                     saveAssignment({
                       profileId: assignedProfileId,
                       excludedProfileIds: [reviewProfileId],
@@ -1698,6 +1714,7 @@ export default function VoiceIdentityReviewPage() {
                     if (!createdProfileId) {
                       throw new Error("New speaker profile has no valid ID");
                     }
+                    rememberAssignedProfile(createdProfileId);
                     await label.mutateAsync({
                       clientRequestId: crypto.randomUUID(),
                       segmentIds: [...decisionSegmentIds],
@@ -1994,6 +2011,7 @@ export default function VoiceIdentityReviewPage() {
                     }}
                     onAssignProfile={(assignedProfileId) => {
                       if (!reviewProfileId) return;
+                      rememberAssignedProfile(assignedProfileId);
                       reviseHistory.mutate({
                         item: historyEditingItem,
                         outcome: "assigned",
@@ -2015,6 +2033,7 @@ export default function VoiceIdentityReviewPage() {
                       if (!assignedProfileId) {
                         throw new Error("New speaker profile has no valid ID");
                       }
+                      rememberAssignedProfile(assignedProfileId);
                       await reviseHistory.mutateAsync({
                         item: historyEditingItem,
                         outcome: "assigned",

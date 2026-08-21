@@ -6,6 +6,9 @@ import { apiClient, callResource } from "@/lib/api";
 import { normalizeObjectId } from "@/lib/diarization";
 import {
   buildTimelineSampleMetadata,
+  orderVoiceProfilesByRecent,
+  readRecentVoiceProfileIds,
+  rememberVoiceProfile,
   type VoiceProfileAttachTarget,
 } from "@/lib/voiceProfiles";
 import { Button } from "@/components/ui/button";
@@ -36,6 +39,13 @@ interface ProfileDocument {
 
 const getProfileDocumentId = (profile: ProfileDocument) =>
   normalizeObjectId(profile._id) ?? "";
+
+type SavedTimelineSample = {
+  fileId: string;
+  target: VoiceProfileAttachTarget;
+};
+
+class ProfileQueueError extends Error {}
 
 interface AddTimelineVoiceSampleDialogProps {
   open: boolean;
@@ -72,6 +82,13 @@ export function AddTimelineVoiceSampleDialog({
     "existing",
   );
   const [newProfileName, setNewProfileName] = useState("");
+  const [recentProfileIds, setRecentProfileIds] = useState(
+    readRecentVoiceProfileIds,
+  );
+  const [savedSample, setSavedSample] = useState<SavedTimelineSample | null>(
+    null,
+  );
+  const [queueError, setQueueError] = useState<string | null>(null);
   const durationSeconds = Math.max(
     0,
     (endDate.getTime() - startDate.getTime()) / 1000,
@@ -96,12 +113,22 @@ export function AddTimelineVoiceSampleDialog({
     },
   );
 
+  const orderedProfiles = useMemo(
+    () =>
+      orderVoiceProfilesByRecent(
+        profiles,
+        getProfileDocumentId,
+        recentProfileIds,
+      ),
+    [profiles, recentProfileIds],
+  );
+
   useEffect(() => {
     if (!open || profileId || profiles.length === 0) return;
-    const preferred = profiles.find((profile) => profile.is_primary) ??
-      profiles[0];
+    const preferred = orderedProfiles[0] ??
+      profiles.find((profile) => profile.is_primary) ?? profiles[0];
     setProfileId(getProfileDocumentId(preferred));
-  }, [open, profileId, profiles]);
+  }, [open, orderedProfiles, profileId, profiles]);
 
   useEffect(() => {
     if (open && !isLoading && profiles.length === 0) setProfileMode("new");
@@ -122,54 +149,77 @@ export function AddTimelineVoiceSampleDialog({
   const addSample = useMutation({
     mutationFn: async () => {
       if (rangeProblem) throw new Error(rangeProblem);
-      let target = selectedProfile;
-      let createdProfile = false;
-      if (profileMode === "new") {
-        const name = newProfileName.trim();
-        if (!name) throw new Error("Enter a name for the new speaker.");
-        const profile = await callResource("speaker-segments", {
-          action: "create-profile",
-          name,
-        }) as ProfileDocument;
-        const id = getProfileDocumentId(profile);
-        if (!id) throw new Error("New speaker profile has no valid ID.");
-        target = { id, name: profile.name, isPrimary: false };
-        createdProfile = true;
+      let uploaded = savedSample;
+      if (!uploaded) {
+        let target = selectedProfile;
+        let createdProfile = false;
+        if (profileMode === "new") {
+          const name = newProfileName.trim();
+          if (!name) throw new Error("Enter a name for the new speaker.");
+          const profile = await callResource("speaker-segments", {
+            action: "create-profile",
+            name,
+          }) as ProfileDocument;
+          const id = getProfileDocumentId(profile);
+          if (!id) throw new Error("New speaker profile has no valid ID.");
+          target = { id, name: profile.name, isPrimary: false };
+          createdProfile = true;
+        }
+        if (!target) {
+          throw new Error("Choose a voice profile or create a new speaker.");
+        }
+        try {
+          const query = new URLSearchParams({
+            start: startDate.toISOString(),
+            end: endDate.toISOString(),
+          });
+          if (originalId) query.set("original_id", originalId);
+          const wav = await apiClient.getBlob(`/api/audio/wav?${query}`);
+          const upload = await apiClient.post<{ file_id: string }>(
+            "/api/files/upload",
+            {
+              file: await blobToBase64(wav),
+              filename: `timeline_voice_${startDate.toISOString()}.wav`,
+              mimetype: "audio/wav",
+              bucket: "voice_samples",
+              metadata: buildTimelineSampleMetadata(
+                target,
+                startDate,
+                endDate,
+                source,
+              ),
+            },
+          );
+          if (!upload.file_id) throw new Error("Audio sample was not saved.");
+          uploaded = { fileId: upload.file_id, target };
+          setSavedSample(uploaded);
+          setRecentProfileIds(rememberVoiceProfile(target.id));
+          void queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
+          void queryClient.invalidateQueries({
+            queryKey: voiceIdentityKeys.profiles,
+          });
+        } catch (error) {
+          if (createdProfile) {
+            throw new Error(
+              `${target.name} was created, but its audio sample was not saved. Select the existing profile and retry. ${
+                error instanceof Error ? error.message : ""
+              }`.trim(),
+            );
+          }
+          throw error;
+        }
       }
-      if (!target) {
-        throw new Error("Choose a voice profile or create a new speaker.");
-      }
+
+      setQueueError(null);
       try {
-        const query = new URLSearchParams({
-          start: startDate.toISOString(),
-          end: endDate.toISOString(),
-        });
-        if (originalId) query.set("original_id", originalId);
-        const wav = await apiClient.getBlob(`/api/audio/wav?${query}`);
-        const uploaded = await apiClient.post<{ file_id: string }>(
-          "/api/files/upload",
-          {
-            file: await blobToBase64(wav),
-            filename: `timeline_voice_${startDate.toISOString()}.wav`,
-            mimetype: "audio/wav",
-            bucket: "voice_samples",
-            metadata: buildTimelineSampleMetadata(
-              target,
-              startDate,
-              endDate,
-              source,
-            ),
-          },
-        );
-        if (!uploaded.file_id) throw new Error("Audio sample was not saved.");
         return await callResource("jobs", {
           action: "enqueue",
           data: {
             type: "enrollment",
-            name: target.name,
-            profile_id: target.id,
-            is_primary: target.isPrimary,
-            sample_file_id: uploaded.file_id,
+            name: uploaded.target.name,
+            profile_id: uploaded.target.id,
+            is_primary: uploaded.target.isPrimary,
+            sample_file_id: uploaded.fileId,
           },
           trigger: {
             type: "manual",
@@ -177,14 +227,11 @@ export function AddTimelineVoiceSampleDialog({
           },
         });
       } catch (error) {
-        if (createdProfile) {
-          throw new Error(
-            `${target.name} was created, but its audio sample was not queued. Select the existing profile and retry. ${
-              error instanceof Error ? error.message : ""
-            }`.trim(),
-          );
-        }
-        throw error;
+        const message = error instanceof Error
+          ? error.message
+          : "The profile rebuild could not be queued.";
+        setQueueError(message);
+        throw new ProfileQueueError(message);
       }
     },
     onSuccess: () => {
@@ -200,18 +247,41 @@ export function AddTimelineVoiceSampleDialog({
       });
       setNewProfileName("");
       setProfileMode("existing");
+      setSavedSample(null);
+      setQueueError(null);
       onOpenChange(false);
     },
-    onError: (mutationError) =>
+    onError: (mutationError) => {
+      if (mutationError instanceof ProfileQueueError) {
+        toast.warning("Voice sample saved; profile update is waiting", {
+          description:
+            "The audio will not be uploaded again. Retry when a diarizator slot is free.",
+        });
+        return;
+      }
       toast.error("Could not add Timeline sample", {
         description: mutationError instanceof Error
           ? mutationError.message
           : "Unknown error",
-      }),
+      });
+    },
   });
 
+  const closeDialog = () => {
+    if (addSample.isPending) return;
+    setSavedSample(null);
+    setQueueError(null);
+    onOpenChange(false);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) onOpenChange(true);
+        else closeDialog();
+      }}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add selection as voice sample</DialogTitle>
@@ -235,7 +305,8 @@ export function AddTimelineVoiceSampleDialog({
                 type="button"
                 variant={profileMode === "existing" ? "default" : "outline"}
                 onClick={() => setProfileMode("existing")}
-                disabled={profiles.length === 0 || addSample.isPending}
+                disabled={profiles.length === 0 || addSample.isPending ||
+                  Boolean(savedSample)}
               >
                 Existing profile
               </Button>
@@ -243,7 +314,7 @@ export function AddTimelineVoiceSampleDialog({
                 type="button"
                 variant={profileMode === "new" ? "default" : "outline"}
                 onClick={() => setProfileMode("new")}
-                disabled={addSample.isPending}
+                disabled={addSample.isPending || Boolean(savedSample)}
               >
                 New speaker
               </Button>
@@ -253,7 +324,8 @@ export function AddTimelineVoiceSampleDialog({
                 <Select
                   value={profileId}
                   onValueChange={setProfileId}
-                  disabled={isLoading || addSample.isPending}
+                  disabled={isLoading || addSample.isPending ||
+                    Boolean(savedSample)}
                 >
                   <SelectTrigger>
                     <SelectValue
@@ -263,7 +335,9 @@ export function AddTimelineVoiceSampleDialog({
                     />
                   </SelectTrigger>
                   <SelectContent>
-                    {profiles.filter(getProfileDocumentId).map((profile) => (
+                    {orderedProfiles.filter(getProfileDocumentId).map((
+                      profile,
+                    ) => (
                       <SelectItem
                         key={getProfileDocumentId(profile)}
                         value={getProfileDocumentId(profile)}
@@ -280,7 +354,7 @@ export function AddTimelineVoiceSampleDialog({
                   value={newProfileName}
                   onChange={(event) => setNewProfileName(event.target.value)}
                   placeholder="Speaker name, e.g. Andrew Kislov"
-                  disabled={addSample.isPending}
+                  disabled={addSample.isPending || Boolean(savedSample)}
                   aria-label="New speaker name"
                   autoFocus
                 />
@@ -291,23 +365,43 @@ export function AddTimelineVoiceSampleDialog({
               {rangeProblem ?? "Voice profiles could not be loaded."}
             </p>
           )}
+          {savedSample && queueError && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <p className="font-medium">
+                Audio saved and linked to {savedSample.target.name}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                The profile update was not queued. Retry below when the
+                diarizator is available; this clip will not be uploaded twice.
+              </p>
+              <p className="mt-2 break-words text-xs text-muted-foreground">
+                {queueError}
+              </p>
+            </div>
+          )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+          <Button
+            variant="outline"
+            onClick={closeDialog}
+            disabled={addSample.isPending}
+          >
+            {savedSample ? "Close" : "Cancel"}
           </Button>
           <Button
             onClick={() => addSample.mutate()}
             disabled={addSample.isPending || Boolean(rangeProblem) ||
-              (profileMode === "existing"
+              (!savedSample && (profileMode === "existing"
                 ? !selectedProfile
-                : !newProfileName.trim())}
+                : !newProfileName.trim()))}
           >
             {addSample.isPending && (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             )}
             {addSample.isPending
-              ? "Saving audio…"
+              ? savedSample ? "Queueing profile update…" : "Saving audio…"
+              : savedSample
+              ? "Retry profile update"
               : profileMode === "new"
               ? "Create speaker and save sample"
               : "Save and rebuild profile"}

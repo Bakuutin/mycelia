@@ -102,8 +102,26 @@ export class ApiClient {
     const response = await this.fetchRaw(path, options);
 
     if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = await response.clone().json();
+        const rawDetail = payload?.error ?? payload?.detail ?? payload?.message;
+        if (typeof rawDetail === "string") {
+          detail = rawDetail;
+        } else if (rawDetail !== undefined) {
+          detail = JSON.stringify(rawDetail);
+        }
+      } catch {
+        try {
+          detail = (await response.clone().text()).trim();
+        } catch {
+          // The status and status text remain useful when no body is readable.
+        }
+      }
       throw new Error(
-        `API request failed: ${response.status} ${response.statusText}`,
+        `API request failed: ${response.status} ${response.statusText}${
+          detail ? ` — ${detail}` : ""
+        }`,
       );
     }
 

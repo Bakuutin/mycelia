@@ -56,6 +56,26 @@ describe("ApiClient", () => {
       );
     });
 
+    it("includes the server error detail for actionable job failures", async () => {
+      const mockResponse = new Response(
+        JSON.stringify({
+          error:
+            "All healthy diarizator provider concurrency slots are reserved",
+        }),
+        {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { "content-type": "application/json" },
+        },
+      );
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
+      (auth.getCurrentJWT as any).mockResolvedValue("jwt-token");
+
+      await expect(client.fetch("/api/resource/jobs")).rejects.toThrow(
+        "API request failed: 500 Internal Server Error — All healthy diarizator provider concurrency slots are reserved",
+      );
+    });
+
     it("makes request without JWT when not available", async () => {
       const mockResponse = {
         ok: true,

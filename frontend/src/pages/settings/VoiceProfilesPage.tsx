@@ -248,6 +248,29 @@ const VoiceProfilesPage = () => {
     },
   });
 
+  const rebuildProfileMutation = useMutation({
+    mutationFn: async (profileId: string) =>
+      await callResource("jobs", {
+        action: "enqueue",
+        data: { type: "profileReenrollment", profileId },
+        trigger: {
+          type: "manual",
+          reason: "Rebuild voice profile from all saved samples",
+        },
+      }),
+    onSuccess: () => {
+      toast.success("Profile rebuild queued", {
+        description:
+          "All saved samples attached to this profile will be combined.",
+      });
+    },
+    onError: (error: Error) => {
+      toast.error("Could not queue profile rebuild", {
+        description: error.message,
+      });
+    },
+  });
+
   const createProfileMutation = useMutation({
     mutationFn: async (name: string) =>
       await callResource("speaker-segments", {
@@ -1158,6 +1181,24 @@ const VoiceProfilesPage = () => {
                           <Plus className="mr-1 h-4 w-4" />
                           Add sample
                         </Button>
+                        {profileSamples.length > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            title="Rebuild this speaker embedding from every saved sample"
+                            disabled={rebuildProfileMutation.isPending}
+                            onClick={() =>
+                              rebuildProfileMutation.mutate(profileId)}
+                          >
+                            {rebuildProfileMutation.isPending &&
+                                rebuildProfileMutation.variables === profileId
+                              ? (
+                                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                              )
+                              : <RotateCcw className="mr-1 h-4 w-4" />}
+                            Rebuild
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
