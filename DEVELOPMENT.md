@@ -10,12 +10,8 @@ development mode with hot reload.
 The fastest way to get a development environment with hot reload:
 
 ```bash
-# Set one key in .env:
-# APP_MODE=dev
-
-APP_MODE=dev \
-  docker compose up -d --build --force-recreate frontend backend
-docker compose restart nginx
+# Set APP_MODE=dev in .env, then apply it:
+docker compose build frontend && docker compose up -d --no-deps --force-recreate frontend backend && docker compose restart nginx
 ```
 
 #### Application Mode Variable
@@ -33,14 +29,11 @@ image tag, and the matching backend task. Switching it therefore requires a
 frontend build, frontend/backend recreation, and an nginx restart. The backend
 image itself does not need to be rebuilt.
 
-After the stack has been created once, switch to dev without rebuilding the
-unchanged backend image:
+After changing `APP_MODE` in `.env`, apply it without rebuilding the unchanged
+backend image:
 
 ```bash
-APP_MODE=dev docker compose build frontend
-APP_MODE=dev \
-  docker compose up -d --no-deps --force-recreate frontend backend
-docker compose restart nginx
+docker compose build frontend && docker compose up -d --no-deps --force-recreate frontend backend && docker compose restart nginx
 ```
 
 Use this rebuild matrix to avoid unnecessary work:
