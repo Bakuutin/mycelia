@@ -236,7 +236,7 @@ async function startServer(
   skipChecks = false,
   noWorkers = false,
 ) {
-  const backendMode = Deno.env.get("BACKEND_TASK") ?? "start";
+  const backendMode = Deno.env.get("APP_MODE") ?? "prod";
   const processStartedAt = new Date();
   let applicationStartupComplete = false;
   setServiceReady(false);

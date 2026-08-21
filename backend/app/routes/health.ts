@@ -26,7 +26,7 @@ export async function healthHandler(_req: Request, res: Response) {
 
 export async function readinessHandler(_req: Request, res: Response) {
   const status = getServiceReadiness();
-  const mode = Deno.env.get("BACKEND_TASK") ?? "start";
+  const mode = Deno.env.get("APP_MODE") ?? "prod";
   res.status(status === "ready" ? 200 : 503).json({
     status,
     mode,

@@ -10,52 +10,49 @@ development mode with hot reload.
 The fastest way to get a development environment with hot reload:
 
 ```bash
-# Set exactly one value for each key in .env:
-# FRONTEND_MODE=dev
-# BACKEND_TASK=dev
+# Set one key in .env:
+# APP_MODE=dev
 
-FRONTEND_MODE=dev BACKEND_TASK=dev \
+APP_MODE=dev \
   docker compose up -d --build --force-recreate frontend backend
 docker compose restart nginx
 ```
 
-#### Development Mode Variables
+#### Application Mode Variable
 
-| Variable        | Default | Dev Value | Effect                                                |
-| --------------- | ------- | --------- | ----------------------------------------------------- |
-| `FRONTEND_MODE` | `prod`  | `dev`     | Enables Vite hot reload instead of nginx static build |
-| `BACKEND_TASK`  | `start` | `dev`     | Enables file watcher for auto-restart on code changes |
+| Variable   | Default | Dev Value | Effect                                                          |
+| ---------- | ------- | --------- | --------------------------------------------------------------- |
+| `APP_MODE` | `prod`  | `dev`     | Selects both the frontend runtime and the backend reload policy |
 
-Both variables are optional and default to production mode if not set. In dev
-mode, frontend changes are handled by Vite HMR and backend changes restart the
-Deno process through `deno --watch`.
+`APP_MODE` is optional and defaults to production mode. In dev mode, frontend
+changes are handled by Vite HMR and backend changes restart the Deno process
+through `deno --watch`.
 
-`FRONTEND_MODE` selects both `Dockerfile.dev`/`Dockerfile.prod` and a separate
-local frontend image tag. Switching it therefore requires a frontend build and
-recreation, followed by an nginx restart. `BACKEND_TASK` changes only the
-container command; switching it requires backend recreation but no image build.
+`APP_MODE` selects `Dockerfile.dev`/`Dockerfile.prod`, a separate local frontend
+image tag, and the matching backend task. Switching it therefore requires a
+frontend build, frontend/backend recreation, and an nginx restart. The backend
+image itself does not need to be rebuilt.
 
 After the stack has been created once, switch to dev without rebuilding the
 unchanged backend image:
 
 ```bash
-FRONTEND_MODE=dev docker compose build frontend
-FRONTEND_MODE=dev BACKEND_TASK=dev \
+APP_MODE=dev docker compose build frontend
+APP_MODE=dev \
   docker compose up -d --no-deps --force-recreate frontend backend
 docker compose restart nginx
 ```
 
 Use this rebuild matrix to avoid unnecessary work:
 
-| Change                        | Dev mode                                     | Production mode                                                                      |
-| ----------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `frontend/src`                | Vite HMR; no build/recreate                  | Build and recreate `frontend`, then restart nginx                                    |
-| Backend source                | Deno watcher reloads it                      | Recreate `backend`, then restart nginx; no image build for the bind-mounted checkout |
-| Python source                 | Recreate `python-worker`; no image build     | Same                                                                                 |
-| `FRONTEND_MODE`               | Build/recreate `frontend`, restart nginx     | Same                                                                                 |
-| `BACKEND_TASK`                | Recreate `backend`, restart nginx            | Same; no image build                                                                 |
-| Dockerfile or dependency lock | Build and recreate only the affected service | Same                                                                                 |
-| Runtime `.env` value          | Recreate only affected services              | Same                                                                                 |
+| Change                        | Dev mode                                                 | Production mode                                                                      |
+| ----------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `frontend/src`                | Vite HMR; no build/recreate                              | Build and recreate `frontend`, then restart nginx                                    |
+| Backend source                | Deno watcher reloads it                                  | Recreate `backend`, then restart nginx; no image build for the bind-mounted checkout |
+| Python source                 | Recreate `python-worker`; no image build                 | Same                                                                                 |
+| `APP_MODE`                    | Build frontend; recreate frontend/backend; restart nginx | Same; no backend image build                                                         |
+| Dockerfile or dependency lock | Build and recreate only the affected service             | Same                                                                                 |
+| Runtime `.env` value          | Recreate only affected services                          | Same                                                                                 |
 
 Backend, frontend, and python-worker builds use Dockerfile-specific allowlists.
 Only their source tree (plus `myceliasdk` where needed) enters the build
@@ -628,16 +625,16 @@ exact self-hosted model ID to an unrelated cloud provider as a recovery step.
 
 ### Queue recovery and process restarts
 
-For unattended local use, prefer the stable runtime (`FRONTEND_MODE=prod` and
-`BACKEND_TASK=start`). Use Docker hot reload only while actively editing: Vite
-and the Deno watcher consume more memory, and a watcher can keep its container
-alive after the child application has failed.
+For unattended local use, prefer the stable runtime (`APP_MODE=prod`). Use
+Docker hot reload only while actively editing: Vite and the Deno watcher consume
+more memory, and a watcher can keep its container alive after the child
+application has failed.
 
 Docker restart policies react to a stopped container, not to an `unhealthy`
-status. In `BACKEND_TASK=dev`, Deno's watcher intentionally remains as PID 1
-after an application failure and waits for a file change, so Docker cannot
-restart it. If unattended recovery matters, use `BACKEND_TASK=start`; after a
-source or configuration change, recreate only `backend` and restart `nginx`.
+status. In `APP_MODE=dev`, Deno's watcher intentionally remains as PID 1 after
+an application failure and waits for a file change, so Docker cannot restart it.
+If unattended recovery matters, use `APP_MODE=prod`; after a source or
+configuration change, recreate only `backend` and restart `nginx`.
 
 Check the whole stack without changing data:
 

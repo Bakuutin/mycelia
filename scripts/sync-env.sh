@@ -7,7 +7,7 @@
 # Usage:
 #   ./scripts/sync-env.sh           # Interactive - prompts before adding
 #   ./scripts/sync-env.sh --dry-run # Preview changes without modifying
-#   ./scripts/sync-env.sh --all     # Include optional vars (FRONTEND_MODE, BACKEND_TASK)
+#   ./scripts/sync-env.sh --all     # Include optional vars (APP_MODE)
 
 set -e
 
@@ -28,8 +28,8 @@ for arg in "$@"; do
 done
 
 # Variables that have good defaults in docker-compose.yml (skip unless --all)
-# FRONTEND_MODE defaults to 'prod', BACKEND_TASK defaults to 'start'
-OPTIONAL_VARS="FRONTEND_MODE BACKEND_TASK"
+# APP_MODE defaults to 'prod'
+OPTIONAL_VARS="APP_MODE"
 
 # Variables that need generated values instead of example defaults
 generate_value() {

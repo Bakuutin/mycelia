@@ -55,15 +55,13 @@ audio
 Для стабильной unattended работы в корневом `.env`:
 
 ```dotenv
-FRONTEND_MODE=prod
-BACKEND_TASK=start
+APP_MODE=prod
 ```
 
 Для разработки с live reload:
 
 ```dotenv
-FRONTEND_MODE=dev
-BACKEND_TASK=dev
+APP_MODE=dev
 ```
 
 После изменения режима или `.env` пересоздайте application services:

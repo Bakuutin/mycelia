@@ -60,8 +60,8 @@ Use `Preview purge`; compare document/embedding counts with the intended run. En
 ## Verification
 
 Follow `DEVELOPMENT.md` readiness diagnostics: confirm bind mounts and the
-effective runtime mode. Live source reload requires `BACKEND_TASK=dev` and
-`FRONTEND_MODE=dev`; `start`/`prod` requires explicit rebuild/recreation.
+effective runtime mode. Live source reload requires `APP_MODE=dev`;
+`APP_MODE=prod` requires explicit rebuild/recreation.
 Verify `[READY]` logs, container health, `/audio/pipeline`,
 `/settings/voice-identity`, `/timeline`, `/transcript`, and a real annotation
 round-trip.

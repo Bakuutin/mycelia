@@ -83,10 +83,10 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: bakuutin/mycelia-frontend:${FRONTEND_MODE:-prod}
+    image: bakuutin/mycelia-frontend:${APP_MODE:-prod}
     build:
       context: .
-      dockerfile: ./frontend/Dockerfile.${FRONTEND_MODE:-prod}
+      dockerfile: ./frontend/Dockerfile.${APP_MODE:-prod}
     expose:
       - "8080"
     restart: unless-stopped
@@ -107,14 +107,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: deno task ${BACKEND_TASK:-start}
+    command: deno task ${APP_MODE:-prod}
     env_file:
       - .env
     environment:
-      # Keep the process-visible mode aligned with the command selected above.
-      # Otherwise an env_file value such as BACKEND_TASK=start makes readiness
-      # diagnostics report production even when Compose launched `deno task dev`.
-      BACKEND_TASK: ${BACKEND_TASK:-start}
+      # Keep readiness diagnostics aligned with the single mode that selects
+      # both the frontend image and the backend command.
+      APP_MODE: ${APP_MODE:-prod}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       PYTHON_WORKER_URL: http://python-worker:8000
