@@ -80,7 +80,9 @@ Deno.test(
       auth,
     ) as any;
     expect(current.usableCalibration.calibrationId).toBe("current");
+    expect(current.usableCalibration.classificationPolicy).toBe("full");
     expect(current.canClassify).toBe(true);
+    expect(current.canRunFullClassification).toBe(true);
     expect(current.blockers).toEqual([]);
     expect(current.latestJob.state).toBe("completed");
     expect(
@@ -102,5 +104,78 @@ Deno.test(
     expect(changed.usableCalibration).toBeNull();
     expect(changed.canClassify).toBe(false);
     expect(changed.blockers.join(" ")).toContain("profile revision changed");
+
+    await mongo({
+      action: "insertOne",
+      collection: "speaker_calibrations",
+      doc: {
+        calibrationId: "rev3-pilot",
+        profileId,
+        profileRevision: 3,
+        embeddingSpaceId: "pyannote-v2",
+        status: "validated",
+        serverComputed: true,
+        contractVersion: "server-computed-v1",
+        computedBy: "speaker-segments",
+        positiveThreshold: 0.75,
+        negativeThreshold: 0.4,
+        targetPrecision: 0.95,
+        validationMetrics: {
+          positivePrecision: 0.96,
+          identified: 20,
+        },
+        calibrationRecordingIds: ["pilot-fit"],
+        validationRecordingIds: ["pilot-check"],
+        classificationPolicy: "pilot",
+        operatorAcceptedLowerPrecision: true,
+        maxRangeHours: 24,
+        createdAt: new Date("2026-08-22T00:00:00Z"),
+      },
+    });
+    const pilot = await resource.use(
+      { action: "identity-status", profileId },
+      auth,
+    ) as any;
+    expect(pilot.usableCalibration.calibrationId).toBe("rev3-pilot");
+    expect(pilot.usableCalibration.classificationPolicy).toBe("pilot");
+    expect(pilot.usableCalibration.maxRangeHours).toBe(24);
+    expect(pilot.canClassify).toBe(true);
+    expect(pilot.canRunFullClassification).toBe(false);
+
+    await mongo({
+      action: "insertOne",
+      collection: "speaker_calibrations",
+      doc: {
+        calibrationId: "rev3-full",
+        profileId,
+        profileRevision: 3,
+        embeddingSpaceId: "pyannote-v2",
+        status: "validated",
+        serverComputed: true,
+        contractVersion: "server-computed-v1",
+        computedBy: "speaker-segments",
+        positiveThreshold: 0.8,
+        negativeThreshold: 0.4,
+        targetPrecision: 0.98,
+        validationMetrics: {
+          positivePrecision: 0.99,
+          identified: 20,
+        },
+        calibrationRecordingIds: ["full-fit"],
+        validationRecordingIds: ["full-check"],
+        createdAt: new Date("2026-08-21T12:00:00Z"),
+      },
+    });
+    const fullPreferred = await resource.use(
+      { action: "identity-status", profileId },
+      auth,
+    ) as any;
+    expect(fullPreferred.usableCalibration.calibrationId).toBe("rev3-full");
+    expect(fullPreferred.usableCalibration.classificationPolicy).toBe("full");
+    expect(fullPreferred.usablePilotCalibration.calibrationId).toBe(
+      "rev3-pilot",
+    );
+    expect(fullPreferred.canClassify).toBe(true);
+    expect(fullPreferred.canRunFullClassification).toBe(true);
   }),
 );

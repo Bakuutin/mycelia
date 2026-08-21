@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -275,3 +276,190 @@ def test_job_rejects_legacy_client_asserted_calibration() -> None:
             ),
             lambda _progress: None,
         )
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "message"),
+    [
+        (None, None, "require both start and end"),
+        (
+            datetime(2026, 8, 20, tzinfo=UTC),
+            datetime(2026, 8, 21, 1, tzinfo=UTC),
+            "cannot exceed 24 hours",
+        ),
+        (
+            datetime(2026, 8, 21, tzinfo=UTC),
+            datetime(2026, 8, 20, tzinfo=UTC),
+            "end must be after start",
+        ),
+    ],
+)
+def test_pilot_calibration_requires_a_bounded_range(start, end, message) -> None:
+    profile_id = ObjectId()
+    profile = {
+        "_id": profile_id,
+        "name": "Sky",
+        "embedding": [1.0, 0.0],
+        "revision": 2,
+        "embeddingSpaceId": "space-v1",
+    }
+    pilot = valid_calibration(
+        targetPrecision=0.95,
+        validationMetrics={"positivePrecision": 0.96, "identified": 10},
+        classificationPolicy="pilot",
+        operatorAcceptedLowerPrecision=True,
+        maxRangeHours=24,
+    )
+
+    with (
+        patch("jobs.speaker_identity.get_profile_by_id", return_value=profile),
+        patch("jobs.speaker_identity.call_resource", return_value=pilot),
+        pytest.raises(ValueError, match=message),
+    ):
+        payload = {
+            "runId": "run-1",
+            "profileId": str(profile_id),
+            "profileRevision": 2,
+            "calibrationId": "pilot-calibration",
+            "start": start,
+            "end": end,
+            "limit": 10,
+        }
+        data = (
+            SpeakerIdentityJobData.model_construct(**payload)
+            if start is not None and end is not None and end <= start
+            else SpeakerIdentityJobData(**payload)
+        )
+        process_speaker_identity_job(
+            "job-pilot-range",
+            data,
+            lambda _progress: None,
+        )
+
+
+def test_pilot_calibration_requires_explicit_risk_acceptance() -> None:
+    profile_id = ObjectId()
+    profile = {
+        "_id": profile_id,
+        "name": "Sky",
+        "embedding": [1.0, 0.0],
+        "revision": 2,
+        "embeddingSpaceId": "space-v1",
+    }
+    unaccepted = valid_calibration(
+        targetPrecision=0.95,
+        validationMetrics={"positivePrecision": 0.96, "identified": 10},
+        classificationPolicy="pilot",
+        operatorAcceptedLowerPrecision=False,
+        maxRangeHours=24,
+    )
+    end = datetime(2026, 8, 21, tzinfo=UTC)
+
+    with (
+        patch("jobs.speaker_identity.get_profile_by_id", return_value=profile),
+        patch("jobs.speaker_identity.call_resource", return_value=unaccepted),
+        pytest.raises(ValueError, match="explicitly accepted bounded pilot"),
+    ):
+        process_speaker_identity_job(
+            "job-unaccepted-pilot",
+            SpeakerIdentityJobData(
+                runId="run-1",
+                profileId=str(profile_id),
+                profileRevision=2,
+                calibrationId="pilot-calibration",
+                start=end - timedelta(hours=24),
+                end=end,
+                limit=10,
+            ),
+            lambda _progress: None,
+        )
+
+
+def test_pilot_decisions_and_campaign_are_marked_provisional() -> None:
+    profile_id = ObjectId()
+    profile = {
+        "_id": profile_id,
+        "name": "Sky",
+        "embedding": [1.0, 0.0],
+        "revision": 2,
+        "embeddingSpaceId": "space-v1",
+    }
+    segment = {
+        "_id": ObjectId(),
+        "embedding": [-1.0, 0.0],
+        "embeddingSpaceId": "space-v1",
+    }
+    pilot = valid_calibration(
+        targetPrecision=0.95,
+        validationMetrics={"positivePrecision": 0.96, "identified": 10},
+        classificationPolicy="pilot",
+        operatorAcceptedLowerPrecision=True,
+        maxRangeHours=24,
+        negativeThreshold=-1,
+        negativeDecisionMode="uncertain_only",
+        recommendedPositiveThreshold=0.75,
+        positiveThresholdSource="operator_stricter",
+    )
+    writes = []
+    campaign_updates = []
+    read_queries = []
+
+    def resource(_name, request):
+        collection = request["collection"]
+        action = request["action"]
+        if collection == "speaker_calibrations":
+            return pilot
+        if collection == "speaker_identity_campaigns":
+            if action == "findOne":
+                return None
+            campaign_updates.append(request["update"]["$set"])
+            return {"modifiedCount": 1}
+        if collection == "diarizations" and action == "count":
+            return 1
+        if collection == "diarizations" and action == "find":
+            read_queries.append(request["query"])
+            return [segment]
+        if collection == "diarizations" and action == "bulkWrite":
+            writes.extend(request["operations"])
+            return {"modifiedCount": 1}
+        raise AssertionError(request)
+
+    end = datetime(2026, 8, 21, tzinfo=UTC)
+    with (
+        patch("jobs.speaker_identity.get_profile_by_id", return_value=profile),
+        patch("jobs.speaker_identity.call_resource", side_effect=resource),
+    ):
+        result = process_speaker_identity_job(
+            "job-pilot",
+            SpeakerIdentityJobData(
+                runId="run-1",
+                profileId=str(profile_id),
+                profileRevision=2,
+                calibrationId="pilot-calibration",
+                start=end - timedelta(hours=24),
+                end=end,
+                limit=10,
+            ),
+            lambda _progress: None,
+        )
+
+    update = writes[0]["updateOne"]["update"]
+    identity = update["$set"]["speakerIdentity"]
+    assert identity["validity"] == "provisional"
+    assert identity["classificationPolicy"] == "pilot"
+    assert identity["state"] == "uncertain"
+    assert identity["negativeDecisionMode"] == "uncertain_only"
+    assert identity["recommendedPositiveThreshold"] == 0.75
+    assert identity["positiveThresholdSource"] == "operator_stricter"
+    expected_guard = [
+        {"speakerIdentity.validity": "verified"},
+        {"speakerIdentity.classificationPolicy": "full"},
+    ]
+    assert read_queries[0]["$nor"] == expected_guard
+    assert writes[0]["updateOne"]["filter"]["$nor"] == expected_guard
+    assert "matched_speaker" not in update["$set"]
+    assert update["$unset"] == {"matched_speaker": ""}
+    assert campaign_updates[0]["classificationPolicy"] == "pilot"
+    assert campaign_updates[0]["decisionValidity"] == "provisional"
+    assert result["classificationPolicy"] == "pilot"
+    assert result["maxRangeHours"] == 24.0

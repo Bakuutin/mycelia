@@ -90,6 +90,12 @@ function SpeakerIdentityLauncher({
 
   const status = statusQuery.data;
   const calibration = status?.usableCalibration;
+  const calibrationPolicy = calibration
+    ? calibration.classificationPolicy ??
+      (calibration.targetPrecision >= 0.98 ? "full" : "pilot")
+    : null;
+  const pilotOnly = Boolean(calibration && calibrationPolicy === "pilot");
+  const maxRangeHours = calibration?.maxRangeHours ?? (pilotOnly ? 24 : null);
   const compatibleRuns = useMemo(
     () =>
       compatibleSpeakerIdentityRuns(
@@ -108,6 +114,12 @@ function SpeakerIdentityLauncher({
       setSelectedRunId(compatibleRuns[0]?.runId ?? "");
     }
   }, [compatibleRuns, selectedRunId]);
+
+  useEffect(() => {
+    if (pilotOnly && rangeMode !== 24 && rangeMode !== "custom") {
+      setRangeMode(24);
+    }
+  }, [pilotOnly, rangeMode]);
 
   const selectedRun = compatibleRuns.find((run) => run.runId === selectedRunId);
   const range = rangeMode === "custom"
@@ -187,12 +199,22 @@ function SpeakerIdentityLauncher({
     if (range.end <= range.start) {
       values.push("End time must be after start time");
     }
+    if (
+      maxRangeHours != null &&
+      range.end.getTime() - range.start.getTime() >
+        maxRangeHours * 3_600_000
+    ) {
+      values.push(
+        `This provisional calibration is limited to ${maxRangeHours} hours per pilot`,
+      );
+    }
     return [...new Set(values)];
   }, [
     activeCampaign,
     calibration,
     compatibleRuns.length,
     loading,
+    maxRangeHours,
     primaryId,
     profilesQuery.error,
     profilesQuery.isError,
@@ -224,7 +246,9 @@ function SpeakerIdentityLauncher({
         priority: 3,
         trigger: {
           type: "manual",
-          reason: rangeMode === 24
+          reason: pilotOnly
+            ? "Provisional Voice Identity pilot from Jobs"
+            : rangeMode === 24
             ? "Voice Identity 24-hour pilot from Jobs"
             : "Voice Identity classification from Jobs",
         },
@@ -261,12 +285,18 @@ function SpeakerIdentityLauncher({
             {loading
               ? "Checking…"
               : calibration
-              ? "Server validated"
+              ? calibrationPolicy === "pilot"
+                ? "Provisional pilot"
+                : "Full classification"
               : "Not ready"}
           </p>
           {calibration && (
-            <Badge className="mt-1 bg-green-500/10 text-green-600">
-              Independent precision ≥98%
+            <Badge
+              className={calibrationPolicy === "pilot"
+                ? "mt-1 bg-amber-500/10 text-amber-600"
+                : "mt-1 bg-green-500/10 text-green-600"}
+            >
+              {(calibration.targetPrecision * 100).toFixed(0)}% held-out target
             </Badge>
           )}
         </div>
@@ -313,17 +343,18 @@ function SpeakerIdentityLauncher({
       <div className="space-y-2">
         <Label>Audio range</Label>
         <div className="flex flex-wrap gap-2">
-          {[
+          {([
             [24, "24-hour pilot"],
             [168, "7 days"],
             [336, "14 days"],
-          ].map(([hours, label]) => (
+          ] as const).map(([hours, label]) => (
             <Button
               key={hours}
               type="button"
               size="sm"
               variant={rangeMode === hours ? "default" : "outline"}
               onClick={() => setRangeMode(hours as 24 | 168 | 336)}
+              disabled={maxRangeHours != null && hours > maxRangeHours}
             >
               {label}
             </Button>
@@ -362,6 +393,13 @@ function SpeakerIdentityLauncher({
         Selected: {range.start.toLocaleString()} →{" "}
         {range.end.toLocaleString()}. Existing diarization embeddings are
         classified in resumable batches; audio is not processed again.
+        {pilotOnly && (
+          <>
+            {" "}This lower-precision calibration is provisional, so each run is
+            capped at {maxRangeHours ?? 24}{" "}
+            hours. Review false positives before expanding.
+          </>
+        )}
       </p>
 
       {activeCampaign?.currentJobId && (
@@ -416,6 +454,8 @@ function SpeakerIdentityLauncher({
           <Play className="mr-2 h-4 w-4" />
           {launch.isPending
             ? "Queueing…"
+            : pilotOnly
+            ? "Start provisional pilot"
             : rangeMode === 24
             ? "Start 24-hour pilot"
             : "Start classification"}

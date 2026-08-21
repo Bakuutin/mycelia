@@ -19,6 +19,7 @@ import {
   restoreReviewDecision,
 } from "./review-sessions.ts";
 import {
+  applyPositiveThresholdOverride,
   chooseCalibrationThresholds,
   cosineSimilarity,
   evaluateCalibration,
@@ -27,8 +28,15 @@ import {
 import {
   describeCalibrations,
   findUsableCalibration,
+  findUsableFullCalibration,
+  findUsablePilotCalibration,
+  normalizeCalibrationPolicy,
+  normalizeNegativeDecisionMode,
+  normalizePositiveThresholdProvenance,
   SPEAKER_CALIBRATION_COMPUTED_BY,
   SPEAKER_CALIBRATION_CONTRACT_VERSION,
+  SPEAKER_CALIBRATION_PILOT_MAX_RANGE_HOURS,
+  SPEAKER_CALIBRATION_PILOT_MIN_PRECISION,
   SPEAKER_CALIBRATION_TARGET_PRECISION,
   SPEAKER_IDENTITY_SNAPSHOT_INDEX,
 } from "./calibration-contract.ts";
@@ -330,7 +338,21 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     profileId: objectId,
     calibrationRecordingIds: z.array(z.string()).default([]),
     validationRecordingIds: z.array(z.string()).default([]),
-    targetPrecision: z.number().min(0.5).max(1).default(0.98),
+    targetPrecision: z.number().min(SPEAKER_CALIBRATION_PILOT_MIN_PRECISION)
+      .max(1).default(SPEAKER_CALIBRATION_TARGET_PRECISION),
+    positiveThresholdOverride: z.number().finite().min(-1).max(1).optional(),
+  }).superRefine((value, context) => {
+    if (
+      value.positiveThresholdOverride !== undefined &&
+      value.targetPrecision >= SPEAKER_CALIBRATION_TARGET_PRECISION
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["positiveThresholdOverride"],
+        message:
+          "Positive threshold override is available only for provisional pilots",
+      });
+    }
   }),
   z.object({
     action: z.literal("identity-status"),
@@ -351,10 +373,34 @@ export const speakerSegmentsRequestSchema = z.discriminatedUnion("action", [
     profileId: objectId,
     calibrationRecordingIds: z.array(z.string()).min(1),
     validationRecordingIds: z.array(z.string()).min(1),
-    targetPrecision: z.literal(SPEAKER_CALIBRATION_TARGET_PRECISION).default(
-      SPEAKER_CALIBRATION_TARGET_PRECISION,
-    ),
-  }).strict(),
+    targetPrecision: z.number().min(SPEAKER_CALIBRATION_PILOT_MIN_PRECISION)
+      .max(1).default(SPEAKER_CALIBRATION_TARGET_PRECISION),
+    positiveThresholdOverride: z.number().finite().min(-1).max(1).optional(),
+    acceptLowerPrecisionRisk: z.boolean().default(false),
+  }).strict().superRefine((value, context) => {
+    if (
+      value.targetPrecision < SPEAKER_CALIBRATION_TARGET_PRECISION &&
+      value.acceptLowerPrecisionRisk !== true
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["acceptLowerPrecisionRisk"],
+        message:
+          "Explicitly accept lower-precision pilot risk before saving this calibration",
+      });
+    }
+    if (
+      value.positiveThresholdOverride !== undefined &&
+      value.targetPrecision >= SPEAKER_CALIBRATION_TARGET_PRECISION
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["positiveThresholdOverride"],
+        message:
+          "Positive threshold override is available only for provisional pilots",
+      });
+    }
+  }),
   z.object({ action: z.literal("list-runs") }),
   z.object({
     action: z.literal("list-campaigns"),
@@ -454,6 +500,7 @@ type ReviewAutomaticIdentityContext = {
   calibrationId: string;
   profileRevision: number;
   embeddingSpaceId: string;
+  decisionValidity: "verified" | "provisional";
 };
 
 type ResolvedReviewCandidateContext = {
@@ -532,10 +579,19 @@ export async function resolveReviewCandidateContext(
         "Audit automatic matches requires a current server-validated calibration",
       );
     }
+    const policy = normalizeCalibrationPolicy(calibration);
+    if (!policy) {
+      throw new Error(
+        "Audit automatic matches requires a current calibration policy",
+      );
+    }
     automaticIdentity = {
       calibrationId: String(calibration.calibrationId),
       profileRevision,
       embeddingSpaceId: profileSpace,
+      decisionValidity: policy.classificationPolicy === "full"
+        ? "verified"
+        : "provisional",
     };
   }
   return { embeddingSpaceIds: [profileSpace], automaticIdentity };
@@ -574,7 +630,7 @@ function buildReviewIdentityFilter(
       "speakerIdentity.profileRevision": automaticIdentity.profileRevision,
       "speakerIdentity.embeddingSpaceId": automaticIdentity.embeddingSpaceId,
       "speakerIdentity.source": "automatic",
-      "speakerIdentity.validity": "verified",
+      "speakerIdentity.validity": automaticIdentity.decisionValidity,
       $or: [
         { "speakerIdentity.profileId": { $in: profileValues } },
         { "speakerIdentity.topCandidate.profileId": { $in: profileValues } },
@@ -912,24 +968,29 @@ async function suppressStaleAutomaticIdentities(
   const profileById = new Map(
     profiles.map((profile) => [String(profile._id), profile]),
   );
-  const usableIds = new Set<string>();
+  const usablePolicies = new Map<string, "full" | "pilot">();
   for (const calibration of calibrations) {
     const profileId = String(calibration.profileId ?? "");
     const profile = profileById.get(profileId);
-    if (
-      profile && findUsableCalibration([calibration], {
-        profileId,
-        profileRevision: Number(profile.revision ?? 1),
-        embeddingSpaceId: profile.embeddingSpaceId,
-      })
-    ) {
-      usableIds.add(String(calibration.calibrationId));
+    const usable = profile && findUsableCalibration([calibration], {
+      profileId,
+      profileRevision: Number(profile.revision ?? 1),
+      embeddingSpaceId: profile.embeddingSpaceId,
+    });
+    const policy = usable ? normalizeCalibrationPolicy(calibration) : null;
+    if (policy) {
+      usablePolicies.set(
+        String(calibration.calibrationId),
+        policy.classificationPolicy,
+      );
     }
   }
   for (const segment of automatic) {
     const identity = segment.speakerIdentity;
-    if (usableIds.has(String(identity.calibrationId))) {
-      identity.validity = "verified";
+    const policy = usablePolicies.get(String(identity.calibrationId));
+    if (policy) {
+      identity.validity = policy === "full" ? "verified" : "provisional";
+      identity.classificationPolicy = policy;
       continue;
     }
     identity.validity = "stale";
@@ -1192,6 +1253,7 @@ async function computeCalibrationPreview(
   requestedCalibrationIds: string[],
   requestedValidationIds: string[],
   targetPrecision: number,
+  positiveThresholdOverride?: number,
 ): Promise<any> {
   const profileObjectId = new ObjectId(profileId);
   const profile = await mongo({
@@ -1319,15 +1381,22 @@ async function computeCalibrationPreview(
   const validationExamples = examples.filter((item) =>
     validationSet.has(item.recordingId)
   );
-  const thresholds = chooseCalibrationThresholds(
+  const recommendedThresholds = chooseCalibrationThresholds(
     calibrationExamples,
     targetPrecision,
   );
+  const thresholdSelection = applyPositiveThresholdOverride(
+    recommendedThresholds,
+    positiveThresholdOverride,
+    targetPrecision < SPEAKER_CALIBRATION_TARGET_PRECISION,
+  );
+  const thresholds = thresholdSelection.thresholds;
   const calibrationMetrics = thresholds
     ? evaluateCalibration(
       calibrationExamples,
       thresholds.positiveThreshold,
       thresholds.negativeThreshold,
+      thresholds.negativeDecisionMode,
     )
     : null;
   const validationMetrics = thresholds
@@ -1335,6 +1404,7 @@ async function computeCalibrationPreview(
       validationExamples,
       thresholds.positiveThreshold,
       thresholds.negativeThreshold,
+      thresholds.negativeDecisionMode,
     )
     : null;
   const positive = examples.filter((item) => item.label === "positive").length;
@@ -1371,7 +1441,7 @@ async function computeCalibrationPreview(
   }
   if (!thresholds) {
     blockers.push(
-      "No threshold pair reaches the target precision on calibration audio",
+      "No auto-Sky threshold reaches the target precision on calibration audio",
     );
   }
   if (
@@ -1403,6 +1473,9 @@ async function computeCalibrationPreview(
     automaticSplit,
     targetPrecision,
     thresholds,
+    recommendedPositiveThreshold:
+      thresholdSelection.recommendedPositiveThreshold,
+    positiveThresholdSource: thresholdSelection.positiveThresholdSource,
     calibrationMetrics,
     validationMetrics,
     scoreDistribution: {
@@ -3334,6 +3407,7 @@ export class SpeakerSegmentsResource
           input.calibrationRecordingIds,
           input.validationRecordingIds,
           input.targetPrecision,
+          input.positiveThresholdOverride,
         );
       case "identity-status": {
         const profileId = new ObjectId(input.profileId);
@@ -3426,10 +3500,65 @@ export class SpeakerSegmentsResource
           calibrations,
           calibrationContext,
         );
-        const usableCalibration = findUsableCalibration(
+        const latestUsableCalibrationRecord = findUsableCalibration(
           calibrations,
           calibrationContext,
         );
+        const usableFullCalibration = findUsableFullCalibration(
+          calibrations,
+          calibrationContext,
+        );
+        const usablePilotCalibrationRecord = findUsablePilotCalibration(
+          calibrations,
+          calibrationContext,
+        );
+        // Launchers should never be moved from a verified/full calibration to a
+        // newer bounded pilot. Keep the pilot visible separately for audit and
+        // explicitly scoped pilot runs.
+        const usableCalibrationRecord = usableFullCalibration ??
+          latestUsableCalibrationRecord;
+        const usableCalibrationPolicy = usableCalibrationRecord
+          ? normalizeCalibrationPolicy(usableCalibrationRecord)
+          : null;
+        const usableCalibration = usableCalibrationRecord &&
+            usableCalibrationPolicy
+          ? {
+            ...usableCalibrationRecord,
+            ...usableCalibrationPolicy,
+            negativeDecisionMode: normalizeNegativeDecisionMode(
+              usableCalibrationRecord,
+            ),
+            recommendedPositiveThreshold: normalizePositiveThresholdProvenance(
+              usableCalibrationRecord,
+            )
+              ?.recommendedPositiveThreshold,
+            positiveThresholdSource: normalizePositiveThresholdProvenance(
+              usableCalibrationRecord,
+            )
+              ?.positiveThresholdSource,
+          }
+          : null;
+        const usablePilotCalibrationPolicy = usablePilotCalibrationRecord
+          ? normalizeCalibrationPolicy(usablePilotCalibrationRecord)
+          : null;
+        const usablePilotCalibration = usablePilotCalibrationRecord &&
+            usablePilotCalibrationPolicy
+          ? {
+            ...usablePilotCalibrationRecord,
+            ...usablePilotCalibrationPolicy,
+            negativeDecisionMode: normalizeNegativeDecisionMode(
+              usablePilotCalibrationRecord,
+            ),
+            recommendedPositiveThreshold: normalizePositiveThresholdProvenance(
+              usablePilotCalibrationRecord,
+            )
+              ?.recommendedPositiveThreshold,
+            positiveThresholdSource: normalizePositiveThresholdProvenance(
+              usablePilotCalibrationRecord,
+            )
+              ?.positiveThresholdSource,
+          }
+          : null;
         const blockers: string[] = [];
         if (!profile) blockers.push("Profile no longer exists");
         if (!profile?.is_primary) blockers.push("Profile is not primary");
@@ -3508,7 +3637,10 @@ export class SpeakerSegmentsResource
           },
           calibrations: describedCalibrations,
           usableCalibration,
+          usablePilotCalibration,
           canClassify: blockers.length === 0,
+          canRunFullClassification: blockers.length === 0 &&
+            Boolean(usableFullCalibration),
           blockers,
           latestJob: latestJobs[0] ?? null,
           latestCampaign: latestCampaigns[0] ?? null,
@@ -3532,12 +3664,25 @@ export class SpeakerSegmentsResource
         ]) as [any, any[]];
         const profileRevision = Number(profile?.revision ?? 1);
         const embeddingSpaceId = profile?.embeddingSpaceId ?? null;
+        const calibrationContext = {
+          profileId: input.profileId,
+          profileRevision,
+          embeddingSpaceId,
+        };
         const usableCalibration = profile
           ? findUsableCalibration(calibrations, {
-            profileId: input.profileId,
-            profileRevision,
-            embeddingSpaceId,
+            ...calibrationContext,
           })
+          : null;
+        const usablePolicy = usableCalibration
+          ? normalizeCalibrationPolicy(usableCalibration)
+          : null;
+        const usableFullCalibration = profile
+          ? findUsableFullCalibration(calibrations, calibrationContext)
+          : null;
+        const usablePilotCalibration = usablePolicy?.classificationPolicy ===
+            "pilot"
+          ? usableCalibration
           : null;
         const rawIdentityCounts = await mongo({
           action: "aggregate",
@@ -3562,7 +3707,7 @@ export class SpeakerSegmentsResource
             row.count,
           ]),
         );
-        const verifiedCounts = usableCalibration
+        const verifiedCounts = usableFullCalibration
           ? await mongo({
             action: "aggregate",
             collection: "diarizations",
@@ -3571,10 +3716,40 @@ export class SpeakerSegmentsResource
                 $match: {
                   lifecycleStatus: "active",
                   "speakerIdentity.calibrationId":
-                    usableCalibration.calibrationId,
+                    usableFullCalibration.calibrationId,
                   "speakerIdentity.profileRevision": profileRevision,
                   "speakerIdentity.embeddingSpaceId": embeddingSpaceId,
                   "speakerIdentity.source": "automatic",
+                  "speakerIdentity.validity": "verified",
+                },
+              },
+              {
+                $group: {
+                  _id: "$speakerIdentity.identityState",
+                  count: { $sum: 1 },
+                },
+              },
+            ],
+            options: {
+              maxTimeMS: 10_000,
+              hint: SPEAKER_IDENTITY_SNAPSHOT_INDEX,
+            },
+          }) as any[]
+          : [];
+        const provisionalCounts = usablePilotCalibration
+          ? await mongo({
+            action: "aggregate",
+            collection: "diarizations",
+            pipeline: [
+              {
+                $match: {
+                  lifecycleStatus: "active",
+                  "speakerIdentity.calibrationId":
+                    usablePilotCalibration.calibrationId,
+                  "speakerIdentity.profileRevision": profileRevision,
+                  "speakerIdentity.embeddingSpaceId": embeddingSpaceId,
+                  "speakerIdentity.source": "automatic",
+                  "speakerIdentity.validity": "provisional",
                 },
               },
               {
@@ -3593,20 +3768,37 @@ export class SpeakerSegmentsResource
         const verified = Object.fromEntries(
           verifiedCounts.map((row) => [row._id, row.count]),
         );
+        const provisional = Object.fromEntries(
+          provisionalCounts.map((row) => [row._id, row.count]),
+        );
         const rawClassified = Number(raw.identified ?? 0) +
           Number(raw.unknown ?? 0) + Number(raw.uncertain ?? 0);
         const verifiedTotal = Number(verified.identified ?? 0) +
           Number(verified.unknown ?? 0) + Number(verified.uncertain ?? 0);
+        const provisionalTotal = Number(provisional.identified ?? 0) +
+          Number(provisional.unknown ?? 0) +
+          Number(provisional.uncertain ?? 0);
         return {
           asOf: new Date(),
           classification: {
             identified: verified.identified ?? 0,
             unknown: verified.unknown ?? 0,
             uncertain: verified.uncertain ?? 0,
-            stale: Math.max(0, rawClassified - verifiedTotal),
+            provisional: {
+              identified: provisional.identified ?? 0,
+              unknown: provisional.unknown ?? 0,
+              uncertain: provisional.uncertain ?? 0,
+            },
+            stale: Math.max(
+              0,
+              rawClassified - verifiedTotal - provisionalTotal,
+            ),
             unclassified: raw.unclassified ?? 0,
           },
           calibrationId: usableCalibration?.calibrationId ?? null,
+          classificationPolicy: usablePolicy?.classificationPolicy ?? null,
+          maxRangeHours: usablePolicy?.maxRangeHours ?? null,
+          canRunFullClassification: Boolean(usableFullCalibration),
         };
       }
       case "list-identity-campaigns": {
@@ -3633,10 +3825,11 @@ export class SpeakerSegmentsResource
           input.calibrationRecordingIds,
           input.validationRecordingIds,
           input.targetPrecision,
+          input.positiveThresholdOverride,
         );
         if (!preview.thresholds) {
           throw new Error(
-            "Calibration data does not produce a safe threshold pair",
+            "Calibration data does not produce a safe auto-Sky threshold",
           );
         }
         if (!preview.canValidate) {
@@ -3650,6 +3843,10 @@ export class SpeakerSegmentsResource
           );
         }
         const now = new Date();
+        const classificationPolicy = preview.targetPrecision <
+            SPEAKER_CALIBRATION_TARGET_PRECISION
+          ? "pilot"
+          : "full";
         const calibrationId =
           `voice-r${preview.profile.revision}-${Date.now()}-${
             crypto.randomUUID().slice(0, 8)
@@ -3660,7 +3857,10 @@ export class SpeakerSegmentsResource
           profileRevision: preview.profile.revision,
           embeddingSpaceId: preview.profile.embeddingSpaceId,
           positiveThreshold: preview.thresholds.positiveThreshold,
+          recommendedPositiveThreshold: preview.recommendedPositiveThreshold,
+          positiveThresholdSource: preview.positiveThresholdSource,
           negativeThreshold: preview.thresholds.negativeThreshold,
+          negativeDecisionMode: preview.thresholds.negativeDecisionMode,
           metrics: {
             precision: preview.validationMetrics.positivePrecision,
             recall: preview.validationMetrics.positiveRecall,
@@ -3672,11 +3872,17 @@ export class SpeakerSegmentsResource
           calibrationMetrics: preview.calibrationMetrics,
           validationMetrics: preview.validationMetrics,
           targetPrecision: preview.targetPrecision,
+          classificationPolicy,
+          operatorAcceptedLowerPrecision: classificationPolicy === "pilot" &&
+            input.acceptLowerPrecisionRisk === true,
+          maxRangeHours: classificationPolicy === "pilot"
+            ? SPEAKER_CALIBRATION_PILOT_MAX_RANGE_HOURS
+            : null,
           serverComputed: true,
           contractVersion: SPEAKER_CALIBRATION_CONTRACT_VERSION,
           computedBy: SPEAKER_CALIBRATION_COMPUTED_BY,
           computedAt: now,
-          calibrationAlgorithmVersion: "cosine-thresholds-v1",
+          calibrationAlgorithmVersion: "cosine-thresholds-v2",
           matcherVersion: "profile-candidates-v2",
           calibrationRecordingIds: input.calibrationRecordingIds,
           validationRecordingIds: input.validationRecordingIds,

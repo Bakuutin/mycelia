@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -130,6 +130,13 @@ export function VoiceIdentityOperations() {
     queryFn: () => loadVoiceIdentityStatus(primaryId!),
   });
   const calibration = identityStatus?.usableCalibration;
+  const calibrationPolicy = calibration
+    ? calibration.classificationPolicy ??
+      (calibration.targetPrecision >= 0.98 ? "full" : "pilot")
+    : null;
+  const pilotOnly = calibrationPolicy === "pilot";
+  const maxClassificationHours = calibration?.maxRangeHours ??
+    (pilotOnly ? 24 : null);
   const activeRun = runs.find((run) => run.status === "active");
   const { data: identityCampaigns = [] } = useQuery<IdentityCampaign[]>({
     queryKey: ["speaker-identity-campaigns", primaryId, activeRun?.runId],
@@ -161,12 +168,25 @@ export function VoiceIdentityOperations() {
     })
     : null;
 
+  useEffect(() => {
+    if (pilotOnly && rangeMode === "preset" && hours > 24) setHours(24);
+  }, [hours, pilotOnly, rangeMode]);
+
+  const classificationRangeTooLarge = maxClassificationHours != null &&
+    range.end.getTime() - range.start.getTime() >
+      maxClassificationHours * 3_600_000;
+
   const operation = useMutation({
     mutationFn: async (kind: "classify" | "missing" | "rediarize") => {
       if (kind === "classify") {
         if (!activeRun || !primaryId || !calibration) {
           throw new Error(
             "Active run, primary profile and validated calibration are required",
+          );
+        }
+        if (classificationRangeTooLarge) {
+          throw new Error(
+            `This provisional calibration is limited to ${maxClassificationHours} hours`,
           );
         }
         return await callResource("jobs", {
@@ -380,6 +400,8 @@ export function VoiceIdentityOperations() {
                 setHours(value);
                 setRangeMode("preset");
               }}
+              disabled={maxClassificationHours != null &&
+                value > maxClassificationHours}
             >
               {value === 24 ? "24 hours" : `${value / 24} days`}
             </Button>
@@ -392,10 +414,21 @@ export function VoiceIdentityOperations() {
             Custom range
           </Button>
           <span className="ml-auto text-xs text-muted-foreground">
-            Primary: {primary?.name ?? "none"} · calibration:{" "}
-            {calibration?.calibrationId ?? "not validated"}
+            Primary: {primary?.name ?? "none"} · calibration: {calibration
+              ? `${calibrationPolicy === "pilot" ? "provisional" : "full"} · ${
+                (calibration.targetPrecision * 100).toFixed(0)
+              }% target`
+              : "not validated"}
           </span>
         </div>
+        {pilotOnly && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+            This calibration is intentionally provisional. Classification is
+            limited to {maxClassificationHours ?? 24}{" "}
+            hours so you can review false positives before creating a ≥98% full
+            calibration.
+          </div>
+        )}
         {(identityStatus?.blockers?.length ?? 0) > 0 && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
             {identityStatus?.blockers.join(" · ")}
@@ -425,12 +458,18 @@ export function VoiceIdentityOperations() {
           {rangeError && (
             <span className="ml-2 text-destructive">{rangeError}</span>
           )}
+          {classificationRangeTooLarge && (
+            <span className="ml-2 text-amber-600">
+              Classification is limited to {maxClassificationHours}{" "}
+              hours by the provisional calibration.
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
             onClick={() => operation.mutate("classify")}
             disabled={operation.isPending || !identityStatus?.canClassify ||
-              Boolean(rangeError)}
+              Boolean(rangeError) || classificationRangeTooLarge}
           >
             Classify existing
           </Button>

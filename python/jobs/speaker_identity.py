@@ -16,6 +16,9 @@ from lib.resources import call_resource
 from speaker_identification.profiles import get_profile_by_id
 
 UNKNOWN_SPACES = {"", "legacy-unknown", "unknown", None}
+FULL_TARGET_PRECISION = 0.98
+PILOT_MIN_TARGET_PRECISION = 0.90
+PILOT_MAX_RANGE_HOURS = 24
 logger = logging.getLogger(__name__)
 
 
@@ -24,12 +27,15 @@ def classify_identity(
     *,
     positive_threshold: float,
     negative_threshold: float,
+    negative_decision_mode: Literal["calibrated", "uncertain_only"] = "calibrated",
     segment_space: Optional[str] = None,
     profile_space: Optional[str] = None,
     allow_legacy_compatibility: bool = False,
 ) -> Literal["matched", "rejected", "uncertain"]:
     if negative_threshold >= positive_threshold:
         raise ValueError("negative threshold must be lower than positive threshold")
+    if negative_decision_mode not in {"calibrated", "uncertain_only"}:
+        raise ValueError(f"Unknown negative decision mode: {negative_decision_mode}")
     if segment_space != profile_space:
         raise ValueError(
             f"Embedding space mismatch: segment={segment_space!r}, profile={profile_space!r}"
@@ -40,7 +46,7 @@ def classify_identity(
         )
     if score >= positive_threshold:
         return "matched"
-    if score <= negative_threshold:
+    if negative_decision_mode == "calibrated" and score <= negative_threshold:
         return "rejected"
     return "uncertain"
 
@@ -105,7 +111,89 @@ def _rate_estimate(samples: list[float]) -> Optional[float]:
     return estimate
 
 
-def _identity_query(data: SpeakerIdentityJobData) -> Dict[str, Any]:
+def _validated_calibration_policy(
+    calibration: dict[str, Any], data: SpeakerIdentityJobData
+) -> tuple[Literal["full", "pilot"], float | None]:
+    target_precision = float(calibration.get("targetPrecision", 0))
+    validation = calibration.get("validationMetrics") or {}
+    if (
+        not math.isfinite(target_precision)
+        or target_precision > 1
+        or float(validation.get("positivePrecision", 0)) < target_precision
+        or int(validation.get("identified", 0)) < 1
+    ):
+        raise ValueError(
+            "Calibration does not prove the required independent validation precision"
+        )
+
+    configured_policy = calibration.get("classificationPolicy")
+    if target_precision >= FULL_TARGET_PRECISION:
+        if configured_policy not in (None, "full"):
+            raise ValueError("Full calibration has an invalid classification policy")
+        if calibration.get("maxRangeHours") is not None:
+            raise ValueError("Full calibration must not have a range limit")
+        if calibration.get("operatorAcceptedLowerPrecision") is True:
+            raise ValueError("Full calibration cannot accept lower-precision risk")
+        return "full", None
+
+    if (
+        target_precision < PILOT_MIN_TARGET_PRECISION
+        or configured_policy != "pilot"
+        or calibration.get("operatorAcceptedLowerPrecision") is not True
+        or float(calibration.get("maxRangeHours", 0)) != PILOT_MAX_RANGE_HOURS
+    ):
+        raise ValueError(
+            "Lower-precision calibration requires an explicitly accepted bounded pilot policy"
+        )
+    if data.start is None or data.end is None:
+        raise ValueError("Pilot speaker identity jobs require both start and end")
+    if data.end <= data.start:
+        raise ValueError("Pilot speaker identity job end must be after start")
+    range_hours = (data.end - data.start).total_seconds() / 3600
+    if range_hours > PILOT_MAX_RANGE_HOURS:
+        raise ValueError(
+            f"Pilot speaker identity range cannot exceed {PILOT_MAX_RANGE_HOURS} hours"
+        )
+    return "pilot", float(PILOT_MAX_RANGE_HOURS)
+
+
+def _validated_negative_decision_mode(
+    calibration: dict[str, Any], negative_threshold: float
+) -> Literal["calibrated", "uncertain_only"]:
+    mode = calibration.get("negativeDecisionMode", "calibrated")
+    if mode == "calibrated":
+        return "calibrated"
+    if mode == "uncertain_only" and negative_threshold == -1:
+        return "uncertain_only"
+    raise ValueError("Calibration has an invalid negative decision mode")
+
+
+def _validated_positive_threshold_provenance(
+    calibration: dict[str, Any],
+    positive_threshold: float,
+    classification_policy: Literal["full", "pilot"],
+) -> tuple[float, Literal["automatic", "operator_stricter"]]:
+    recommended = float(
+        calibration.get("recommendedPositiveThreshold", positive_threshold)
+    )
+    source = calibration.get("positiveThresholdSource", "automatic")
+    if not math.isfinite(recommended):
+        raise ValueError("Calibration has an invalid recommended positive threshold")
+    if source == "automatic" and positive_threshold == recommended:
+        return recommended, "automatic"
+    if (
+        source == "operator_stricter"
+        and classification_policy == "pilot"
+        and positive_threshold > recommended
+    ):
+        return recommended, "operator_stricter"
+    raise ValueError("Calibration has invalid positive threshold provenance")
+
+
+def _identity_query(
+    data: SpeakerIdentityJobData,
+    classification_policy: Literal["full", "pilot"],
+) -> Dict[str, Any]:
     """Select segments not yet evaluated with this profile/calibration."""
     query: Dict[str, Any] = {
         "runId": data.runId,
@@ -128,6 +216,11 @@ def _identity_query(data: SpeakerIdentityJobData) -> Dict[str, Any]:
             query["start"]["$gte"] = data.start
         if data.end:
             query["start"]["$lt"] = data.end
+    if classification_policy == "pilot":
+        query["$nor"] = [
+            {"speakerIdentity.validity": "verified"},
+            {"speakerIdentity.classificationPolicy": "full"},
+        ]
     return query
 
 
@@ -161,16 +254,10 @@ def process_speaker_identity_job(
         raise ValueError(
             "Calibration is stale; create it with the current server-computed contract"
         )
-    target_precision = float(calibration.get("targetPrecision", 0))
-    validation = calibration.get("validationMetrics") or {}
-    if (
-        target_precision < 0.98
-        or float(validation.get("positivePrecision", 0)) < target_precision
-        or int(validation.get("identified", 0)) < 1
-    ):
-        raise ValueError(
-            "Calibration does not prove the required independent validation precision"
-        )
+    classification_policy, max_range_hours = _validated_calibration_policy(
+        calibration, data
+    )
+    target_precision = float(calibration["targetPrecision"])
     if int(calibration.get("profileRevision", 0)) != data.profileRevision:
         raise ValueError(
             "Calibration does not match the current profile revision; validate a new calibration"
@@ -183,6 +270,12 @@ def process_speaker_identity_job(
 
     positive = float(calibration["positiveThreshold"])
     negative = float(calibration["negativeThreshold"])
+    negative_decision_mode = _validated_negative_decision_mode(calibration, negative)
+    recommended_positive_threshold, positive_threshold_source = (
+        _validated_positive_threshold_provenance(
+            calibration, positive, classification_policy
+        )
+    )
     allow_legacy = bool(calibration.get("allowLegacyCompatibility", False))
     matcher_version = "profile-candidates-v2"
 
@@ -197,7 +290,7 @@ def process_speaker_identity_job(
         )
         or {}
     )
-    base_query = _identity_query(data)
+    base_query = _identity_query(data, classification_policy)
     total_segments = campaign.get("totalSegments")
     count_warning: Optional[str] = None
     if total_segments is None:
@@ -252,6 +345,15 @@ def process_speaker_identity_job(
             "profileName": profile.get("name"),
             "profileRevision": data.profileRevision,
             "calibrationId": data.calibrationId,
+            "classificationPolicy": classification_policy,
+            "decisionValidity": (
+                "verified" if classification_policy == "full" else "provisional"
+            ),
+            "targetPrecision": target_precision,
+            "maxRangeHours": max_range_hours,
+            "negativeDecisionMode": negative_decision_mode,
+            "recommendedPositiveThreshold": recommended_positive_threshold,
+            "positiveThresholdSource": positive_threshold_source,
             "range": {"start": data.start, "end": data.end},
             "status": "running",
             "totalSegments": total_segments,
@@ -305,6 +407,7 @@ def process_speaker_identity_job(
             score,
             positive_threshold=positive,
             negative_threshold=negative,
+            negative_decision_mode=negative_decision_mode,
             segment_space=segment_space,
             profile_space=profile_space,
             allow_legacy_compatibility=allow_legacy,
@@ -323,6 +426,9 @@ def process_speaker_identity_job(
             "profileRevision": data.profileRevision,
             "calibrationId": data.calibrationId,
         }
+        decision_validity = (
+            "verified" if classification_policy == "full" else "provisional"
+        )
         decision = {
             "state": state,
             "identityState": identity_state,
@@ -330,7 +436,13 @@ def process_speaker_identity_job(
             "topCandidate": candidate,
             "candidates": [candidate],
             "topTwoMargin": None,
-            "thresholds": {"positive": positive, "negative": negative},
+            "thresholds": {
+                "positive": positive,
+                "negative": negative,
+                "negativeDecisionMode": negative_decision_mode,
+                "recommendedPositiveThreshold": recommended_positive_threshold,
+                "positiveThresholdSource": positive_threshold_source,
+            },
             "profileId": profile["_id"] if state == "matched" else None,
             "profileRevision": data.profileRevision,
             "embeddingSpaceId": segment_space,
@@ -339,11 +451,16 @@ def process_speaker_identity_job(
             "runId": data.runId,
             "evaluatedAt": datetime.now(UTC),
             "source": "automatic",
-            "validity": "verified",
+            "validity": decision_validity,
+            "classificationPolicy": classification_policy,
+            "maxRangeHours": max_range_hours,
+            "negativeDecisionMode": negative_decision_mode,
+            "recommendedPositiveThreshold": recommended_positive_threshold,
+            "positiveThresholdSource": positive_threshold_source,
             "calibrationContractVersion": calibration["contractVersion"],
         }
         compatibility = None
-        if state == "matched":
+        if state == "matched" and classification_policy == "full":
             compatibility = {
                 "profile_id": profile["_id"],
                 "name": profile.get("name"),
@@ -356,9 +473,13 @@ def process_speaker_identity_job(
             update["$set"]["matched_speaker"] = compatibility
         else:
             update["$unset"] = {"matched_speaker": ""}
-        operations.append(
-            {"updateOne": {"filter": {"_id": segment["_id"]}, "update": update}}
-        )
+        update_filter: Dict[str, Any] = {"_id": segment["_id"]}
+        if classification_policy == "pilot":
+            update_filter["$nor"] = [
+                {"speakerIdentity.validity": "verified"},
+                {"speakerIdentity.classificationPolicy": "full"},
+            ]
+        operations.append({"updateOne": {"filter": update_filter, "update": update}})
 
     if operations:
         call_resource(
@@ -418,6 +539,15 @@ def process_speaker_identity_job(
         {
             "stage": "identity",
             "campaignId": campaign_id,
+            "classificationPolicy": classification_policy,
+            "decisionValidity": (
+                "verified" if classification_policy == "full" else "provisional"
+            ),
+            "targetPrecision": target_precision,
+            "maxRangeHours": max_range_hours,
+            "negativeDecisionMode": negative_decision_mode,
+            "recommendedPositiveThreshold": recommended_positive_threshold,
+            "positiveThresholdSource": positive_threshold_source,
             "batchNumber": batch_number,
             "estimatedBatches": estimated_batches,
             "processed": campaign_processed,
@@ -437,6 +567,15 @@ def process_speaker_identity_job(
         "hasMore": has_more,
         "cursor": cursor,
         "campaignId": campaign_id,
+        "classificationPolicy": classification_policy,
+        "decisionValidity": (
+            "verified" if classification_policy == "full" else "provisional"
+        ),
+        "targetPrecision": target_precision,
+        "maxRangeHours": max_range_hours,
+        "negativeDecisionMode": negative_decision_mode,
+        "recommendedPositiveThreshold": recommended_positive_threshold,
+        "positiveThresholdSource": positive_threshold_source,
         "batchNumber": batch_number,
         "estimatedBatches": estimated_batches,
         "incompatibleSkipped": incompatible_skipped,

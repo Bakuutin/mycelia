@@ -565,8 +565,8 @@ validation recordings проверяют переносимость.
   позволяет отфильтровать и отметить нужные;
 - **Current Timeline range** — на Timeline выделите точный интервал и нажмите
   **Review voices**;
-- **Specific diarization generation** — только одна активная generation в том
-  же embedding space.
+- **Specific diarization generation** — только одна активная generation в том же
+  embedding space.
 
 Preview показывает число подходящих segments и recordings, причины исключения
 коротких/дублирующихся фрагментов и до пяти проигрываемых примеров. Создание
@@ -587,21 +587,57 @@ recordings, run или embedding space требуют нового preview. Эт
 оставшиеся кандидаты сохраняются в session buffer, а rolling-переход загружает
 следующие 5/10/20 без потери позиции.
 
-Цель auto-Sky precision — не ниже 98%. Precision важнее recall: сомнительные
-случаи должны остаться `uncertain`.
+Рекомендуемая цель auto-Sky precision — 98%. Precision важнее recall:
+сомнительные случаи должны остаться `uncertain`. Для проверки workflow можно
+явно сохранить provisional calibration с целью 95% или 90%, но она разрешает
+только bounded pilot длительностью не более 24 часов и не открывает full
+historical backfill.
 
 ### Calibration wizard
 
-UI не принимает вручную введённые thresholds или precision. Backend:
+UI позволяет выбрать требуемую precision: 98% для production, готовые 95%/90%
+для provisional pilot или custom значение 90–100% с шагом 0,5%. Это policy
+precision, а не сырой cosine threshold и не подмена результата: backend:
 
 1. Берёт latest manual annotation каждого segment.
 2. Исключает embeddings из несовместимого space.
 3. Считает cosine scores против текущей revision профиля.
 4. Делит source recordings на непересекающиеся **Fit** и **Check** sets.
-5. Подбирает positive/negative thresholds на Fit.
+5. Подбирает positive threshold и, когда Fit data это подтверждает, conservative
+   negative threshold.
 6. Измеряет precision/coverage на ранее не виденном Check audio.
 7. Разрешает сохранение только при минимум 40 Sky, 40 not-Sky, 100 совместимых
-   labels и auto-Sky precision не ниже 98%.
+   labels и Check precision не ниже выбранной цели.
+
+Для production raw cosine thresholds всегда автоматически вычисляет сервер; UI
+не принимает вручную заданные production-пороги. Единственное исключение —
+явный provisional pilot: сначала сервер всё равно вычисляет recommendation, а
+оператор может только **повысить** positive threshold относительно неё и никогда
+не может его понизить. Если безопасный negative threshold не найден, calibration
+получает `negativeDecisionMode=uncertain_only`: auto not-Sky отключается, а все
+scores ниже positive Sky threshold остаются `uncertain` для ручной проверки. UI
+показывает **Auto not-Sky off · remains uncertain** вместо технического sentinel
+`-1`. Это conservative Sky-first mode, а не failed calibration. Manual not-Sky
+labels при этом сохраняются.
+
+Для provisional pilot доступен **Advanced · stricter automatic Sky matching**.
+Он позволяет только повысить positive cosine threshold относительно server
+recommendation с шагом `0.005`; понизить порог UI и backend не разрешают.
+Повышение обычно уменьшает число auto-Sky matches, coverage и recall, но может
+улучшить precision. Preview сохраняет исходную рекомендацию отдельно, помечает
+эффективный порог как `positiveThresholdSource=operator_stricter` и
+пересчитывает Check metrics. **Use server recommendation** удаляет override.
+Смена precision target или Fit/Check split также автоматически его сбрасывает.
+
+Для production target ≥98% override недоступен: выбирать порог после просмотра
+Check metrics означало бы подгонять модель по validation data. Operator-stricter
+override поэтому остаётся только явно provisional evidence и не открывает full
+backfill.
+
+Для цели ниже 98% UI требует отдельное подтверждение риска, calibration получает
+policy `pilot`, а Python worker независимо проверяет наличие start/end и
+диапазон не более 24 часов. Поэтому прямой технический запуск job не обходит
+ограничение.
 
 Карточки recordings показывают дату/время и label mix; raw ObjectId оставлен
 только вторичной ссылкой. Если Check set содержит только Sky или только not-Sky,
@@ -620,21 +656,24 @@ labels.
 Сохранённая calibration считается рабочей только с
 `contractVersion=server-computed-v1`, server provenance, текущими profile
 revision/embedding space, непересекающимися Fit/Check recordings и реально
-измеренной Check precision не ниже цели. Более старые client-asserted records
-показываются как `stale` и не разблокируют pilot. Старые automatic identity
-решения не удаляются, но отдельно считаются как `stale decisions`; Timeline и
-Transcript показывают их как unclassified до новой совместимой классификации.
+измеренной Check precision не ниже выбранной цели. Calibration с целью 98% и
+выше получает policy `full`; явно подтверждённая цель 90–97% — policy `pilot` и
+`maxRangeHours=24`. Более старые client-asserted records показываются как
+`stale` и не разблокируют pilot. Старые automatic identity решения не удаляются,
+но отдельно считаются как `stale decisions`; Timeline и Transcript показывают их
+как unclassified до новой совместимой классификации.
 
 ## 10. Identity pilot и backfill
 
 После актуального Sky profile и validated calibration откройте
 `https://localhost:4433/jobs?type=speakerIdentity` и нажмите play у worker.
-Launcher сам подставляет primary Sky, текущую profile revision,
-server-validated calibration и совместимую active generation; оператор выбирает
-только 24 часа, 7/14 дней или custom range. Raw `profileId`, `runId`, revision,
-calibration ID, cursor и campaign ID вручную вводить не нужно. Те же ссылки
-доступны из Review & calibration, Operations & generations, Audio Pipeline и
-Job Details.
+Launcher сам подставляет primary Sky, текущую profile revision, server-validated
+calibration и совместимую active generation; оператор выбирает 24 часа, 7/14
+дней или custom range. Для provisional calibration варианты больше 24 часов
+disabled, а custom range проверяется повторно worker. Raw `profileId`, `runId`,
+revision, calibration ID, cursor и campaign ID вручную вводить не нужно. Те же
+ссылки доступны из Review & calibration, Operations & generations, Audio
+Pipeline и Job Details.
 
 Порядок rollout:
 
@@ -648,8 +687,10 @@ Job Details.
 Состояния:
 
 - `identified` — выше positive threshold;
-- `unknown` — ниже conservative negative threshold;
-- `uncertain` — между thresholds;
+- `unknown` — ниже conservative negative threshold только при
+  `negativeDecisionMode=calibrated`;
+- `uncertain` — между thresholds, либо любой score ниже positive threshold при
+  безопасном Sky-first режиме `negativeDecisionMode=uncertain_only`;
 - `unclassified` — identity worker ещё не оценивал segment.
 - `stale decisions` — исторический automatic result с отсутствующей или
   несовместимой текущей server calibration; это не подтверждённый результат.
@@ -672,8 +713,11 @@ jobs. После каждого batch Timeline speaker-layer обновляет�
 2. Исправьте ошибки manual annotation; автоматический backfill их не
    перезаписывает.
 3. Если false-positive rate приемлем, расширьте период.
-4. Если precision ниже цели, добавьте разнообразные записи и пересчитайте
-   calibration; не ослабляйте threshold вручную.
+4. Если precision ниже production-цели, добавьте разнообразные записи и
+   пересчитайте calibration. Для диагностики можно выбрать 95%/90% provisional
+   pilot; после него проверьте false positives и вернитесь к 98% перед
+   расширением истории. Production raw cosine threshold задаёт сервер; только в
+   provisional pilot его можно явно повысить, но не понизить.
 5. Histogram/Timeline отдельным job пересчитывать не нужно: speaker track читает
    active diarization segments и сбрасывает frontend cache после identity batch.
 
@@ -711,8 +755,15 @@ timestamps отсутствуют.
 - [ ] Profile имеет samples, актуальные revision и embedding space.
 - [ ] Calibration/validation используют разные recordings.
 - [ ] Есть минимум 100 labels, включая 40 Sky и 40 not-Sky.
-- [ ] Backend calibration preview показывает вычисленные thresholds и ≥98% на
-      отдельном validation audio.
+- [ ] Backend calibration preview показывает вычисленные thresholds и выбранную
+      precision на отдельном validation audio.
+- [ ] Если preview показывает `Auto not-Sky off`, проверено, что calibration
+      сохраняет `negativeDecisionMode=uncertain_only`, а worker оставляет
+      остальные голоса uncertain.
+- [ ] Positive threshold override не ниже server recommendation, сбрасывается
+      при смене target/split и используется только в provisional pilot.
+- [ ] Для full backfill сохранена policy `full` с целью ≥98%; sub-98% policy
+      используется только для ≤24-hour pilot.
 - [ ] 24-hour pilot прошёл ручной QA.
 - [ ] Identity campaign дошла до `completed`, а incompatible/remaining понятны.
 - [ ] Timeline и Transcript показывают одинаковые overrides/states.

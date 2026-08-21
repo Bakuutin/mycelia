@@ -203,33 +203,55 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
             rescaledScale(new Date(segment.start)),
         ),
         state: segment.speakerIdentity?.state,
+        validity: segment.speakerIdentity?.validity,
         segment,
       }));
     }
     const buckets = new Map<
       number,
-      { counts: Record<string, number>; segment: any }
+      {
+        counts: Record<string, number>;
+        samples: Record<
+          string,
+          { state: string; validity?: string; segment: any }
+        >;
+      }
     >();
     for (const segment of segments) {
       const x = Math.max(0, Math.floor(rescaledScale(new Date(segment.start))));
-      const bucket = buckets.get(x) ?? { counts: {}, segment };
+      const bucket = buckets.get(x) ?? { counts: {}, samples: {} };
       const state = segment.speakerIdentity?.state ?? "unclassified";
-      bucket.counts[state] = (bucket.counts[state] ?? 0) + 1;
+      const validity = segment.speakerIdentity?.validity;
+      const key = `${state}:${
+        validity === "provisional" ? "provisional" : "other"
+      }`;
+      bucket.counts[key] = (bucket.counts[key] ?? 0) + 1;
+      bucket.samples[key] ??= { state, validity, segment };
       buckets.set(x, bucket);
     }
-    return [...buckets.entries()].map(([x, bucket]) => ({
-      id: `bucket-${x}`,
-      x,
-      width: 2,
-      state: Object.entries(bucket.counts).sort((a, b) => b[1] - a[1])[0]?.[0],
-      segment: bucket.segment,
-    }));
+    return [...buckets.entries()].map(([x, bucket]) => {
+      const dominantKey = Object.entries(bucket.counts).sort((a, b) =>
+        b[1] - a[1]
+      )[0]?.[0];
+      const sample = dominantKey ? bucket.samples[dominantKey] : undefined;
+      return {
+        id: `bucket-${x}`,
+        x,
+        width: 2,
+        state: sample?.state,
+        validity: sample?.validity,
+        segment: sample?.segment,
+      };
+    }).filter((mark) => mark.segment);
   }, [farZoom, segments, rescaledScale]);
   return (
     <BaseTrack {...props} config={DIARIZATIONS_CONFIG}>
       <g>
         {marks.map((mark) => {
-          const appearance = speakerIdentityAppearance(mark.state);
+          const appearance = speakerIdentityAppearance(
+            mark.state,
+            mark.validity,
+          );
           return (
             <rect
               key={mark.id}
@@ -239,6 +261,9 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
               height={Math.max(4, props.height - 8)}
               fill={appearance.color}
               opacity={appearance.opacity}
+              stroke={appearance.stroke}
+              strokeDasharray={appearance.strokeDasharray}
+              strokeWidth={appearance.stroke ? 1.5 : undefined}
               className="cursor-pointer"
               onClick={() =>
                 navigate(`/diarizations/${String(mark.segment._id)}`)}

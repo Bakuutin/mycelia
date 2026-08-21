@@ -20,6 +20,20 @@ export type CalibrationMetrics = {
   negativeRecall: number;
 };
 
+export type NegativeDecisionMode = "calibrated" | "uncertain_only";
+
+export type CalibrationThresholds = {
+  positiveThreshold: number;
+  negativeThreshold: number;
+  negativeDecisionMode: NegativeDecisionMode;
+};
+
+export type PositiveThresholdSelection = {
+  thresholds: CalibrationThresholds | null;
+  recommendedPositiveThreshold: number | null;
+  positiveThresholdSource: "automatic" | "operator_stricter";
+};
+
 function ratio(numerator: number, denominator: number): number {
   return denominator > 0 ? numerator / denominator : 0;
 }
@@ -41,6 +55,7 @@ export function evaluateCalibration(
   examples: CalibrationExample[],
   positiveThreshold: number,
   negativeThreshold: number,
+  negativeDecisionMode: NegativeDecisionMode = "calibrated",
 ): CalibrationMetrics {
   let truePositive = 0;
   let falsePositive = 0;
@@ -51,7 +66,10 @@ export function evaluateCalibration(
     if (example.score >= positiveThreshold) {
       if (example.label === "positive") truePositive += 1;
       else falsePositive += 1;
-    } else if (example.score <= negativeThreshold) {
+    } else if (
+      negativeDecisionMode === "calibrated" &&
+      example.score <= negativeThreshold
+    ) {
       if (example.label === "negative") trueNegative += 1;
       else falseNegative += 1;
     } else {
@@ -81,7 +99,7 @@ export function evaluateCalibration(
 export function chooseCalibrationThresholds(
   examples: CalibrationExample[],
   targetPrecision = 0.98,
-): { positiveThreshold: number; negativeThreshold: number } | null {
+): CalibrationThresholds | null {
   if (
     !examples.some((item) => item.label === "positive") ||
     !examples.some((item) => item.label === "negative")
@@ -113,10 +131,68 @@ export function chooseCalibrationThresholds(
         b.metrics.negativeRecall - a.metrics.negativeRecall ||
         b.threshold - a.threshold
       )[0];
-  if (!negative) return null;
+  if (!negative) {
+    return {
+      positiveThreshold: positive.threshold,
+      negativeThreshold: -1,
+      negativeDecisionMode: "uncertain_only",
+    };
+  }
   return {
     positiveThreshold: positive.threshold,
     negativeThreshold: negative.threshold,
+    negativeDecisionMode: "calibrated",
+  };
+}
+
+export function applyPositiveThresholdOverride(
+  recommended: CalibrationThresholds | null,
+  positiveThresholdOverride: number | undefined,
+  allowOperatorOverride: boolean,
+): PositiveThresholdSelection {
+  const recommendedPositiveThreshold = recommended?.positiveThreshold ?? null;
+  if (positiveThresholdOverride === undefined) {
+    return {
+      thresholds: recommended,
+      recommendedPositiveThreshold,
+      positiveThresholdSource: "automatic",
+    };
+  }
+  if (!allowOperatorOverride) {
+    throw new Error(
+      "Positive threshold override is available only for provisional pilots",
+    );
+  }
+  if (
+    !Number.isFinite(positiveThresholdOverride) ||
+    positiveThresholdOverride < -1 || positiveThresholdOverride > 1
+  ) {
+    throw new Error("Positive threshold override must be between -1 and 1");
+  }
+  if (!recommended || recommendedPositiveThreshold === null) {
+    throw new Error(
+      "A server-recommended positive threshold is required before overriding it",
+    );
+  }
+  if (positiveThresholdOverride < recommendedPositiveThreshold) {
+    throw new Error(
+      `Positive threshold override must be at least the server recommendation (${recommendedPositiveThreshold})`,
+    );
+  }
+  if (positiveThresholdOverride === recommendedPositiveThreshold) {
+    return {
+      thresholds: recommended,
+      recommendedPositiveThreshold,
+      positiveThresholdSource: "automatic",
+    };
+  }
+  return {
+    thresholds: {
+      ...recommended,
+      positiveThreshold: positiveThresholdOverride,
+    },
+    recommendedPositiveThreshold,
+    positiveThresholdSource: "operator_stricter",
   };
 }
 

@@ -21,6 +21,7 @@ import {
   WaveformPlayer,
 } from "@/components/audio/WaveformPlayer";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -30,6 +31,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import {
   AlertCircle,
@@ -45,6 +47,12 @@ import {
 } from "./VoiceIdentityReviewPlayer";
 
 const AUTO_PLAY_STORAGE_KEY = "voice-identity-review-autoplay-next";
+const RECOMMENDED_CALIBRATION_PRECISION = 0.98;
+const CALIBRATION_PRECISION_PRESETS = [
+  { value: 0.98, label: "98%", detail: "Recommended" },
+  { value: 0.95, label: "95%", detail: "Pilot" },
+  { value: 0.9, label: "90%", detail: "Exploratory" },
+] as const;
 
 type ReviewHistoryEntry = {
   decisionId: string;
@@ -226,9 +234,17 @@ type CalibrationPreview = {
   calibrationRecordingIds: string[];
   validationRecordingIds: string[];
   automaticSplit: boolean;
-  thresholds: { positiveThreshold: number; negativeThreshold: number } | null;
+  thresholds: {
+    positiveThreshold: number;
+    negativeThreshold: number;
+    negativeDecisionMode?: "calibrated" | "uncertain_only";
+  } | null;
   calibrationMetrics: CalibrationMetrics | null;
   validationMetrics: CalibrationMetrics | null;
+  targetPrecision?: number;
+  negativeDecisionMode?: "calibrated" | "uncertain_only";
+  recommendedPositiveThreshold?: number | null;
+  positiveThresholdSource?: "automatic" | "operator_stricter";
   blockers: string[];
   canValidate: boolean;
 };
@@ -240,6 +256,10 @@ type CalibrationMetrics = {
   identified: number;
   rejected: number;
   uncertain: number;
+  truePositive: number;
+  falsePositive: number;
+  trueNegative: number;
+  falseNegative: number;
   positivePrecision: number;
   positiveRecall: number;
   negativePrecision: number;
@@ -253,6 +273,10 @@ type IdentityStatus = {
     profileId: string;
     profileRevision: number;
     embeddingSpaceId: string;
+    classificationPolicy?: "full" | "pilot";
+    targetPrecision?: number;
+    maxRangeHours?: number | null;
+    negativeDecisionMode?: "calibrated" | "uncertain_only";
     updatedAt?: Date;
   } | null;
   canClassify: boolean;
@@ -307,10 +331,18 @@ type IdentityClassificationSnapshot = {
     identified: number;
     unknown: number;
     uncertain: number;
+    provisional?: {
+      identified: number;
+      unknown: number;
+      uncertain: number;
+    };
     stale: number;
     unclassified: number;
   };
   calibrationId: string | null;
+  classificationPolicy?: "full" | "pilot" | null;
+  maxRangeHours?: number | null;
+  canRunFullClassification?: boolean;
 };
 
 type DiarizationRun = {
@@ -353,6 +385,18 @@ export default function VoiceIdentityReviewPage() {
     timelineSourceEnd > timelineSourceStart;
   const [calibrationRecordings, setCalibrationRecordings] = useState("");
   const [validationRecordings, setValidationRecordings] = useState("");
+  const [calibrationTargetPrecision, setCalibrationTargetPrecision] = useState(
+    RECOMMENDED_CALIBRATION_PRECISION,
+  );
+  const [acceptLowerPrecisionRisk, setAcceptLowerPrecisionRisk] = useState(
+    false,
+  );
+  const [positiveThresholdOverride, setPositiveThresholdOverride] = useState<
+    number | null
+  >(null);
+  const [positiveThresholdDraft, setPositiveThresholdDraft] = useState<
+    number | null
+  >(null);
   const [calibrationRefreshResult, setCalibrationRefreshResult] = useState<
     {
       state: "success" | "error";
@@ -427,6 +471,16 @@ export default function VoiceIdentityReviewPage() {
   const calibrationSectionRef = useRef<HTMLDivElement>(null);
   const automaticWindowAdvanceRef = useRef(false);
   const timelineSourceAppliedRef = useRef("");
+
+  useEffect(() => {
+    if (globalThis.location.hash !== "#calibration") return;
+    globalThis.requestAnimationFrame(() => {
+      calibrationSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }, []);
 
   useEffect(() => {
     if (
@@ -541,6 +595,12 @@ export default function VoiceIdentityReviewPage() {
     enabled: false,
     retry: false,
   });
+  const provisionalClassification = classificationSnapshot?.classification
+    .provisional;
+  const provisionalClassificationTotal = provisionalClassification
+    ? provisionalClassification.identified + provisionalClassification.unknown +
+      provisionalClassification.uncertain
+    : 0;
   const identityCampaignView = identityStatus?.latestCampaign
     ? getSpeakerIdentityProgressView({
       processed: identityStatus.latestCampaign.processedSegments,
@@ -1134,13 +1194,19 @@ export default function VoiceIdentityReviewPage() {
         profileId,
         calibrationRecordingIds: effectiveCalibrationIds,
         validationRecordingIds: effectiveValidationIds,
-        targetPrecision: 0.98,
+        targetPrecision: calibrationTargetPrecision,
+        acceptLowerPrecisionRisk,
+        positiveThresholdOverride: lowerPrecisionPilot
+          ? positiveThresholdOverride ?? undefined
+          : undefined,
       });
     },
     onSuccess: () => {
       void refetchIdentityStatus();
       toast.success(
-        "Validated calibration saved; historical classification is unblocked",
+        calibrationTargetPrecision >= RECOMMENDED_CALIBRATION_PRECISION
+          ? "Production calibration saved; full-range identity classification is allowed"
+          : "Pilot calibration saved; classification is limited to a 24-hour pilot",
       );
     },
     onError: (error) =>
@@ -1179,6 +1245,8 @@ export default function VoiceIdentityReviewPage() {
       profileId,
       calibrationIds,
       validationIds,
+      calibrationTargetPrecision,
+      positiveThresholdOverride,
     ],
     enabled: Boolean(profileId && primary?.embeddingSpaceId),
     queryFn: () =>
@@ -1187,7 +1255,11 @@ export default function VoiceIdentityReviewPage() {
         profileId,
         calibrationRecordingIds: calibrationIds,
         validationRecordingIds: validationIds,
-        targetPrecision: 0.98,
+        targetPrecision: calibrationTargetPrecision,
+        positiveThresholdOverride: calibrationTargetPrecision <
+            RECOMMENDED_CALIBRATION_PRECISION
+          ? positiveThresholdOverride ?? undefined
+          : undefined,
       }) as Promise<CalibrationPreview>,
     staleTime: 10_000,
   });
@@ -1217,7 +1289,66 @@ export default function VoiceIdentityReviewPage() {
   const validationRecordingSummary = summarizeCalibrationRecordings(
     effectiveValidationIds,
   );
-  const canValidate = Boolean(calibrationPreview?.canValidate);
+  const canValidate = Boolean(
+    calibrationPreview?.canValidate &&
+      (calibrationPreview.targetPrecision ?? calibrationTargetPrecision) ===
+        calibrationTargetPrecision &&
+      !calibrationPreviewFetching,
+  );
+  const lowerPrecisionPilot = calibrationTargetPrecision <
+    RECOMMENDED_CALIBRATION_PRECISION;
+  const previewNegativeDecisionMode = calibrationPreview?.thresholds
+    ?.negativeDecisionMode ??
+    calibrationPreview?.negativeDecisionMode ??
+    (calibrationPreview?.thresholds?.negativeThreshold === -1
+      ? "uncertain_only"
+      : "calibrated");
+  const recommendedPositiveThreshold =
+    calibrationPreview?.recommendedPositiveThreshold ??
+      (calibrationPreview?.positiveThresholdSource !== "operator_stricter"
+        ? calibrationPreview?.thresholds?.positiveThreshold
+        : null);
+  const displayedPositiveThreshold = positiveThresholdDraft ??
+    positiveThresholdOverride ??
+    calibrationPreview?.thresholds?.positiveThreshold ??
+    recommendedPositiveThreshold;
+  const appliedPositiveThreshold = calibrationPreview?.thresholds
+    ?.positiveThreshold ?? recommendedPositiveThreshold;
+  const previewMatchesPositiveThreshold = positiveThresholdOverride == null
+    ? calibrationPreview?.positiveThresholdSource !== "operator_stricter"
+    : calibrationPreview?.positiveThresholdSource === "operator_stricter" &&
+      Math.abs(
+          (calibrationPreview.thresholds?.positiveThreshold ?? -1) -
+            positiveThresholdOverride,
+        ) < 0.0005;
+  const canSaveCalibration = canValidate &&
+    positiveThresholdDraft === null &&
+    previewMatchesPositiveThreshold &&
+    (!lowerPrecisionPilot || acceptLowerPrecisionRisk);
+  const resetPositiveThresholdOverride = () => {
+    setPositiveThresholdOverride(null);
+    setPositiveThresholdDraft(null);
+  };
+  const clampPositiveThreshold = (value: number) => {
+    if (recommendedPositiveThreshold == null) return null;
+    return Math.min(
+      1,
+      Math.max(
+        recommendedPositiveThreshold,
+        Number(value.toFixed(3)),
+      ),
+    );
+  };
+  const commitPositiveThresholdOverride = (value: number) => {
+    const clamped = clampPositiveThreshold(value);
+    if (clamped == null) return;
+    const usesRecommendation = Math.abs(
+      clamped - recommendedPositiveThreshold!,
+    ) < 0.0005;
+    setPositiveThresholdOverride(usesRecommendation ? null : clamped);
+    setPositiveThresholdDraft(null);
+    setCalibrationRefreshResult(null);
+  };
   const calibrationLabelCounts = calibrationPreview?.counts
     ? {
       sky: calibrationPreview.counts.positive,
@@ -1488,6 +1619,7 @@ export default function VoiceIdentityReviewPage() {
     if (target === "validation") nextValidation.push(id);
     setCalibrationRecordings(nextCalibration.join(","));
     setValidationRecordings(nextValidation.join(","));
+    resetPositiveThresholdOverride();
     setCalibrationRefreshResult(null);
   };
   const recalculateCalibration = async () => {
@@ -1652,8 +1784,9 @@ export default function VoiceIdentityReviewPage() {
                 ? (
                   <>
                     Label-volume gate reached. The remaining gate is validation
-                    precision ≥98% on recordings not used to choose the
-                    thresholds.
+                    precision ≥
+                    {Math.round(calibrationTargetPrecision * 100)}% on
+                    recordings not used to choose the thresholds.
                   </>
                 )
                 : `Still needed: ${missingLabelRequirements.join(" · ")}`}
@@ -1680,9 +1813,22 @@ export default function VoiceIdentityReviewPage() {
           <CardContent className="space-y-2 text-sm">
             <p className="font-medium">{readinessState}</p>
             {latestCalibration && (
-              <p className="text-xs text-green-700 dark:text-green-400">
-                Pilot ready · {latestCalibration.calibrationId}
-              </p>
+              <>
+                <p className="text-xs text-green-700 dark:text-green-400">
+                  {latestCalibration.classificationPolicy === "full"
+                    ? "Production classification ready"
+                    : `Pilot ready · maximum ${
+                      latestCalibration.maxRangeHours ?? 24
+                    } hours`} · {latestCalibration.calibrationId}
+                </p>
+                {latestCalibration.negativeDecisionMode ===
+                    "uncertain_only" && (
+                  <p className="text-xs text-muted-foreground">
+                    Safe Sky-first mode: auto not-Sky is off; everything below
+                    the Sky threshold remains uncertain for review.
+                  </p>
+                )}
+              </>
             )}
             {!latestCalibration && staleCalibrations.length > 0 && (
               <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-400">
@@ -2873,15 +3019,17 @@ export default function VoiceIdentityReviewPage() {
           </div>
         </CardContent>
       </Card>
-      <Card ref={calibrationSectionRef}>
+      <Card id="calibration" ref={calibrationSectionRef}>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <CardTitle>3. Validate Sky calibration</CardTitle>
+              <CardTitle>
+                3. Validate {primary?.name ?? "primary voice"} calibration
+              </CardTitle>
               <CardDescription>
-                Backend computes thresholds from one set of recordings, then
-                measures them on different audio. Nothing here is a manually
-                entered confidence percentage.
+                Choose the required precision. The server computes the actual Me
+                / uncertain / Not me similarity thresholds on Fit audio, then
+                measures them on separate Check recordings.
               </CardDescription>
             </div>
             <Button
@@ -2943,16 +3091,123 @@ export default function VoiceIdentityReviewPage() {
               <strong>2. Fit thresholds</strong>
               <p className="text-xs text-muted-foreground">
                 One recording set chooses the safest Me / uncertain / Not me
-                borders. It is allowed to influence the thresholds.
+                borders. If a safe not-Me border cannot be proven, only the Me
+                border is used.
               </p>
             </div>
             <div className="rounded-md border p-3">
               <strong>3. Validate on held-out audio</strong>
               <p className="text-xs text-muted-foreground">
                 A different recording set checks the frozen thresholds and must
-                independently reach ≥98% auto-Sky precision.
+                independently reach the precision target selected below.
               </p>
             </div>
+          </div>
+
+          <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+            <div>
+              <p className="text-sm font-medium">
+                Required auto-{primary?.name ?? "speaker"} precision
+              </p>
+              <p className="text-xs text-muted-foreground">
+                This is the minimum share of automatic “Me” matches that must be
+                correct on held-out audio. It is not a cosine threshold; the
+                server calculates the positive threshold and, when the data
+                supports it, a conservative negative threshold.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {CALIBRATION_PRECISION_PRESETS.map((preset) => (
+                <Button
+                  key={preset.value}
+                  type="button"
+                  variant={calibrationTargetPrecision === preset.value
+                    ? "default"
+                    : "outline"}
+                  className="h-auto justify-start px-3 py-2 text-left"
+                  onClick={() => {
+                    setCalibrationTargetPrecision(preset.value);
+                    setAcceptLowerPrecisionRisk(false);
+                    resetPositiveThresholdOverride();
+                    setCalibrationRefreshResult(null);
+                  }}
+                >
+                  <span>
+                    <span className="block font-semibold">{preset.label}</span>
+                    <span className="block text-xs opacity-75">
+                      {preset.detail}
+                    </span>
+                  </span>
+                </Button>
+              ))}
+              <label className="rounded-md border px-3 py-2">
+                <span className="block text-xs text-muted-foreground">
+                  Custom precision
+                </span>
+                <span className="flex items-center gap-1">
+                  <Input
+                    className="h-7 border-0 p-0 text-base font-semibold shadow-none focus-visible:ring-0"
+                    type="number"
+                    min={90}
+                    max={100}
+                    step={0.5}
+                    value={Number(
+                      (calibrationTargetPrecision * 100).toFixed(1),
+                    )}
+                    onChange={(event) => {
+                      const percent = Number(event.target.value);
+                      if (
+                        !Number.isFinite(percent) || percent < 90 ||
+                        percent > 100
+                      ) return;
+                      setCalibrationTargetPrecision(
+                        Number((percent / 100).toFixed(3)),
+                      );
+                      setAcceptLowerPrecisionRisk(false);
+                      resetPositiveThresholdOverride();
+                      setCalibrationRefreshResult(null);
+                    }}
+                    aria-label="Custom required precision percent"
+                  />
+                  <span className="font-semibold">%</span>
+                </span>
+              </label>
+            </div>
+            {lowerPrecisionPilot
+              ? (
+                <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs">
+                  <p>
+                    <strong>Limited pilot only.</strong> A{" "}
+                    {Math.round(calibrationTargetPrecision * 100)}% target can
+                    tolerate roughly{" "}
+                    {Math.round((1 - calibrationTargetPrecision) * 100)}{" "}
+                    false matches per 100 automatic “Me” results in this
+                    validation sample. Real recordings may perform worse. This
+                    calibration is limited to 24 hours and cannot unlock
+                    historical backfill.
+                  </p>
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <Checkbox
+                      checked={acceptLowerPrecisionRisk}
+                      onCheckedChange={(checked) =>
+                        setAcceptLowerPrecisionRisk(checked === true)}
+                      aria-label="Accept lower precision pilot risk"
+                    />
+                    <span>
+                      I understand the false-match risk and want to save a
+                      bounded pilot calibration.
+                    </span>
+                  </label>
+                </div>
+              )
+              : (
+                <p className="text-xs text-muted-foreground">
+                  Recommended for automatic classification and historical
+                  backfill. If it cannot pass, first inspect false positives and
+                  the Fit / Check split; use a lower target only for a bounded
+                  experiment.
+                </p>
+              )}
           </div>
 
           <div
@@ -3004,7 +3259,7 @@ export default function VoiceIdentityReviewPage() {
                 </div>
               </div>
 
-              <div className="grid gap-2 md:grid-cols-4">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
                 <div className="rounded-md border bg-muted/20 p-3 text-sm">
                   <span className="text-xs text-muted-foreground">
                     Auto “Sky” at
@@ -3016,14 +3271,23 @@ export default function VoiceIdentityReviewPage() {
                   </p>
                 </div>
                 <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                  <span className="text-xs text-muted-foreground">
-                    Auto “not Sky” at
-                  </span>
-                  <p className="text-xl font-semibold tabular-nums">
-                    {calibrationPreview.thresholds?.negativeThreshold.toFixed(
-                      3,
-                    ) ?? "—"}
-                  </p>
+                  {previewNegativeDecisionMode === "uncertain_only"
+                    ? (
+                      <p className="text-sm font-semibold text-amber-600">
+                        Auto not-Sky off · remains uncertain
+                      </p>
+                    )
+                    : (
+                      <>
+                        <span className="text-xs text-muted-foreground">
+                          Auto “not Sky” at
+                        </span>
+                        <p className="text-xl font-semibold tabular-nums">
+                          {calibrationPreview.thresholds?.negativeThreshold
+                            .toFixed(3) ?? "—"}
+                        </p>
+                      </>
+                    )}
                 </div>
                 <div className="rounded-md border bg-muted/20 p-3 text-sm">
                   <span className="text-xs text-muted-foreground">
@@ -3032,7 +3296,8 @@ export default function VoiceIdentityReviewPage() {
                   <p
                     className={`text-xl font-semibold tabular-nums ${
                       (calibrationPreview.validationMetrics
-                          ?.positivePrecision ?? 0) >= 0.98
+                          ?.positivePrecision ?? 0) >=
+                          calibrationTargetPrecision
                         ? "text-green-600"
                         : "text-amber-600"
                     }`}
@@ -3055,7 +3320,200 @@ export default function VoiceIdentityReviewPage() {
                       : "—"}
                   </p>
                 </div>
+                <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <span className="text-xs text-muted-foreground">
+                    False “Me” matches
+                  </span>
+                  <p
+                    className={`text-xl font-semibold tabular-nums ${
+                      (calibrationPreview.validationMetrics?.falsePositive ??
+                          0) === 0
+                        ? "text-green-600"
+                        : "text-amber-600"
+                    }`}
+                  >
+                    {calibrationPreview.validationMetrics?.falsePositive ?? "—"}
+                  </p>
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <span className="text-xs text-muted-foreground">
+                    “Me” recall
+                  </span>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {calibrationPreview.validationMetrics
+                      ? `${
+                        (calibrationPreview.validationMetrics.positiveRecall *
+                          100).toFixed(1)
+                      }%`
+                      : "—"}
+                  </p>
+                </div>
               </div>
+
+              <div className="rounded-md border bg-muted/10 p-3 text-sm">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <strong>Advanced · stricter automatic Sky matching</strong>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Raising the positive cosine threshold produces fewer
+                      automatic Sky matches. Coverage and recall usually fall;
+                      precision may improve. The control can never go below the
+                      server recommendation.
+                    </p>
+                  </div>
+                  {calibrationPreview.positiveThresholdSource ===
+                      "operator_stricter" && (
+                    <span className="rounded-full bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                      Operator-stricter pilot
+                    </span>
+                  )}
+                </div>
+                {!lowerPrecisionPilot
+                  ? (
+                    <p className="mt-3 rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+                      Disabled for the 98–100% production policy. Production
+                      thresholds are selected from Fit only; tuning them after
+                      seeing Check results would contaminate independent
+                      validation. Choose a provisional target below 98% to run a
+                      bounded diagnostic pilot.
+                    </p>
+                  )
+                  : recommendedPositiveThreshold == null ||
+                      displayedPositiveThreshold == null
+                  ? (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      A server recommendation must be calculated before this
+                      control becomes available.
+                    </p>
+                  )
+                  : (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span>
+                          Server recommendation{" "}
+                          <strong className="tabular-nums">
+                            {recommendedPositiveThreshold.toFixed(3)}
+                          </strong>
+                        </span>
+                        <span>
+                          Applied threshold{" "}
+                          <strong className="tabular-nums">
+                            {appliedPositiveThreshold?.toFixed(3) ?? "—"}
+                          </strong>
+                        </span>
+                        {positiveThresholdDraft != null && (
+                          <span className="text-amber-700 dark:text-amber-400">
+                            Draft{" "}
+                            <strong className="tabular-nums">
+                              {positiveThresholdDraft.toFixed(3)}
+                            </strong>{" "}
+                            · not applied yet
+                          </span>
+                        )}
+                      </div>
+                      <Slider
+                        min={recommendedPositiveThreshold}
+                        max={1}
+                        step={0.005}
+                        value={[displayedPositiveThreshold]}
+                        disabled={calibrationPreviewFetching}
+                        onValueChange={([value]) => {
+                          const clamped = clampPositiveThreshold(value);
+                          if (clamped != null) {
+                            setPositiveThresholdDraft(clamped);
+                          }
+                        }}
+                        onValueCommit={([value]) =>
+                          commitPositiveThresholdOverride(value)}
+                        aria-label="Stricter positive Sky cosine threshold"
+                      />
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="min-w-36 flex-1">
+                          <span className="text-xs text-muted-foreground">
+                            Positive cosine threshold
+                          </span>
+                          <Input
+                            className="mt-1 h-8 font-mono"
+                            type="number"
+                            min={recommendedPositiveThreshold}
+                            max={1}
+                            step={0.005}
+                            value={displayedPositiveThreshold.toFixed(3)}
+                            disabled={calibrationPreviewFetching}
+                            onChange={(event) => {
+                              const clamped = clampPositiveThreshold(
+                                Number(event.target.value),
+                              );
+                              if (clamped != null) {
+                                setPositiveThresholdDraft(clamped);
+                              }
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                commitPositiveThresholdOverride(
+                                  Number(event.currentTarget.value),
+                                );
+                                event.currentTarget.blur();
+                              }
+                            }}
+                          />
+                        </label>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={positiveThresholdDraft == null ||
+                            calibrationPreviewFetching}
+                          onClick={() => {
+                            if (positiveThresholdDraft != null) {
+                              commitPositiveThresholdOverride(
+                                positiveThresholdDraft,
+                              );
+                            }
+                          }}
+                        >
+                          {calibrationPreviewFetching
+                            ? "Recalculating…"
+                            : "Apply & recalculate"}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={positiveThresholdOverride == null &&
+                            positiveThresholdDraft == null}
+                          onClick={() => {
+                            resetPositiveThresholdOverride();
+                            setCalibrationRefreshResult(null);
+                          }}
+                        >
+                          Use server recommendation
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Release the slider, or enter a number and press Apply
+                        (or Enter), to recalculate held-out metrics. An
+                        unapplied draft never changes the metrics or enables
+                        Save. Any override makes this an explicitly
+                        operator-tuned provisional pilot; it is not production
+                        validation evidence.
+                      </p>
+                    </div>
+                  )}
+              </div>
+
+              {previewNegativeDecisionMode === "uncertain_only" && (
+                <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-sm">
+                  <strong>Safe Sky-first mode</strong>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    The reviewed data supports automatic Sky matches, but not a
+                    reliable automatic not-Sky boundary. The worker will not
+                    reject those voices automatically: every score below the Sky
+                    threshold remains uncertain until review. This is a
+                    conservative calibration mode, not a failed calibration.
+                    Manual not-Sky labels are preserved.
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3076,6 +3534,7 @@ export default function VoiceIdentityReviewPage() {
                       onClick={() => {
                         setCalibrationRecordings("");
                         setValidationRecordings("");
+                        resetPositiveThresholdOverride();
                         setCalibrationRefreshResult(null);
                       }}
                     >
@@ -3183,13 +3642,18 @@ export default function VoiceIdentityReviewPage() {
                     ))}
                   </ul>
                   {calibrationPreview.blockers.some((blocker) =>
-                    /No threshold pair reaches/i.test(blocker)
+                    /No (?:threshold pair|auto-Sky threshold) reaches/i.test(
+                      blocker,
+                    )
                   ) && (
                     <p className="mt-2 text-xs text-muted-foreground">
                       Next: open the Fit recordings, correct ambiguous or
                       overlapping labels, keep only clear single-speaker clips,
                       then try the recommended split or move a different mixed
-                      recording into Fit. Do not lower the 98% target.
+                      recording into Fit. If the recommended 98% production
+                      target still cannot pass, use 95% or 90% only for a
+                      bounded pilot and review its false matches before
+                      expanding.
                     </p>
                   )}
                 </div>
@@ -3198,17 +3662,24 @@ export default function VoiceIdentityReviewPage() {
               <Button
                 className="w-full"
                 onClick={() => saveCalibration.mutate()}
-                disabled={saveCalibration.isPending || !canValidate}
+                disabled={saveCalibration.isPending || !canSaveCalibration}
               >
                 {saveCalibration.isPending
                   ? "Saving server-verified calibration…"
-                  : canValidate
-                  ? "Save validated calibration and unlock classification"
-                  : "Calibration is not ready yet"}
+                  : !canValidate
+                  ? "Calibration is not ready yet"
+                  : lowerPrecisionPilot && !acceptLowerPrecisionRisk
+                  ? "Confirm the pilot risk to continue"
+                  : lowerPrecisionPilot
+                  ? `Save ${
+                    Math.round(calibrationTargetPrecision * 100)
+                  }% calibration for a 24-hour pilot`
+                  : "Save validated calibration (98%) for full-range classification"}
               </Button>
               <p className="text-center text-xs text-muted-foreground">
                 The backend recalculates the split metrics during save; the
-                browser cannot submit a made-up precision value.
+                selected target and calculated thresholds are stored with the
+                calibration. A sub-98% pilot never unlocks historical backfill.
               </p>
             </>
           )}
@@ -3219,8 +3690,9 @@ export default function VoiceIdentityReviewPage() {
           <div>
             <CardTitle>Classify existing — current results</CardTitle>
             <CardDescription>
-              Verified automatic results require the current server-computed
-              calibration. Older decisions are counted separately as stale.
+              Full-calibration results and bounded provisional pilot results are
+              counted separately. Older incompatible decisions remain visible as
+              stale.
             </CardDescription>
           </div>
           <Button
@@ -3297,12 +3769,25 @@ export default function VoiceIdentityReviewPage() {
               <br />latest job
             </div>
           </div>
+          {provisionalClassificationTotal > 0 && provisionalClassification && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+              <p className="font-medium">Provisional 24-hour pilot results</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {provisionalClassification.identified} identified ·{" "}
+                {provisionalClassification.unknown} unknown ·{" "}
+                {provisionalClassification.uncertain}{" "}
+                uncertain. Audit the automatic “Me” matches before trying to
+                reach the 98% full calibration target.
+              </p>
+            </div>
+          )}
           {classificationSnapshot && (
             <div className="text-xs text-muted-foreground">
               Exact snapshot: {new Date(classificationSnapshot.asOf)
-                .toLocaleString()} · verified calibration:{" "}
+                .toLocaleString()} · current calibration:{" "}
               {classificationSnapshot
-                .calibrationId ?? "none"}
+                .calibrationId ?? "none"} · policy:{" "}
+              {classificationSnapshot.classificationPolicy ?? "none"}
             </div>
           )}
           {classificationError && (
@@ -3400,7 +3885,7 @@ export default function VoiceIdentityReviewPage() {
               </li>
               <li>
                 <strong className="text-foreground">2.</strong>{" "}
-                Validate ≥98% precision
+                Validate the selected precision target
               </li>
               <li>
                 <strong className="text-foreground">3.</strong>{" "}
@@ -3418,10 +3903,12 @@ export default function VoiceIdentityReviewPage() {
             <p className="mt-3 text-xs text-muted-foreground">
               100 total with at least 40 target and 40 not-target labels is only
               the minimum volume gate. Quality is accepted only when a separate
-              validation set reaches ≥98% positive precision. More clean,
-              diverse recordings help; repeating nearly identical clips does
-              not. Review remains incremental after classification, especially
-              for uncertain results and new profiles.
+              validation set reaches the selected positive-precision target. 98%
+              unlocks production and historical backfill; 95% or 90% saves only
+              a risk-acknowledged 24-hour pilot. More clean, diverse recordings
+              help; repeating nearly identical clips does not. Review remains
+              incremental after classification, especially for uncertain results
+              and new profiles.
             </p>
           </div>
         </CardContent>

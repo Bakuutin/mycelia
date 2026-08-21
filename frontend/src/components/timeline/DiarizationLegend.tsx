@@ -2,6 +2,7 @@ import React, { memo } from "react";
 import {
   DIARIZATION_COVERAGE_LEGEND,
   SPEAKER_IDENTITY_LEGEND,
+  SPEAKER_IDENTITY_VALIDITY_LEGEND,
   type TimelineLegendItem,
 } from "@/lib/timelineDiarization";
 
@@ -25,8 +26,14 @@ const LegendGroup = memo(function LegendGroup({
         >
           <span
             aria-hidden="true"
-            className="h-2.5 w-2.5 rounded-sm border border-black/10"
-            style={{ backgroundColor: item.color, opacity: item.opacity }}
+            className="h-2.5 w-2.5 rounded-sm border"
+            style={{
+              backgroundColor: item.color,
+              opacity: item.opacity,
+              borderColor: item.stroke ?? "rgb(0 0 0 / 0.1)",
+              borderStyle: item.strokeDasharray ? "dashed" : "solid",
+              borderWidth: item.stroke ? 2 : 1,
+            }}
           />
           {item.label}
         </span>
@@ -61,7 +68,13 @@ export const DiarizationLegend = memo(function DiarizationLegend({
         />
       )}
       {showIdentity && (
-        <LegendGroup label="Speaker" items={SPEAKER_IDENTITY_LEGEND} />
+        <>
+          <LegendGroup label="Speaker" items={SPEAKER_IDENTITY_LEGEND} />
+          <LegendGroup
+            label="Status"
+            items={SPEAKER_IDENTITY_VALIDITY_LEGEND}
+          />
+        </>
       )}
     </div>
   );

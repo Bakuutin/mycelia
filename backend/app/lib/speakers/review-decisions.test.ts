@@ -369,6 +369,7 @@ Deno.test("automatic-match review query is pinned to verified calibration proven
       calibrationId: "sky-r7",
       profileRevision: 7,
       embeddingSpaceId: "space-v2",
+      decisionValidity: "verified",
     },
   ) as any;
   const identity = query.$and[0];
@@ -377,6 +378,24 @@ Deno.test("automatic-match review query is pinned to verified calibration proven
   assertEquals(identity["speakerIdentity.embeddingSpaceId"], "space-v2");
   assertEquals(identity["speakerIdentity.source"], "automatic");
   assertEquals(identity["speakerIdentity.validity"], "verified");
+  const provisional = buildReviewCandidateQuery(
+    new Date("2026-08-01T00:00:00Z"),
+    new Date("2026-08-02T00:00:00Z"),
+    "auto_matched",
+    skyProfileId,
+    null,
+    { embeddingSpaceIds: ["space-v2"] },
+    {
+      calibrationId: "sky-pilot",
+      profileRevision: 7,
+      embeddingSpaceId: "space-v2",
+      decisionValidity: "provisional",
+    },
+  ) as any;
+  assertEquals(
+    provisional.$and[0]["speakerIdentity.validity"],
+    "provisional",
+  );
   assertThrows(() =>
     buildReviewCandidateQuery(
       new Date("2026-08-01T00:00:00Z"),
@@ -539,5 +558,52 @@ Deno.test("calibration save accepts evidence selection but rejects client metric
       metrics: { precision: 1, sky: 40, notSky: 40 },
     }).success,
     false,
+  );
+  assertEquals(
+    speakerSegmentsRequestSchema.safeParse({
+      ...request,
+      targetPrecision: 0.95,
+    }).success,
+    false,
+  );
+  assert(
+    speakerSegmentsRequestSchema.safeParse({
+      ...request,
+      targetPrecision: 0.95,
+      acceptLowerPrecisionRisk: true,
+      positiveThresholdOverride: 0.3,
+    }).success,
+  );
+  assertEquals(
+    speakerSegmentsRequestSchema.safeParse({
+      ...request,
+      positiveThresholdOverride: 0.3,
+    }).success,
+    false,
+  );
+  assertEquals(
+    speakerSegmentsRequestSchema.safeParse({
+      ...request,
+      targetPrecision: 0.89,
+      acceptLowerPrecisionRisk: true,
+    }).success,
+    false,
+  );
+  assertEquals(
+    speakerSegmentsRequestSchema.safeParse({
+      action: "calibration-preview",
+      profileId: skyProfileId,
+      targetPrecision: 0.98,
+      positiveThresholdOverride: 0.3,
+    }).success,
+    false,
+  );
+  assert(
+    speakerSegmentsRequestSchema.safeParse({
+      action: "calibration-preview",
+      profileId: skyProfileId,
+      targetPrecision: 0.95,
+      positiveThresholdOverride: 0.3,
+    }).success,
   );
 });

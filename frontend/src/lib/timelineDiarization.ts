@@ -8,6 +8,8 @@ export interface TimelineLegendItem {
   label: string;
   color: string;
   opacity: number;
+  stroke?: string;
+  strokeDasharray?: string;
 }
 
 const SPEAKER_IDENTITY_APPEARANCE = {
@@ -41,15 +43,36 @@ export const SPEAKER_IDENTITY_LEGEND = Object.values(
   SPEAKER_IDENTITY_APPEARANCE,
 );
 
+export const SPEAKER_IDENTITY_VALIDITY_LEGEND: TimelineLegendItem[] = [
+  {
+    id: "provisional",
+    label: "Pilot result",
+    color: "#94a3b8",
+    opacity: 0.58,
+    stroke: "#a855f7",
+    strokeDasharray: "4 2",
+  },
+];
+
 export function speakerIdentityAppearance(
   state?: string,
+  validity?: string,
 ): TimelineLegendItem {
-  if (state && state in SPEAKER_IDENTITY_APPEARANCE) {
-    return SPEAKER_IDENTITY_APPEARANCE[
+  const appearance = state && state in SPEAKER_IDENTITY_APPEARANCE
+    ? SPEAKER_IDENTITY_APPEARANCE[
       state as keyof typeof SPEAKER_IDENTITY_APPEARANCE
-    ];
+    ]
+    : SPEAKER_IDENTITY_APPEARANCE.unclassified;
+  if (validity === "provisional") {
+    return {
+      ...appearance,
+      label: `Pilot · ${appearance.label}`,
+      opacity: 0.58,
+      stroke: "#a855f7",
+      strokeDasharray: "4 2",
+    };
   }
-  return SPEAKER_IDENTITY_APPEARANCE.unclassified;
+  return appearance;
 }
 
 export function coverageOpacity(state: DiarizationCoverageState): number {

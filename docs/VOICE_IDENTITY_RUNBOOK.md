@@ -52,6 +52,11 @@ reports capped totals as `at least N`.
 
 ## Pilot and backfill
 
+The **Voice identity** card on `/audio/pipeline` shows the primary profile,
+current server blockers, and a direct **Open calibration setup** link. Follow
+the displayed `label → fit → validate → save → classify` sequence; calibration
+reuses stored diarization embeddings and does not rerun audio processing.
+
 1. `/settings/voice-identity`: re-enroll Sky from all saved samples.
 2. Create an **Uncertain + unclassified** review session. Its default 10-item
    rolling windows (selectable as 5/10/20) are stratified across source
@@ -69,21 +74,39 @@ reports capped totals as `at least N`.
      the review segment stops and disposes the previous clip. The next three
      pending clips/groups are fetched into a bounded browser cache, so autoplay
      normally starts without another audio download wait.
-   - Choose the source explicitly: all matching recordings, selected
-     recordings, an exact Timeline selection, or one active compatible
-     diarization generation. Run **Preview source** before creation; it shows
-     counts, quality exclusions, recordings, and playable samples. The server
-     freezes that exact scope and reapplies it to every rolling window.
-3. Save validated thresholds. The server accepts only the selected Fit/Check
-   recording IDs and recomputes thresholds and metrics itself. Only
-   `server-computed-v1` records with at least 98% independent Check precision
-   unlock classification.
-   **Recalculate preview** is a visible server calculation; it does not save a
-   calibration until the final Save action succeeds.
+   - Choose the source explicitly: all matching recordings, selected recordings,
+     an exact Timeline selection, or one active compatible diarization
+     generation. Run **Preview source** before creation; it shows counts,
+     quality exclusions, recordings, and playable samples. The server freezes
+     that exact scope and reapplies it to every rolling window.
+3. Choose the required independent Check precision and save the calculated
+   thresholds. Use `98%` for production, a `95%`/`90%` preset for a provisional
+   run, or a custom `90–100%` value in `0.5%` steps. This control is a precision
+   policy, not a raw cosine threshold. Values below `98%` require accepting the
+   false-match risk and unlock only a job with start/end covering at most 24
+   hours. The server accepts only the selected Fit/Check recording IDs and
+   recomputes the cosine thresholds and metrics itself; the worker enforces the
+   stored policy again when a job starts. If the server cannot prove a safe
+   negative threshold, the preview says **Auto not-Sky off · remains uncertain**
+   and saves `negativeDecisionMode=uncertain_only`. This is intentional
+   Sky-first behavior: automatic Sky matches remain available, but every other
+   score is left uncertain instead of being auto-rejected. Manual not-Sky labels
+   remain intact. For a provisional target, **Advanced · stricter automatic Sky
+   matching** can raise the positive cosine threshold above the server
+   recommendation in `0.005` steps. It can never lower it. A higher threshold
+   usually reduces matches, coverage, and recall, but may improve precision. The
+   preview marks this as `positiveThresholdSource=operator_stricter`; **Use
+   server recommendation**, changing the precision target, or changing the
+   Fit/Check split clears the override. This tuning is disabled for production
+   because choosing a threshold after seeing Check metrics would contaminate
+   independent validation. **Recalculate preview** is a visible server
+   calculation; it does not save a calibration until the final Save action
+   succeeds.
 4. Open `/jobs?type=speakerIdentity` and press play on the worker. The launcher
    resolves primary Sky, its current revision, the usable server calibration,
-   and a compatible active run without raw IDs. Run the 24-hour pilot first,
-   inspect its live campaign, then expand to 7/14 days or a custom range.
+   and a compatible active run without raw IDs. Run the 24-hour pilot first and
+   inspect its false positives. The 7/14-day and longer options become available
+   only after saving a production calibration with a ≥98% target.
 5. Create an **Audit automatic matches** session to inspect old/current matched
    candidates across different recordings; also review uncertain and rejected
    samples.
