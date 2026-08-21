@@ -51,7 +51,6 @@ export const WaveformPlayer = forwardRef<
   const [error, setError] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const blobUrlRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
   const onEndedRef = useRef(onEnded);
@@ -96,49 +95,94 @@ export const WaveformPlayer = forwardRef<
 
   // Load audio and extract waveform data
   useEffect(() => {
+    const controller = new AbortController();
+    let disposed = false;
+    let loadedAudio: HTMLAudioElement | null = null;
+    let loadedBlobUrl: string | null = null;
+    let loadedAudioContext: AudioContext | null = null;
+    let removeAudioListeners = () => {};
+
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(initialDuration || 0);
+    setWaveformData([]);
+
     const loadAudio = async () => {
       setIsLoading(true);
       setError(null);
 
       try {
         // Fetch audio with auth headers
-        const response = await apiClient.fetch(audioUrl);
+        const response = await apiClient.fetch(audioUrl, {
+          signal: controller.signal,
+        });
         const arrayBuffer = await response.arrayBuffer();
+        if (disposed) return;
 
         // Create a blob URL for the Audio element
         const blob = new Blob([arrayBuffer], {
           type: response.headers.get("content-type") || "audio/wav",
         });
         const blobUrl = URL.createObjectURL(blob);
-        blobUrlRef.current = blobUrl;
+        loadedBlobUrl = blobUrl;
 
         // Create audio element for playback using blob URL
         const audio = new Audio(blobUrl);
+        loadedAudio = audio;
         audioRef.current = audio;
 
-        audio.addEventListener("loadedmetadata", () => {
+        const handleLoadedMetadata = () => {
           setDuration(audio.duration);
-        });
-
-        audio.addEventListener("ended", () => {
+        };
+        const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
+        const handleEnded = () => {
           setIsPlaying(false);
           setCurrentTime(0);
           useAudioPlaybackStore.getState().release(playbackId);
           onEndedRef.current?.();
-        });
-        audio.addEventListener("play", () => setIsPlaying(true));
-        audio.addEventListener("pause", () => {
+        };
+        const handlePlay = () => setIsPlaying(true);
+        const handlePause = () => {
           setIsPlaying(false);
+          setCurrentTime(audio.currentTime);
           useAudioPlaybackStore.getState().release(playbackId);
-        });
+        };
+
+        audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+        audio.addEventListener("durationchange", handleLoadedMetadata);
+        audio.addEventListener("timeupdate", handleTimeUpdate);
+        audio.addEventListener("ended", handleEnded);
+        audio.addEventListener("play", handlePlay);
+        audio.addEventListener("pause", handlePause);
+        removeAudioListeners = () => {
+          audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+          audio.removeEventListener("durationchange", handleLoadedMetadata);
+          audio.removeEventListener("timeupdate", handleTimeUpdate);
+          audio.removeEventListener("ended", handleEnded);
+          audio.removeEventListener("play", handlePlay);
+          audio.removeEventListener("pause", handlePause);
+        };
 
         const audioContext = new AudioContext();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        loadedAudioContext = audioContext;
+        const audioBuffer = await audioContext.decodeAudioData(
+          arrayBuffer.slice(0),
+        );
+        await audioContext.close();
+        loadedAudioContext = null;
+        if (disposed) {
+          removeAudioListeners();
+          audio.pause();
+          return;
+        }
 
         // Extract waveform peaks
         const channelData = audioBuffer.getChannelData(0);
         const samples = 100; // Number of bars in waveform
-        const blockSize = Math.floor(channelData.length / samples);
+        const blockSize = Math.max(
+          1,
+          Math.floor(channelData.length / samples),
+        );
         const peaks: number[] = [];
 
         for (let i = 0; i < samples; i++) {
@@ -152,15 +196,18 @@ export const WaveformPlayer = forwardRef<
         }
 
         // Normalize peaks
-        const maxPeak = Math.max(...peaks);
+        const maxPeak = Math.max(...peaks, Number.EPSILON);
         const normalizedPeaks = peaks.map((p) => p / maxPeak);
 
         setWaveformData(normalizedPeaks);
         setDuration(audioBuffer.duration);
         setIsLoading(false);
-
-        await audioContext.close();
       } catch (err) {
+        if (loadedAudioContext) {
+          void loadedAudioContext.close();
+          loadedAudioContext = null;
+        }
+        if (disposed || controller.signal.aborted) return;
         console.error("Error loading audio:", err);
         setError("Failed to load audio");
         setIsLoading(false);
@@ -170,20 +217,27 @@ export const WaveformPlayer = forwardRef<
     loadAudio();
 
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
+      disposed = true;
+      controller.abort();
+      removeAudioListeners();
+      if (loadedAudio) {
+        loadedAudio.pause();
+      }
+      if (loadedAudioContext) {
+        void loadedAudioContext.close();
+      }
+      if (audioRef.current === loadedAudio) {
         audioRef.current = null;
       }
       useAudioPlaybackStore.getState().release(playbackId);
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
+      if (loadedBlobUrl) {
+        URL.revokeObjectURL(loadedBlobUrl);
       }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [audioUrl, playbackId]);
+  }, [audioUrl, initialDuration, playbackId]);
 
   useEffect(() => {
     if (!isLoading && autoPlay) {
@@ -209,9 +263,6 @@ export const WaveformPlayer = forwardRef<
     const width = rect.width;
     const height = rect.height;
     const barWidth = width / waveformData.length;
-    const progressRatio = duration > 0 ? currentTime / duration : 0;
-    const progressX = progressRatio * width;
-
     ctx.clearRect(0, 0, width, height);
 
     // Draw bars
@@ -220,22 +271,10 @@ export const WaveformPlayer = forwardRef<
       const barHeight = Math.max(2, peak * (height - 4));
       const y = (height - barHeight) / 2;
 
-      // Use different colors for played vs unplayed
-      if (x < progressX) {
-        ctx.fillStyle = "hsl(var(--primary))";
-      } else {
-        ctx.fillStyle = "hsl(var(--muted-foreground) / 0.3)";
-      }
-
+      ctx.fillStyle = "rgba(148, 163, 184, 0.45)";
       ctx.fillRect(x + 1, y, barWidth - 2, barHeight);
     });
-
-    // Draw playhead
-    if (isPlaying || currentTime > 0) {
-      ctx.fillStyle = "hsl(var(--primary))";
-      ctx.fillRect(progressX - 1, 0, 2, height);
-    }
-  }, [waveformData, currentTime, duration, isPlaying]);
+  }, [waveformData]);
 
   // Update time during playback
   const updateTime = useCallback(() => {
@@ -277,6 +316,9 @@ export const WaveformPlayer = forwardRef<
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
+  const progressPercent = duration > 0
+    ? Math.max(0, Math.min(100, currentTime / duration * 100))
+    : 0;
 
   if (error) {
     return (
@@ -308,11 +350,29 @@ export const WaveformPlayer = forwardRef<
           : <Play className="h-4 w-4" />}
       </Button>
 
-      <div className="flex-1 min-w-0">
+      <div
+        className="relative h-8 min-w-0 flex-1 overflow-hidden rounded bg-muted/20"
+        role="progressbar"
+        aria-label="Playback position"
+        aria-valuemin={0}
+        aria-valuemax={Math.max(0, Math.round(duration * 10) / 10)}
+        aria-valuenow={Math.max(0, Math.round(currentTime * 10) / 10)}
+        aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
+      >
         <canvas
           ref={canvasRef}
-          className="w-full h-8 cursor-pointer rounded"
+          className="absolute inset-0 h-8 w-full cursor-pointer"
           onClick={handleCanvasClick}
+        />
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 bg-primary/15"
+          style={{ width: `${progressPercent}%` }}
+          aria-hidden="true"
+        />
+        <div
+          className="pointer-events-none absolute inset-y-0 w-0.5 bg-primary shadow-[0_0_0_1px_hsl(var(--background))]"
+          style={{ left: `${Math.min(99.5, progressPercent)}%` }}
+          aria-hidden="true"
         />
       </div>
 
