@@ -24,6 +24,7 @@ import {
   testSelfHostedProfile,
 } from "./providers.server.ts";
 import {
+  assertMediaItemsWithinPerImportBudget,
   assertMediaPerImportBudget,
   estimateGoogleConnectorTestGrossUsd,
   estimateMediaGrossUsd,
@@ -371,7 +372,6 @@ export async function analyzeMediaUploads(
 ): Promise<unknown> {
   const db = await getRootDB();
   const config = await loadMediaConfig();
-  if (!config.enabled) throw new Error("Media Knowledge is disabled");
   if (files.length === 0) {
     throw new Error("At least one media file is required");
   }
@@ -385,7 +385,7 @@ export async function analyzeMediaUploads(
     cleanupExpiredStagedPreviews(db),
   ]);
 
-  const profile = options.profileId
+  const profile = config.enabled && options.profileId
     ? selectProfile(config, options.profileId)
     : undefined;
   const requestedTasks = profile
@@ -530,7 +530,6 @@ export async function analyzeMediaUploads(
     if (!items.some((item) => !item.error)) {
       throw new Error("No supported media files could be prepared");
     }
-    assertMediaPerImportBudget(config, grossEstimateUsd);
     await db.collection("media_imports").insertOne({
       _id: importId,
       owner: auth.principal,
@@ -921,9 +920,8 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
       }
 
       case "analyzeSource": {
-        if (!config.enabled) throw new Error("Media Knowledge is disabled");
         await cleanupExpiredStagedPreviews(db);
-        const profile = input.profileId
+        const profile = config.enabled && input.profileId
           ? selectProfile(config, input.profileId)
           : undefined;
         const requestedTasks = profile ? normalizeRequestedTasks(input) : [];
@@ -983,7 +981,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             previewSourcePaths.push(undefined);
           }
         }
-        assertMediaPerImportBudget(config, grossEstimateUsd);
         for (const [index, realPath] of previewSourcePaths.entries()) {
           if (!realPath) continue;
           const item = items[index];
@@ -1098,6 +1095,14 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
               record.includeGlobalPhotoAnalysis === true,
           })
           : [];
+        if (profile) {
+          assertMediaItemsWithinPerImportBudget(
+            config,
+            (record.items ?? [])
+              .filter((item: any) => !item.error)
+              .map((item: any) => Number(item.estimatedGrossUsd ?? 0)),
+          );
+        }
         const consentReceiptId = randomUUID();
         const created: any[] = [];
         const duplicates: any[] = [];

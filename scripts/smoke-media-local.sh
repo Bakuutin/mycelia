@@ -42,7 +42,6 @@ resource() {
     --data "$payload"
 }
 
-resource config '{"action":"patch","path":"mediaKnowledge","updates":{"enabled":true}}' >/dev/null
 analysis="$(resource media '{"action":"analyzeSource","relativePath":"."}')"
 import_id="$(printf '%s' "$analysis" | jq -r '.importId | if type == "object" then .["$oid"] else . end // empty')"
 if [[ -z "$import_id" ]]; then

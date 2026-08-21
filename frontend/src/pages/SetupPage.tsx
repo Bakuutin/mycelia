@@ -2,6 +2,11 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exchangeApiKeyForJWT } from "@/lib/auth";
+import {
+  getDockerSetupEndpoint,
+  getDockerTokenCommand,
+  isMediaDevSetupLocation,
+} from "@/lib/setupCommands";
 import { Loader2, CheckCircle2, XCircle, Terminal, Copy, Check, ClipboardPaste, Wifi, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,10 +21,7 @@ import {
 
 type ServerType = "docker" | "deno" | "custom";
 
-const SERVER_ENDPOINTS: Record<Exclude<ServerType, "custom">, string> = {
-  docker: "https://localhost:4433",
-  deno: "http://localhost:5173",
-};
+const DENO_ENDPOINT = "http://localhost:5173";
 
 type SetupStatus = "idle" | "verifying" | "creating_new" | "success" | "error" | "keys_exist";
 type ServerTestStatus = "idle" | "testing" | "success" | "error";
@@ -30,7 +32,6 @@ interface SetupResponse {
   clientSecret?: string;
   error?: string;
 }
-
 function getFriendlyAuthError(error: string | null): string {
   if (!error) return "Something went wrong. Please try again.";
 
@@ -50,6 +51,11 @@ function getFriendlyAuthError(error: string | null): string {
 }
 
 export default function SetupPage() {
+  const isMediaDevStack = isMediaDevSetupLocation(window.location);
+  const serverEndpoints: Record<Exclude<ServerType, "custom">, string> = {
+    docker: getDockerSetupEndpoint(window.location),
+    deno: DENO_ENDPOINT,
+  };
   const navigate = useNavigate();
   const {
     apiEndpoint,
@@ -61,7 +67,7 @@ export default function SetupPage() {
   } = useSettingsStore();
 
   const [serverType, setServerType] = useState<ServerType>("docker");
-  const [localEndpoint, setLocalEndpoint] = useState(apiEndpoint || SERVER_ENDPOINTS.docker);
+  const [localEndpoint, setLocalEndpoint] = useState(apiEndpoint || serverEndpoints.docker);
   const [localClientId, setLocalClientId] = useState("");
   const [localToken, setLocalToken] = useState("");
   const [pastedCredentials, setPastedCredentials] = useState("");
@@ -73,7 +79,7 @@ export default function SetupPage() {
   const handleServerTypeChange = (value: ServerType) => {
     setServerType(value);
     if (value !== "custom") {
-      setLocalEndpoint(SERVER_ENDPOINTS[value]);
+      setLocalEndpoint(serverEndpoints[value]);
     }
     setServerTestStatus("idle");
     setServerTestError(null);
@@ -84,9 +90,9 @@ export default function SetupPage() {
     setServerTestStatus("idle");
     setServerTestError(null);
     // Auto-switch to custom if endpoint doesn't match presets
-    if (value === SERVER_ENDPOINTS.docker) {
+    if (value === serverEndpoints.docker) {
       setServerType("docker");
-    } else if (value === SERVER_ENDPOINTS.deno) {
+    } else if (value === serverEndpoints.deno) {
       setServerType("deno");
     } else if (serverType !== "custom") {
       setServerType("custom");
@@ -294,6 +300,7 @@ export default function SetupPage() {
 
   // Generate suggested token name with browser info
   const suggestedTokenName = `${getBrowserName()}-${new Date().toISOString().slice(0, 10)}`;
+  const dockerTokenCommand = getDockerTokenCommand(suggestedTokenName, window.location);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
@@ -349,14 +356,14 @@ export default function SetupPage() {
                     </div>
                     <div className="relative">
                       <pre className="bg-slate-900/80 rounded-lg p-4 text-sm font-mono text-slate-300 overflow-x-auto">
-                        <code>docker compose exec backend deno run -A server.ts token-create --name {suggestedTokenName}</code>
+                        <code>{dockerTokenCommand}</code>
                       </pre>
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
                         className="absolute top-2 right-2 text-slate-400 hover:text-white"
-                        onClick={() => copyCommand(`docker compose exec backend deno run -A server.ts token-create --name ${suggestedTokenName}`)}
+                        onClick={() => copyCommand(dockerTokenCommand)}
                       >
                         {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                       </Button>
@@ -376,24 +383,25 @@ export default function SetupPage() {
                       <p className="text-slate-300 text-xs font-medium">Docker (recommended)</p>
                       <div className="relative">
                         <pre className="bg-slate-900/80 rounded-lg p-3 text-sm font-mono text-slate-300 overflow-x-auto">
-                          <code>docker compose exec backend deno run -A server.ts token-create --name {suggestedTokenName}</code>
+                          <code>{dockerTokenCommand}</code>
                         </pre>
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
                           className="absolute top-2 right-2 text-slate-400 hover:text-white"
-                          onClick={() => copyCommand(`docker compose exec backend deno run -A server.ts token-create --name ${suggestedTokenName}`)}
+                          onClick={() => copyCommand(dockerTokenCommand)}
                         >
                           {copiedCommand ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                         </Button>
                       </div>
                       <p className="text-slate-500 text-xs">
-                        Server endpoint: <code className="text-purple-400">https://localhost:4433</code>
+                        Server endpoint: <code className="text-purple-400">{serverEndpoints.docker}</code>
                       </p>
                     </div>
 
                     {/* Non-Docker option */}
+                    {!isMediaDevStack && (
                     <div className="space-y-2 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
                       <p className="text-slate-300 text-xs font-medium">Local development (deno task dev)</p>
                       <div className="relative">
@@ -414,6 +422,7 @@ export default function SetupPage() {
                         Server endpoint: <code className="text-purple-400">http://localhost:5173</code>
                       </p>
                     </div>
+                    )}
                   </>
                 )}
 

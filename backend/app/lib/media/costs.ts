@@ -94,9 +94,20 @@ export function assertMediaPerImportBudget(
 ): void {
   if (estimatedGrossUsd > config.promoGuard.perImportGrossLimitUsd) {
     throw new Error(
-      `Import estimate $${
+      `Recognition estimate $${
         estimatedGrossUsd.toFixed(4)
-      } exceeds the per-import limit`,
+      } for one asset exceeds the per-import limit $${
+        config.promoGuard.perImportGrossLimitUsd.toFixed(4)
+      }`,
     );
+  }
+}
+
+export function assertMediaItemsWithinPerImportBudget(
+  config: MediaKnowledgeConfig,
+  estimatedGrossUsdByItem: number[],
+): void {
+  for (const estimate of estimatedGrossUsdByItem) {
+    assertMediaPerImportBudget(config, estimate);
   }
 }

@@ -75,7 +75,9 @@ export default function MediaPage() {
       ]);
       setStatus(nextStatus);
       setAssets(nextAssets.assets ?? []);
-      setProfileId((current) => current || nextStatus.activeProfileId || "");
+      setProfileId((current) =>
+        nextStatus.enabled ? current || nextStatus.activeProfileId || "" : ""
+      );
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to load Media Library",
@@ -356,8 +358,9 @@ export default function MediaPage() {
       {!status?.enabled && (
         <Card className="border-amber-500/50">
           <CardContent className="p-4">
-            Enable and configure Media Knowledge in Settings → Google Cloud
-            first.
+            Recognition is disabled. Local managed uploads, previews, EXIF/GPS,
+            deduplication, and metadata-only imports remain available. Enable a
+            provider in Settings → Google Cloud only when you want recognition.
           </CardContent>
         </Card>
       )}
@@ -481,7 +484,7 @@ export default function MediaPage() {
                 type="file"
                 multiple
                 accept="image/jpeg,image/png,image/webp,application/pdf"
-                disabled={busy || !status?.enabled ||
+                disabled={busy ||
                   Boolean(profileId && selectedTasks.length === 0)}
                 onChange={(event) => {
                   void analyzeUploads(Array.from(event.target.files ?? []));
@@ -501,7 +504,7 @@ export default function MediaPage() {
             <Button
               onClick={analyze}
               variant="outline"
-              disabled={busy || !status?.enabled ||
+              disabled={busy ||
                 !status?.sourceConfigured ||
                 Boolean(profileId && selectedTasks.length === 0)}
             >

@@ -4,12 +4,27 @@ import {
   zMediaKnowledgeConfig,
 } from "@myceliasdk/media.ts";
 import {
+  assertMediaItemsWithinPerImportBudget,
   assertMediaPerImportBudget,
   estimateGoogleConnectorTestGrossUsd,
   estimateMediaGrossUsd,
   gcpUsageLedgerId,
   summarizeGcpUsage,
 } from "./costs.ts";
+
+Deno.test("a multi-file import is guarded per asset, not by batch total", () => {
+  const config = zMediaKnowledgeConfig.parse({});
+
+  assertMediaItemsWithinPerImportBudget(
+    config,
+    Array.from({ length: 6 }, () => 0.006),
+  );
+  assertThrows(
+    () => assertMediaItemsWithinPerImportBudget(config, [0.006, 0.012]),
+    Error,
+    "for one asset exceeds the per-import limit",
+  );
+});
 
 const googleProfile: MediaRecognitionProfile = {
   id: "google-media",

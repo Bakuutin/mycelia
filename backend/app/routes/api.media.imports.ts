@@ -34,6 +34,7 @@ function publicError(error: unknown): string {
   if (
     message.includes("Unsupported or invalid media file") ||
     message.includes("exceeds the configured") ||
+    message.includes("exceeds the per-import limit") ||
     message.includes("PDF has") ||
     message.includes("maximum is")
   ) return message;

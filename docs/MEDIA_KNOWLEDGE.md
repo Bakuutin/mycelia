@@ -18,6 +18,11 @@ confidence, warnings, and an embedding for semantic search. OCR, Vision labels,
 and Vision object localization are independent optional tasks. Local metadata
 extraction is always local and precedes that choice.
 
+Local ingestion is independent of recognition. When
+`mediaKnowledge.enabled` is false, managed uploads and mounted-source imports
+still extract metadata, deduplicate, and create previews. No recognition
+profile is selected and no provider receives content.
+
 Uploaded files use `managed_original`: the immutable original is promoted from
 one-hour staging into the separate `media_originals` GridFS bucket only after
 confirmation. The source-folder path uses `external_reference`: the mount is
@@ -64,10 +69,18 @@ docker compose \
 
 Open `http://127.0.0.1:3211`. HTTPS is also published on port `4443`, but uses
 the development self-signed certificate. Complete first-time setup, then open
-Settings → Google Cloud and enable Media Knowledge. A recognition profile is not
-required for local-only import. Open Media, keep `Queue recognition after
-import` off, either upload files or analyze the relative path `.`, review the
-storage-mode badge and preview, and confirm.
+Media. A recognition profile is not required for local-only import, and the
+upload controls remain available when recognition is disabled. Keep `Queue
+recognition after import` off, either upload files or analyze the relative path
+`.`, review the storage-mode badge and preview, and confirm.
+
+If setup reports that API keys already exist, create browser credentials in the
+running isolated backend (this command does not require a checkout `.env`):
+
+```bash
+docker exec -it -w /app mycelia-media-89da-backend-1 \
+  deno run -A server.ts token-create --name Chrome-$(date +%F)
+```
 
 Automated local smoke test (it creates a test owner only inside the isolated
 database and never calls Google):

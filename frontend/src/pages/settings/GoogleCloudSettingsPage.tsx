@@ -514,7 +514,7 @@ export default function GoogleCloudSettingsPage() {
             </div>
             <div>
               <Label htmlFor="google-cloud-per-import-stop">
-                Per import, USD
+                Per asset recognition, USD
               </Label>
               <Input
                 id="google-cloud-per-import-stop"

@@ -71,6 +71,31 @@ describe("MediaPage local-only import", () => {
     });
   });
 
+  it("keeps metadata-only uploads available when recognition is disabled", async () => {
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "status") {
+        return Promise.resolve({
+          enabled: false,
+          sourceConfigured: false,
+          activeProfileId: undefined,
+          profiles: [],
+        });
+      }
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [] });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MediaPage />);
+
+    const input = await screen.findByLabelText("Choose files");
+    expect((input as HTMLInputElement).disabled).toBe(false);
+    expect(
+      screen.getByText(/Local managed uploads, previews, EXIF\/GPS/),
+    ).toBeTruthy();
+  });
+
   it("uploads files as managed originals before confirmation", async () => {
     const user = userEvent.setup();
     mockPostForm.mockResolvedValue({
