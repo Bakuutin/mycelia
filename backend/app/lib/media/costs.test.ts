@@ -3,7 +3,12 @@ import {
   type MediaRecognitionProfile,
   zMediaKnowledgeConfig,
 } from "@myceliasdk/media.ts";
-import { assertMediaPerImportBudget, estimateMediaGrossUsd } from "./costs.ts";
+import {
+  assertMediaPerImportBudget,
+  estimateMediaGrossUsd,
+  gcpUsageLedgerId,
+  summarizeGcpUsage,
+} from "./costs.ts";
 
 const googleProfile: MediaRecognitionProfile = {
   id: "google-media",
@@ -67,5 +72,36 @@ Deno.test("self-hosted analysis does not reserve Google spend", () => {
       profile,
     ),
     0,
+  );
+});
+
+Deno.test("Google usage snapshot exposes committed, reserved, and remaining guards", () => {
+  const config = zMediaKnowledgeConfig.parse({
+    promoGuard: {
+      monthlyGrossLimitUsd: 1,
+      dailyGrossLimitUsd: 0.1,
+      perImportGrossLimitUsd: 0.01,
+    },
+  });
+  const snapshot = summarizeGcpUsage(
+    {
+      grossCommittedUsd: 0.25,
+      grossReservedUsd: 0.05,
+      days: { "2026-08-21": { grossUsd: 0.02 } },
+    },
+    config,
+    new Date("2026-08-21T12:00:00.000Z"),
+  );
+
+  assertEquals(snapshot.grossMonthUsd, 0.3);
+  assertEquals(snapshot.grossTodayUsd, 0.02);
+  assertEquals(snapshot.monthlyRemainingUsd, 0.7);
+  assertEquals(snapshot.dailyRemainingUsd, 0.08);
+});
+
+Deno.test("Google spend ledger is shared by every Mycelia principal using a project", () => {
+  assertEquals(
+    gcpUsageLedgerId("mycelia-media-260821", "2026-08"),
+    "mycelia-media-260821:2026-08",
   );
 });

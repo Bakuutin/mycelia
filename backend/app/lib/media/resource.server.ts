@@ -23,7 +23,12 @@ import {
   type NormalizedMediaAnalysis,
   testSelfHostedProfile,
 } from "./providers.server.ts";
-import { assertMediaPerImportBudget, estimateMediaGrossUsd } from "./costs.ts";
+import {
+  assertMediaPerImportBudget,
+  estimateMediaGrossUsd,
+  gcpUsageLedgerId,
+  summarizeGcpUsage,
+} from "./costs.ts";
 import {
   type MediaKnowledgeConfig,
   type MediaRecognitionProfile,
@@ -276,7 +281,7 @@ function assertPromoGuard(
 
 async function reserveGcpBudget(
   db: Db,
-  owner: string,
+  principal: string,
   attemptId: string,
   amount: number,
   config: MediaKnowledgeConfig,
@@ -287,14 +292,16 @@ async function reserveGcpBudget(
   const now = new Date();
   const month = now.toISOString().slice(0, 7);
   const day = now.toISOString().slice(0, 10);
-  const id = `${owner}:${month}`;
+  const id = gcpUsageLedgerId(projectId, month);
   const collection = db.collection<any>("gcp_usage_months");
   const events = db.collection<any>("gcp_usage_events");
 
   try {
     await events.insertOne({
       attemptId,
-      owner,
+      principal,
+      projectId,
+      ledgerId: id,
       month,
       day,
       state: "reserving",
@@ -328,7 +335,13 @@ async function reserveGcpBudget(
         throw new Error("GCP_DAILY_BUDGET_BLOCKED");
       }
       const update = {
-        $setOnInsert: { owner, month, grossCommittedUsd: 0, createdAt: now },
+        $setOnInsert: {
+          owner: `gcp-project:${projectId}`,
+          projectId,
+          month,
+          grossCommittedUsd: 0,
+          createdAt: now,
+        },
         $inc: {
           grossReservedUsd: amount,
           [`days.${day}.grossUsd`]: amount,
@@ -362,7 +375,6 @@ async function reserveGcpBudget(
 
 async function finishGcpBudget(
   db: Db,
-  owner: string,
   attemptId: string,
   amount: number,
   state: "committed" | "unknown" | "released",
@@ -382,11 +394,14 @@ async function finishGcpBudget(
   );
   if (!event) return;
   const month = String(event.month);
+  const ledgerId = String(
+    event.ledgerId ?? `${String(event.owner)}:${month}`,
+  );
   const increment = state === "released"
     ? { grossReservedUsd: -amount }
     : { grossReservedUsd: -amount, grossCommittedUsd: amount };
   await db.collection<any>("gcp_usage_months").updateOne(
-    { _id: `${owner}:${month}` },
+    { _id: ledgerId },
     { $inc: increment, $set: { updatedAt: new Date() } },
   );
   await db.collection<any>("gcp_usage_events").updateOne(
@@ -537,11 +552,20 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
 
     switch (input.action) {
       case "status": {
-        const adc =
-          config.profiles.some((p) => p.providerType === "google-cloud")
-            ? await inspectGoogleAdc()
-            : { configured: false, credentialPathConfigured: false };
+        const googleProfile = config.profiles.find((profile) =>
+          profile.providerType === "google-cloud"
+        );
+        const adc = googleProfile
+          ? await inspectGoogleAdc()
+          : { configured: false, credentialPathConfigured: false };
         const now = Date.now();
+        const nowDate = new Date(now);
+        const month = nowDate.toISOString().slice(0, 7);
+        const usageDocument = googleProfile
+          ? await db.collection<any>("gcp_usage_months").findOne({
+            _id: gcpUsageLedgerId(googleProfile.projectId, month),
+          })
+          : null;
         const verifiedAt = config.promoGuard.creditVerifiedAt;
         return {
           enabled: config.enabled,
@@ -563,6 +587,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
               verifiedAt && now - new Date(verifiedAt).getTime() < 86_400_000,
             ),
           },
+          usage: summarizeGcpUsage(usageDocument, config, nowDate),
         };
       }
 
@@ -942,7 +967,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             if (profile.providerType === "google-cloud") {
               await finishGcpBudget(
                 db,
-                auth.principal,
                 attemptId,
                 reservedUsd,
                 "committed",
@@ -952,7 +976,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             if (profile.providerType === "google-cloud") {
               await finishGcpBudget(
                 db,
-                auth.principal,
                 attemptId,
                 reservedUsd,
                 "unknown",
@@ -1303,7 +1326,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           if (profile.providerType === "google-cloud") {
             await finishGcpBudget(
               db,
-              asset.owner,
               attemptId,
               estimatedGrossUsd,
               "committed",
@@ -1342,7 +1364,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           if (profile.providerType === "google-cloud") {
             await finishGcpBudget(
               db,
-              asset.owner,
               attemptId,
               estimatedGrossUsd,
               // A provider error can arrive after one of several billable
@@ -1386,7 +1407,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             const result = await call(attemptId);
             await finishGcpBudget(
               db,
-              auth.principal,
               attemptId,
               amount,
               "committed",
@@ -1395,7 +1415,6 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           } catch (error) {
             await finishGcpBudget(
               db,
-              auth.principal,
               attemptId,
               amount,
               "unknown",

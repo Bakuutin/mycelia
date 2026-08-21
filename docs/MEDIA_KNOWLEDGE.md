@@ -133,6 +133,13 @@ limits of $1/month, $0.10/day, and $0.01/import. These guards reduce risk but
 cannot mathematically guarantee that a paid billing account will never charge a
 card because Google has no per-request "promo credits only" flag.
 
+The settings page shows the app-side gross list-price ledger for the current
+month and day, split into committed and still-reserved amounts. This counter is
+shared across all Mycelia principals using the same GCP project and is the
+source of the hard application stop. It deliberately does not subtract Google
+free-tier units or promotional credits. Cloud Billing remains the authoritative
+source for the actual invoice and remaining promotional balance.
+
 ## Provider boundary
 
 Google visual understanding uses the Vertex AI EU multi-region endpoint and the

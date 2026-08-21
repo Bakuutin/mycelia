@@ -98,7 +98,10 @@ export const zMediaRecognitionProfile = z.discriminatedUnion("providerType", [
     providerType: z.literal("google-cloud"),
     enabled: z.boolean().default(false),
     concurrency: z.number().int().min(1).max(4).default(1),
-    projectId: z.string().trim().min(1),
+    projectId: z.string().trim().regex(
+      /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/,
+      "Invalid Google Cloud project ID",
+    ),
     location: z.literal("eu").default("eu"),
     vertexModel: z.literal("gemini-3.5-flash-lite").default(
       "gemini-3.5-flash-lite",
@@ -106,7 +109,10 @@ export const zMediaRecognitionProfile = z.discriminatedUnion("providerType", [
     embeddingModel: z.literal("gemini-embedding-001").default(
       "gemini-embedding-001",
     ),
-    documentAiProcessorId: z.string().trim().min(1).optional(),
+    documentAiProcessorId: z.string().trim().regex(
+      /^[a-z0-9][a-z0-9-]{0,62}$/,
+      "Invalid Document AI processor ID",
+    ).optional(),
     documentAiProcessorVersion: z.literal(
       "pretrained-ocr-v2.1-2024-08-07",
     ).default("pretrained-ocr-v2.1-2024-08-07"),

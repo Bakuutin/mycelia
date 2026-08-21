@@ -57,8 +57,8 @@ your own words.
   Open Media API contract supports a self-hosted visual model.
 - Cloud Vision labels/objects and EU OCR are optional tasks. Versioned visual
   descriptions, embeddings, OCR pages, annotations, provenance, usage,
-  deduplication, and independent removal of previews, derived analysis, or the
-  source reference are stored separately. See
+  deduplication, an app-side gross-cost ledger, and independent removal of
+  previews, derived analysis, or the source reference are stored separately. See
   [MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
 
 ### AI Chat

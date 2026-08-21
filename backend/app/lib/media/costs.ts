@@ -4,6 +4,59 @@ import type {
   MediaRecognitionTask,
 } from "@myceliasdk/media.ts";
 
+export type GcpUsageSnapshot = {
+  month: string;
+  day: string;
+  grossCommittedUsd: number;
+  grossReservedUsd: number;
+  grossMonthUsd: number;
+  grossTodayUsd: number;
+  monthlyLimitUsd: number;
+  dailyLimitUsd: number;
+  monthlyRemainingUsd: number;
+  dailyRemainingUsd: number;
+};
+
+export function gcpUsageLedgerId(projectId: string, month: string): string {
+  return `${projectId}:${month}`;
+}
+
+function finiteNonNegative(value: unknown): number {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+export function summarizeGcpUsage(
+  usage: Record<string, unknown> | null,
+  config: MediaKnowledgeConfig,
+  now = new Date(),
+): GcpUsageSnapshot {
+  const month = now.toISOString().slice(0, 7);
+  const day = now.toISOString().slice(0, 10);
+  const grossCommittedUsd = finiteNonNegative(usage?.grossCommittedUsd);
+  const grossReservedUsd = finiteNonNegative(usage?.grossReservedUsd);
+  const grossMonthUsd = grossCommittedUsd + grossReservedUsd;
+  const days = usage?.days && typeof usage.days === "object"
+    ? usage.days as Record<string, { grossUsd?: unknown }>
+    : {};
+  const grossTodayUsd = finiteNonNegative(days[day]?.grossUsd);
+  const monthlyLimitUsd = config.promoGuard.monthlyGrossLimitUsd;
+  const dailyLimitUsd = config.promoGuard.dailyGrossLimitUsd;
+
+  return {
+    month,
+    day,
+    grossCommittedUsd,
+    grossReservedUsd,
+    grossMonthUsd,
+    grossTodayUsd,
+    monthlyLimitUsd,
+    dailyLimitUsd,
+    monthlyRemainingUsd: Math.max(0, monthlyLimitUsd - grossMonthUsd),
+    dailyRemainingUsd: Math.max(0, dailyLimitUsd - grossTodayUsd),
+  };
+}
+
 export function estimateMediaGrossUsd(
   kind: "image" | "pdf",
   pageCount: number,

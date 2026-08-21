@@ -194,7 +194,8 @@ Run `bash scripts/smoke-media-local.sh` to verify analyze → confirm → protec
 WebP retrieval without queueing recognition. Add `docker-compose.media-gcp.yml`
 only for the later ADC/GCP phase. Full setup and the provider-neutral
 visual-understanding/embedding contract, $1/month promo-credit guard, and
-optional OCR paths are in [docs/MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+visible committed/reserved cost ledger, plus optional OCR paths are in
+[docs/MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
 
 #### Objects browse and Timeline density rollout
 

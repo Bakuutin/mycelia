@@ -62,6 +62,31 @@ type MediaConfig = {
   };
 };
 
+type ConnectorStatus = {
+  enabled: boolean;
+  sourceConfigured: boolean;
+  adc: {
+    configured: boolean;
+    credentialPathConfigured: boolean;
+    error?: string;
+  };
+  promoGuard: MediaConfig["promoGuard"] & {
+    creditVerificationFresh: boolean;
+  };
+  usage: {
+    month: string;
+    day: string;
+    grossCommittedUsd: number;
+    grossReservedUsd: number;
+    grossMonthUsd: number;
+    grossTodayUsd: number;
+    monthlyLimitUsd: number;
+    dailyLimitUsd: number;
+    monthlyRemainingUsd: number;
+    dailyRemainingUsd: number;
+  };
+};
+
 const defaultConfig: MediaConfig = {
   enabled: false,
   profiles: [],
@@ -89,9 +114,11 @@ function normalizeConfig(value: Partial<MediaConfig> | null): MediaConfig {
     profiles: (stored.profiles ?? []).map((profile) =>
       profile.providerType === "google-cloud"
         ? {
-          vertexModel: "gemini-3.5-flash-lite" as const,
-          embeddingModel: "gemini-embedding-001" as const,
           ...profile,
+          vertexModel: profile.vertexModel ??
+            ("gemini-3.5-flash-lite" as const),
+          embeddingModel: profile.embeddingModel ??
+            ("gemini-embedding-001" as const),
         }
         : profile
     ),
@@ -105,7 +132,7 @@ function normalizeConfig(value: Partial<MediaConfig> | null): MediaConfig {
 
 export default function GoogleCloudSettingsPage() {
   const [config, setConfig] = useState<MediaConfig>(defaultConfig);
-  const [status, setStatus] = useState<any>();
+  const [status, setStatus] = useState<ConnectorStatus>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -274,6 +301,11 @@ export default function GoogleCloudSettingsPage() {
                 : "required"}
             </Badge>
           </div>
+          {!status?.adc?.configured && status?.adc?.error && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              ADC check failed: {status.adc.error}
+            </div>
+          )}
 
           <div className="flex items-center justify-between rounded-md border p-3">
             <div>
@@ -312,8 +344,11 @@ export default function GoogleCloudSettingsPage() {
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>Google project ID</Label>
+                  <Label htmlFor="google-cloud-project-id">
+                    Google project ID
+                  </Label>
                   <Input
+                    id="google-cloud-project-id"
                     value={google.projectId}
                     onChange={(event) =>
                       updateProfile({
@@ -323,8 +358,11 @@ export default function GoogleCloudSettingsPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Document AI EU processor ID (optional PDF OCR)</Label>
+                  <Label htmlFor="google-cloud-document-ai-processor-id">
+                    Document AI EU processor ID (optional PDF OCR)
+                  </Label>
                   <Input
+                    id="google-cloud-document-ai-processor-id"
                     value={google.documentAiProcessorId ?? ""}
                     onChange={(event) =>
                       updateProfile({
@@ -399,9 +437,46 @@ export default function GoogleCloudSettingsPage() {
           )}
 
           <div className="grid gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-4 md:grid-cols-3">
+            {status?.usage && (
+              <div className="grid gap-2 rounded-md bg-background/80 p-3 text-sm md:col-span-3 md:grid-cols-4">
+                <div>
+                  <div className="text-xs text-muted-foreground">
+                    Month used / stop
+                  </div>
+                  <div className="font-medium">
+                    ${status.usage.grossMonthUsd.toFixed(4)}{" "}
+                    / ${status.usage.monthlyLimitUsd.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">
+                    Today used / stop
+                  </div>
+                  <div className="font-medium">
+                    ${status.usage.grossTodayUsd.toFixed(4)}{" "}
+                    / ${status.usage.dailyLimitUsd.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Committed</div>
+                  <div className="font-medium">
+                    ${status.usage.grossCommittedUsd.toFixed(4)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Reserved</div>
+                  <div className="font-medium">
+                    ${status.usage.grossReservedUsd.toFixed(4)}
+                  </div>
+                </div>
+              </div>
+            )}
             <div>
-              <Label>Monthly gross stop, USD</Label>
+              <Label htmlFor="google-cloud-monthly-stop">
+                Monthly gross stop, USD
+              </Label>
               <Input
+                id="google-cloud-monthly-stop"
                 type="number"
                 value={config.promoGuard.monthlyGrossLimitUsd}
                 onChange={(event) =>
@@ -415,8 +490,9 @@ export default function GoogleCloudSettingsPage() {
               />
             </div>
             <div>
-              <Label>Daily stop, USD</Label>
+              <Label htmlFor="google-cloud-daily-stop">Daily stop, USD</Label>
               <Input
+                id="google-cloud-daily-stop"
                 type="number"
                 value={config.promoGuard.dailyGrossLimitUsd}
                 onChange={(event) =>
@@ -430,8 +506,11 @@ export default function GoogleCloudSettingsPage() {
               />
             </div>
             <div>
-              <Label>Per import, USD</Label>
+              <Label htmlFor="google-cloud-per-import-stop">
+                Per import, USD
+              </Label>
               <Input
+                id="google-cloud-per-import-stop"
                 type="number"
                 value={config.promoGuard.perImportGrossLimitUsd}
                 onChange={(event) =>
@@ -464,16 +543,22 @@ export default function GoogleCloudSettingsPage() {
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-2">
-                <Label>Verified project</Label>
+                <Label htmlFor="google-cloud-verified-project">
+                  Verified project
+                </Label>
                 <Input
+                  id="google-cloud-verified-project"
                   value={google?.projectId ?? ""}
                   readOnly
                   placeholder="Add the Google preset and project ID first"
                 />
               </div>
               <div className="space-y-2">
-                <Label>Remaining promotional credit, USD</Label>
+                <Label htmlFor="google-cloud-remaining-credit">
+                  Remaining promotional credit, USD
+                </Label>
                 <Input
+                  id="google-cloud-remaining-credit"
                   type="number"
                   min="0.01"
                   max="300"

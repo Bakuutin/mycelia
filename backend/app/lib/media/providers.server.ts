@@ -10,6 +10,11 @@ import {
   getGoogleAccessToken,
   sanitizeGoogleError,
 } from "@/lib/gcp/auth.server.ts";
+import {
+  googleDocumentAiProcessUrl,
+  googleVertexModelUrl,
+  googleVisionEuAnnotateUrl,
+} from "./google-contract.ts";
 
 export type NormalizedMediaPage = {
   pageNumber: number;
@@ -301,12 +306,6 @@ async function googleRequest(url: string, projectId: string, body: unknown) {
   return text ? JSON.parse(text) : {};
 }
 
-function googleVertexBase(projectId: string): string {
-  return `https://aiplatform.eu.rep.googleapis.com/v1/projects/${
-    encodeURIComponent(projectId)
-  }/locations/eu/publishers/google/models`;
-}
-
 function candidateText(response: any): string {
   return (response?.candidates?.[0]?.content?.parts ?? [])
     .map((part: any) => typeof part?.text === "string" ? part.text : "")
@@ -320,7 +319,7 @@ async function embedGoogleText(
   taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY",
 ): Promise<MediaQueryEmbedding> {
   const response = await googleRequest(
-    `${googleVertexBase(profile.projectId)}/${profile.embeddingModel}:predict`,
+    googleVertexModelUrl(profile.projectId, profile.embeddingModel, "predict"),
     profile.projectId,
     {
       instances: [{ content: text, task_type: taskType }],
@@ -370,9 +369,11 @@ async function analyzeGoogleVisual(
   };
 }> {
   const response = await googleRequest(
-    `${
-      googleVertexBase(input.profile.projectId)
-    }/${input.profile.vertexModel}:generateContent`,
+    googleVertexModelUrl(
+      input.profile.projectId,
+      input.profile.vertexModel,
+      "generateContent",
+    ),
     input.profile.projectId,
     {
       contents: [{
@@ -470,16 +471,7 @@ async function analyzeGoogle(
     if (!input.profile.documentAiProcessorId) {
       throw new Error("Document AI processor ID is required for PDF OCR");
     }
-    const url =
-      `https://eu-documentai.googleapis.com/v1/projects/${
-        encodeURIComponent(input.profile.projectId)
-      }` +
-      `/locations/eu/processors/${
-        encodeURIComponent(input.profile.documentAiProcessorId)
-      }` +
-      `/processorVersions/${
-        encodeURIComponent(input.profile.documentAiProcessorVersion)
-      }:process`;
+    const url = googleDocumentAiProcessUrl(input.profile);
     const response = await googleRequest(url, input.profile.projectId, {
       rawDocument: { content, mimeType: input.mimeType },
     });
@@ -515,11 +507,7 @@ async function analyzeGoogle(
   let pages: NormalizedMediaPage[] = [];
   const visualResult = wantsVisual ? await analyzeGoogleVisual(input) : null;
   if (wantsOcr) {
-    const euUrl =
-      `https://eu-vision.googleapis.com/v1/projects/${
-        encodeURIComponent(input.profile.projectId)
-      }` +
-      "/locations/eu/images:annotate";
+    const euUrl = googleVisionEuAnnotateUrl(input.profile.projectId);
     const ocrResponse = await googleRequest(euUrl, input.profile.projectId, {
       requests: [{
         image: { content },
