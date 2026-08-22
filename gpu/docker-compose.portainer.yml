@@ -49,6 +49,7 @@ services:
       HF_HOME: /models
       HF_TOKEN: ${HF_TOKEN:?Set HF_TOKEN in Portainer}
       DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      DIARIZATION_IDLE_TIMEOUT_SECONDS: ${DIARIZATION_IDLE_TIMEOUT_SECONDS:-120}
       COMPUTE_MODE: gpu
       PYTORCH_CUDA_VERSION: cu126
       AUDIO_BACKEND: soundfile
@@ -65,7 +66,7 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8085/ready"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -79,8 +79,24 @@ def isolated_service_state():
     previous_gate = service.inference_gate
     previous_compute_mode = service.compute_mode
     previous_device = service.device
+    previous_model_lock = service.model_lock
+    previous_model_state = service.model_state
+    previous_model_error = service.model_error
+    previous_last_activity = service.last_model_activity
+    previous_idle_timeout = service.idle_timeout_seconds
+    previous_fingerprint = service.cached_runtime_fingerprint
+    previous_batching = service.cached_batching
     service.audio_backend = FakeAudioBackend()
     service.inference_gate = InferenceGate(concurrency=1, max_queued=1)
+    service.model_lock = None
+    service.model_state = "ready"
+    service.model_error = None
+    service.last_model_activity = 100.0
+    service.idle_timeout_seconds = 120
+    service.cached_runtime_fingerprint = service._runtime_fingerprint(
+        service.audio_backend
+    )
+    service.cached_batching = service._backend_batching(service.audio_backend)
     try:
         yield
     finally:
@@ -88,6 +104,13 @@ def isolated_service_state():
         service.inference_gate = previous_gate
         service.compute_mode = previous_compute_mode
         service.device = previous_device
+        service.model_lock = previous_model_lock
+        service.model_state = previous_model_state
+        service.model_error = previous_model_error
+        service.last_model_activity = previous_last_activity
+        service.idle_timeout_seconds = previous_idle_timeout
+        service.cached_runtime_fingerprint = previous_fingerprint
+        service.cached_batching = previous_batching
 
 
 def _upload(payload: bytes = b"RIFF-test-wav") -> UploadFile:
@@ -113,6 +136,7 @@ def test_embed_decodes_upload_in_memory_and_reports_stage_timings() -> None:
         assert set(result["timings"]) == {
             "upload_read_ms",
             "queue_ms",
+            "model_load_ms",
             "decode_ms",
             "embedding_ms",
             "total_ms",
@@ -139,12 +163,92 @@ def test_diarize_reuses_in_memory_waveform_and_reports_stage_timings() -> None:
         assert set(result["timings"]) == {
             "upload_read_ms",
             "queue_ms",
+            "model_load_ms",
             "decode_ms",
             "diarization_ms",
             "segment_embedding_ms",
             "cluster_matching_ms",
             "total_ms",
         }
+
+    asyncio.run(scenario())
+
+
+def test_idle_timeout_unloads_models_but_keeps_route_ready() -> None:
+    async def scenario() -> None:
+        unloaded = await service._unload_audio_backend_if_idle(now=220.0)
+        payload = await service.health()
+
+        assert unloaded is True
+        assert service.audio_backend is None
+        assert payload["ready"] is True
+        assert payload["modelsLoaded"] is False
+        assert payload["modelState"] == "idle"
+        assert payload["idleTimeoutSeconds"] == 120
+        assert (await service.ready())["ready"] is True
+
+    asyncio.run(scenario())
+
+
+def test_request_after_idle_single_flight_reloads_models(monkeypatch) -> None:
+    async def scenario() -> None:
+        service.audio_backend = None
+        service.model_state = "idle"
+        created = []
+
+        def create_backend():
+            backend = FakeAudioBackend()
+            created.append(backend)
+            return backend
+
+        monkeypatch.setattr(service, "_create_audio_backend", create_backend)
+
+        first = await service.embed(_upload(), start=None, end=None)
+        second = await service.embed(_upload(), start=None, end=None)
+
+        assert len(created) == 1
+        assert service.audio_backend is created[0]
+        assert first["embedding"] == pytest.approx([0.6, 0.8])
+        assert second["embedding"] == pytest.approx([0.6, 0.8])
+        assert (await service.health())["modelState"] == "ready"
+
+    asyncio.run(scenario())
+
+
+def test_idle_timeout_does_not_unload_during_inference() -> None:
+    async def scenario() -> None:
+        await service.inference_gate.acquire()
+        try:
+            unloaded = await service._unload_audio_backend_if_idle(now=220.0)
+            assert unloaded is False
+            assert service.audio_backend is not None
+        finally:
+            await service.inference_gate.release()
+
+    asyncio.run(scenario())
+
+
+def test_reload_failure_marks_service_not_ready(monkeypatch) -> None:
+    async def scenario() -> None:
+        service.audio_backend = None
+        service.model_state = "idle"
+
+        def fail_load():
+            raise RuntimeError("model cache is unavailable")
+
+        monkeypatch.setattr(service, "_create_audio_backend", fail_load)
+
+        with pytest.raises(HTTPException, match="model load failed") as error:
+            await service.embed(_upload(), start=None, end=None)
+
+        assert error.value.status_code == 503
+        payload = await service.health()
+        assert payload["ready"] is False
+        assert payload["modelState"] == "error"
+        assert payload["modelsLoaded"] is False
+        assert "model cache is unavailable" in payload["modelError"]
+
+    from fastapi import HTTPException
 
     asyncio.run(scenario())
 

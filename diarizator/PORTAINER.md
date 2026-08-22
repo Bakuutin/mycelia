@@ -52,6 +52,7 @@ Set these variables:
 | `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` | `4` | Mycelia per-segment identity embedding batch |
 | `DIARIZATION_REQUEST_CONCURRENCY` | `1` | Shared `/diarize` and `/embed` model executions per process |
 | `DIARIZATION_MAX_QUEUED_REQUESTS` | `1` | Bounded wait slots; valid values are `0` or `1` |
+| `DIARIZATION_IDLE_TIMEOUT_SECONDS` | `120` | Offload models from GPU after this many idle seconds; `0` disables offload |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` | Reduce CUDA allocator fragmentation |
 
 Ports default to `8085` through `8090`. Override `DIARIZATION_PORT_1` through
@@ -145,11 +146,24 @@ inference check, then enable only the routes for the selected profile.
 The named model volume survives a normal stop, start, or stack update. Do not
 delete the stack or volume merely to release GPU memory.
 
-The current service intentionally keeps models resident for the life of each
-container; it has no idle offload timer. Stopping an unused pool process is the
-reliable way to release its CUDA context and model memory. PyTorch allocator
-cache may remain visible in `nvidia-smi` after a request even though that memory
-can be reused by the same process.
+Each process offloads its model objects after
+`DIARIZATION_IDLE_TIMEOUT_SECONDS` without an active or queued request. The
+default is 120 seconds. It runs garbage collection and releases unused PyTorch
+CUDA cache; the process and its CUDA context remain alive, so a small baseline
+can still be visible in `nvidia-smi`. Set the value to `0` to keep models
+resident indefinitely. Stop the process when every allocation, including its
+CUDA context, must be released.
+
+An idle process deliberately keeps `/ready` at HTTP 200 so Mycelia can route the
+next request to it. `/health` and `/ready` then report `modelState: idle` and
+`modelsLoaded: false`. The first accepted `/diarize` or `/embed` request loads
+the models once while other requests remain behind the bounded inference gate.
+During that cold start `modelState` is `loading`. A load failure changes it to
+`error` and `/ready` to HTTP 503.
+
+To verify offload, finish a real request, wait slightly longer than the timeout,
+and check `/health` plus `nvidia-smi`. Then submit another representative request
+and require `modelState: ready`, `modelsLoaded: true`, and a successful result.
 
 Restart an individual container only to recover that process from a transient
 failure. A restart does not load a new image and does not change pool capacity.
@@ -157,6 +171,13 @@ failure. A restart does not load a new image and does not change pool capacity.
 ## Build and update the image
 
 Use an immutable tag containing the date and source commit:
+
+The checked-in `compose.faeon.yml` is the single-process deployment for the
+current `faeon` host. It fixes the Compose project name to `sky-diarization`,
+uses the external `sky_diarization-models` cache volume, and runs the immutable
+`sky-mycelia-diarization:idle-offload-20260823` image with the 120-second default.
+Keep the existing private `HF_TOKEN` in the server deployment environment; do
+not copy it into the Compose file or source archive.
 
 ### Remote build from a source archive (recommended)
 

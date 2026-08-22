@@ -150,7 +150,10 @@ throughput/VRAM benchmark. `/health` reports the effective values under
 `batching`. `DIARIZATION_REQUEST_CONCURRENCY` defaults to `1` and is shared by
 `/diarize` and `/embed`. `DIARIZATION_MAX_QUEUED_REQUESTS` defaults to `1` and
 only accepts `0` or `1`; requests beyond that bound get a retryable HTTP 429
-instead of running the same model concurrently.
+instead of running the same model concurrently. GPU deployments default
+`DIARIZATION_IDLE_TIMEOUT_SECONDS` to `120`: after two minutes without active or
+queued work the model objects and unused CUDA cache are released. Use `0` to
+keep models resident. The CPU profile defaults this setting to `0`.
 
 To stop either deployment:
 
@@ -492,12 +495,14 @@ curl -fsS http://localhost:8085/ready
 curl -fsS http://localhost:8085/health
 ```
 
-`/health` is liveness and always reports current `ready`, `computeMode`,
-`device`, `concurrency`, `inflight`, and `queued` state. `/ready` returns HTTP
-503 until the models are loaded; it also remains 503 when `COMPUTE_MODE=gpu` was
-requested but CUDA is unavailable. In Mycelia, open **Jobs → External services &
-routing** or **Settings → Diarization**; the route must show `Running`, not only
-configured.
+`/health` is liveness and reports current `ready`, `computeMode`, `device`,
+`modelState`, `modelsLoaded`, `concurrency`, `inflight`, and `queued` state.
+`/ready` returns HTTP 503 during initial startup, after a model load failure, or
+when `COMPUTE_MODE=gpu` was requested but CUDA is unavailable. Intentional idle
+offload remains HTTP 200 with `modelState: idle` and `modelsLoaded: false`; the
+next accepted inference request reloads the models. In Mycelia, open **Jobs →
+External services & routing** or **Settings → Diarization**; the route must show
+`Running`, not only configured.
 
 ### Troubleshooting
 
@@ -537,11 +542,13 @@ docker image inspect mycelia-diarizator:cu126 \
 
 ### GET /health and GET /ready
 
-`/health` is a liveness/status response. It includes model readiness, requested
-compute mode, effective device, batching, runtime fingerprints, and the shared
-inference gate's `concurrency`, `inflight`, `queued`, and `maxQueued` values.
-`/ready` returns the same payload with HTTP 503 until models are loaded or when
-GPU mode fell back to CPU.
+`/health` is a liveness/status response. It includes model readiness and
+lifecycle (`modelState`, `modelsLoaded`, `idleTimeoutSeconds`), requested compute
+mode, effective device, batching, runtime fingerprints, and the shared inference
+gate's `concurrency`, `inflight`, `queued`, and `maxQueued` values. `/ready`
+returns the same payload with HTTP 503 until initial loading succeeds, after a
+reload failure, or when GPU mode fell back to CPU. Idle offload remains ready so
+the first cold request can wake the service.
 
 `/diarize` and `/embed` share that gate. With the defaults, one request runs and
 one waits. `DIARIZATION_MAX_QUEUED_REQUESTS=0` disables waiting; values above
