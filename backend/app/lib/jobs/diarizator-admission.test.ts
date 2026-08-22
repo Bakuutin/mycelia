@@ -26,6 +26,12 @@ Deno.test("voice enrollment yields neither to live nor historical diarization", 
     type: "diarization",
     originalId: "recording",
   }, 1)).toBe(5);
+  expect(getDiarizatorAdmissionPriority({ type: "diarization" }, 10)).toBe(10);
+  expect(getDiarizatorAdmissionPriority({
+    type: "diarization",
+    mode: "build_generation",
+  })).toBe(15);
+  expect(getDiarizatorAdmissionPriority({ type: "diarization" })).toBe(20);
 });
 
 Deno.test("only slot-capacity failures enter diarizator admission waiting", () => {

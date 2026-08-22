@@ -40,7 +40,10 @@ import {
 } from "@/lib/llm/provider-routing.ts";
 import {
   DIARIZATOR_WAITING_FOR_SLOT,
+  type DiarizatorAdmissionCandidate,
+  drainDiarizatorAdmissionCandidates,
   getDiarizatorAdmissionPriority,
+  isDiarizatorRoutedJobType,
   isDiarizatorSlotUnavailable,
 } from "./diarizator-admission.ts";
 
@@ -54,11 +57,11 @@ const LLM_ROUTED_JOB_TYPES = new Set([
   "entity_typing",
 ]);
 
-const DIARIZATION_ROUTED_JOB_TYPES = new Set([
+const DIARIZATOR_ROUTED_QUEUE_TYPES = [
   "diarization",
   "enrollment",
   "profileReenrollment",
-]);
+] as const;
 
 const RESERVED_PROVIDER_JOB_STATES = [
   "active",
@@ -73,6 +76,9 @@ export const DIARIZATOR_ROUTE_ENQUEUE_LOCK_RESOURCE =
 export const DIARIZATOR_ROUTE_ENQUEUE_LOCK_TTL_MS = 30_000;
 export const DIARIZATOR_ROUTE_ENQUEUE_LOCK_ERROR =
   "Diarizator route reservation is temporarily busy";
+export const DIARIZATOR_ADMISSION_DRAIN_LOCK_RESOURCE =
+  "mycelia:lock:diarizator-admission-drain:v1";
+export const DIARIZATOR_ADMISSION_DRAIN_LOCK_TTL_MS = 60_000;
 
 // Some workers run long, externally-backed operations (for example Whisper
 // batches). BullMQ's default 30s lock is too short for a busy Deno process or
@@ -120,7 +126,7 @@ export function getQueueEvents(type: string): QueueEvents {
 
 async function getDiarizatorProviderLoad(): Promise<Record<string, number>> {
   const reservedByQueue = await Promise.all(
-    [...DIARIZATION_ROUTED_JOB_TYPES].map((type) =>
+    DIARIZATOR_ROUTED_QUEUE_TYPES.map((type) =>
       getQueue(type).getJobs(
         [...RESERVED_PROVIDER_JOB_STATES],
         0,
@@ -470,7 +476,7 @@ export async function requeuePersistedJob(input: {
   }
 
   const queue = getQueue(input.jobType);
-  if (!DIARIZATION_ROUTED_JOB_TYPES.has(input.jobType)) {
+  if (!isDiarizatorRoutedJobType(input.jobType)) {
     return await addQueueJobWithReconciliation({
       queue,
       jobId: input.jobId,
@@ -524,8 +530,6 @@ export async function requeuePersistedJob(input: {
             $set: {
               data: routedData,
               routingContext: snapshot.routingContext,
-              "queueAdmission.state": "admitted",
-              "queueAdmission.admittedAt": new Date(),
               updatedAt: new Date(),
             },
           },
@@ -589,6 +593,7 @@ async function persistDeferredDiarizatorJob(input: {
       updatedAt: createdAt,
     },
   });
+  requestDiarizatorAdmissionDrain("deferred.created");
   // Callers only require the stable id/data reference. The common admission
   // reconciler will create the real BullMQ record when a route slot is free.
   return {
@@ -596,6 +601,246 @@ async function persistDeferredDiarizatorJob(input: {
     data: input.parsedData,
     opts: { priority: input.priority },
   } as Job<JobData>;
+}
+
+type AdmissionDrainSignal = AbortSignal & { error?: unknown };
+
+/** Keep every backend process on the same single admission pass. */
+export async function withDiarizatorAdmissionDrainLock<T>(
+  work: (signal: AdmissionDrainSignal) => Promise<T>,
+  lockResource = DIARIZATOR_ADMISSION_DRAIN_LOCK_RESOURCE,
+): Promise<T> {
+  let completed = false;
+  let value: T | undefined;
+  try {
+    return await redlock.using(
+      [lockResource],
+      DIARIZATOR_ADMISSION_DRAIN_LOCK_TTL_MS,
+      async (signal) => {
+        value = await work(signal);
+        completed = true;
+        return value;
+      },
+    );
+  } catch (error) {
+    // A release failure cannot invalidate admissions already committed under
+    // the lease. Its TTL still prevents another drain from overlapping them.
+    if (completed) return value as T;
+    if (error instanceof ExecutionError) {
+      throw new Error("Diarizator admission drain is temporarily busy", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
+async function getDiarizatorCapacitySnapshot(auth: Auth): Promise<{
+  capacity: number;
+  occupied: number;
+  free: number;
+}> {
+  const configResource = await getConfigResource(auth);
+  const [services, config, load] = await Promise.all([
+    getExternalServicesHealth(),
+    configResource({ action: "get" }),
+    getDiarizatorProviderLoad(),
+  ]);
+  const diarizator = services.find((service) => service.id === "diarizator");
+  const healthyIds = new Set(
+    diarizator?.routes?.filter((route) => route.status === "healthy")
+      .map((route) => route.providerProfileId)
+      .filter((id): id is string => Boolean(id)) ?? [],
+  );
+  const routes = applyDiarizatorHealthConstraints(
+    resolveDiarizatorRoutes(config),
+    diarizator?.routes,
+  ).filter((route) => route.enabled && healthyIds.has(route.id));
+  const capacity = routes.reduce(
+    (sum, route) => sum + Math.max(1, Number(route.concurrency) || 1),
+    0,
+  );
+  const occupied = routes.reduce(
+    (sum, route) => sum + (load[route.id] ?? 0),
+    0,
+  );
+  return { capacity, occupied, free: Math.max(0, capacity - occupied) };
+}
+
+export async function drainWaitingDiarizatorJobs(input: {
+  reason: string;
+  auth?: Auth;
+  lockResource?: string;
+}): Promise<void> {
+  await withDiarizatorAdmissionDrainLock(async (signal) => {
+    const abortError = getReservationAbortError(signal);
+    if (abortError) throw abortError;
+
+    const auth = input.auth ?? await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    const waitingJobs = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        state: "waiting",
+        "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT,
+      },
+      options: {
+        sort: { priority: 1, createdAt: 1 },
+        limit: 500,
+        projection: {
+          _id: 1,
+          type: 1,
+          data: 1,
+          priority: 1,
+          createdAt: 1,
+          queueAdmission: 1,
+        },
+      },
+    });
+    const candidates = waitingJobs.flatMap((job: Record<string, any>) => {
+      const jobId = job._id?.toString();
+      const jobType = typeof job.type === "string" ? job.type : undefined;
+      if (
+        !jobId || !jobType || !isDiarizatorRoutedJobType(jobType) ||
+        !job.data
+      ) {
+        return [];
+      }
+      const createdAt = job.createdAt instanceof Date
+        ? job.createdAt
+        : new Date(job.createdAt);
+      const rawQueuedAt = job.queueAdmission?.queuedAt;
+      const queuedAt = rawQueuedAt == null
+        ? undefined
+        : rawQueuedAt instanceof Date
+        ? rawQueuedAt
+        : new Date(rawQueuedAt);
+      return [
+        {
+          jobId,
+          jobType,
+          jobData: job.data as JobData,
+          priority: Number(
+            job.queueAdmission?.priority ?? job.priority ?? 20,
+          ),
+          createdAt,
+          queuedAt,
+        } satisfies DiarizatorAdmissionCandidate,
+      ];
+    });
+    const queueJobs = new Map<string, Job<JobData>>();
+    const metrics = await drainDiarizatorAdmissionCandidates(candidates, {
+      getQueueState: async (candidate) => {
+        const queueJob = await getQueue(candidate.jobType).getJob(
+          candidate.jobId,
+        );
+        if (!queueJob) return undefined;
+        queueJobs.set(candidate.jobId, queueJob);
+        return await queueJob.getState();
+      },
+      removeTerminalQueueJob: async (candidate, state) => {
+        const queueJob = queueJobs.get(candidate.jobId);
+        if (!queueJob) return;
+        await queueJob.remove();
+        console.warn(
+          `[DIARIZATION_ADMISSION] Removed terminal ${state} BullMQ record for waiting job ${candidate.jobId}`,
+        );
+      },
+      admit: async (candidate) => {
+        await requeuePersistedJob({
+          jobId: candidate.jobId,
+          jobType: candidate.jobType,
+          jobData: candidate.jobData,
+          priority: candidate.priority,
+        }, auth);
+      },
+      markAdmitted: async (candidate, waitMs) => {
+        await mongo({
+          action: "updateOne",
+          collection: "jobs",
+          query: {
+            _id: new ObjectId(candidate.jobId),
+            "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT,
+          },
+          update: {
+            $set: {
+              "queueAdmission.state": "admitted",
+              "queueAdmission.admittedAt": new Date(),
+              "queueAdmission.waitMs": waitMs,
+              "queueAdmission.lastDrainReason": input.reason,
+            },
+          },
+        });
+      },
+      markDeferred: async (candidate, reason) => {
+        await mongo({
+          action: "updateOne",
+          collection: "jobs",
+          query: {
+            _id: new ObjectId(candidate.jobId),
+            "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT,
+          },
+          update: {
+            $set: {
+              "queueAdmission.reason": reason.slice(0, 500),
+              "queueAdmission.lastTriedAt": new Date(),
+              "queueAdmission.lastDrainReason": input.reason,
+            },
+          },
+        });
+      },
+    });
+    const capacity = await getDiarizatorCapacitySnapshot(auth);
+    console.info(
+      "[DIARIZATION_ADMISSION]",
+      JSON.stringify({
+        event: "drain",
+        reason: input.reason,
+        waitingCandidates: candidates.length,
+        ...metrics,
+        occupiedSlots: capacity.occupied,
+        freeSlots: capacity.free,
+        totalSlots: capacity.capacity,
+      }),
+    );
+  }, input.lockResource);
+}
+
+const pendingAdmissionDrainReasons = new Set<string>();
+let admissionDrainScheduled = false;
+let admissionDrainRunning = false;
+
+function scheduleAdmissionDrain(): void {
+  if (admissionDrainScheduled || admissionDrainRunning) return;
+  admissionDrainScheduled = true;
+  queueMicrotask(() => void flushAdmissionDrain());
+}
+
+async function flushAdmissionDrain(): Promise<void> {
+  admissionDrainScheduled = false;
+  admissionDrainRunning = true;
+  const reason = [...pendingAdmissionDrainReasons].sort().join(",") ||
+    "unspecified";
+  pendingAdmissionDrainReasons.clear();
+  try {
+    await drainWaitingDiarizatorJobs({ reason });
+  } catch (error) {
+    console.warn(
+      `[DIARIZATION_ADMISSION] Drain failed (${reason}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    admissionDrainRunning = false;
+    if (pendingAdmissionDrainReasons.size > 0) scheduleAdmissionDrain();
+  }
+}
+
+/** Coalesce local event bursts; the Redis lease serializes across processes. */
+export function requestDiarizatorAdmissionDrain(reason: string): void {
+  pendingAdmissionDrainReasons.add(reason);
+  scheduleAdmissionDrain();
 }
 
 export async function enqueueJob(
@@ -898,7 +1143,7 @@ export async function enqueueJob(
   let diarizatorRoutes: ReturnType<typeof resolveDiarizatorRoutes> | undefined;
   let healthyDiarizatorIds: Set<string> | undefined;
   let requestedDiarizatorProviderId: string | undefined;
-  if (DIARIZATION_ROUTED_JOB_TYPES.has(data.type)) {
+  if (isDiarizatorRoutedJobType(data.type)) {
     const diarizator = (await getExternalServicesHealth()).find((service) =>
       service.id === "diarizator"
     );
@@ -963,7 +1208,7 @@ export async function enqueueJob(
     ...trigger,
     principal: auth.principal,
   };
-  const diarizatorPriority = DIARIZATION_ROUTED_JOB_TYPES.has(parsedData.type)
+  const diarizatorPriority = isDiarizatorRoutedJobType(parsedData.type)
     ? getDiarizatorAdmissionPriority(parsedData, options?.priority)
     : options?.priority;
 

@@ -121,6 +121,13 @@ before live diarization, generation builds, and historical backfill. Once the
 profile job finishes, deferred diarization is admitted automatically. Jobs and
 Job Details show the admission priority and waiting state.
 
+Admission is event-driven: completion, failure, cancellation, or creation of a
+deferred continuation immediately drains the shared pool in priority/FIFO
+order. The 60-second maintenance pass is only a recovery watchdog for missed
+events. Backend logs emit structured `[DIARIZATION_ADMISSION]` drain records
+with admission wait time and occupied/free slot counts; while backlog exists,
+all slots becoming idle for more than a few seconds is a fault signal.
+
 Absence of `speakerIdentity` means not evaluated. After evaluation, every
 eligible segment is `matched`, `rejected` or `uncertain`. Automatic decisions
 whose calibration is missing or stale remain stored for audit, but are shown as

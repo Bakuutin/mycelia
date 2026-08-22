@@ -3,14 +3,22 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import { jobRegistry } from "./job-registry.ts";
-import { getQueue, requeuePersistedJob } from "./queue.ts";
+import {
+  drainWaitingDiarizatorJobs,
+  getQueue,
+  requestDiarizatorAdmissionDrain,
+  requeuePersistedJob,
+} from "./queue.ts";
 import { DEFAULT_JOB_TIMEOUT_MS, getJobTimeoutMs } from "./job-timeouts.ts";
 import { getRedisConnectedForMs } from "@/lib/redis.ts";
 import { isJobRunningLocally } from "./processor.ts";
 import { canTrustMissingQueueRecords } from "./orphan-reaper.ts";
 import { releaseStaleAudioChunkClaims } from "./audio-claim-reaper.ts";
 import { releaseCompletedSummarizationClaims } from "./summarization-claim-reaper.ts";
-import { DIARIZATOR_WAITING_FOR_SLOT } from "./diarizator-admission.ts";
+import {
+  DIARIZATOR_WAITING_FOR_SLOT,
+  isDiarizatorRoutedJobType,
+} from "./diarizator-admission.ts";
 
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
@@ -56,6 +64,20 @@ export class MaintenanceManager {
     if (this.running) return;
     this.running = true;
     try {
+      // Event-driven drains normally keep the pool full. This periodic pass is
+      // only a watchdog for a missed Redis event or an interrupted backend.
+      try {
+        await drainWaitingDiarizatorJobs({
+          reason: "maintenance.watchdog",
+        });
+      } catch (error) {
+        console.warn(
+          `[MaintenanceManager] Diarizator admission watchdog failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      await this.reconcileTerminalDiarizatorAdmissionMarkers();
       // Waiting jobs have no running process to protect and are cheap to
       // recover. Do this before the potentially expensive orphan sweep so a
       // large retained active history cannot starve queue recovery.
@@ -164,6 +186,11 @@ export class MaintenanceManager {
         state: "cancelled",
         finishedOn: now.getTime(),
       });
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorAdmissionDrain(
+          `maintenance.cancelled_missing:${jobType}`,
+        );
+      }
       console.warn(
         `[SELF-HEAL] Cancelled orphaned active job ${jobId} in ${jobType}; its BullMQ record is missing.`,
       );
@@ -253,6 +280,54 @@ export class MaintenanceManager {
         state: "cancelled",
         finishedOn: Date.now(),
       });
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorAdmissionDrain(
+          `maintenance.cancelled_timeout:${jobType}`,
+        );
+      }
+    }
+  }
+
+  private async reconcileTerminalDiarizatorAdmissionMarkers() {
+    const auth = await getServerAuth();
+    const mongo = await getMongoResource(auth);
+    const staleMarkers = await mongo({
+      action: "find",
+      collection: "jobs",
+      query: {
+        state: { $in: ["completed", "failed", "cancelled"] },
+        "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT,
+      },
+      options: { projection: { _id: 1 }, limit: 500 },
+    });
+    const ids = staleMarkers.flatMap((job: Record<string, any>) => {
+      const id = job._id?.toString();
+      return id && ObjectId.isValid(id) ? [new ObjectId(id)] : [];
+    });
+    if (ids.length === 0) return;
+
+    const reconciledAt = new Date();
+    const result = await mongo({
+      action: "updateMany",
+      collection: "jobs",
+      query: {
+        _id: { $in: ids },
+        state: { $in: ["completed", "failed", "cancelled"] },
+        "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT,
+      },
+      update: {
+        $set: {
+          "queueAdmission.state": "admitted",
+          "queueAdmission.reconciledAt": reconciledAt,
+          "queueAdmission.reconciliationReason":
+            "terminal_job_cannot_wait_for_slot",
+        },
+      },
+    });
+    if ((result.modifiedCount ?? 0) > 0) {
+      console.warn(
+        `[SELF-HEAL] Reconciled ${result.modifiedCount} stale terminal diarizator admission marker(s).`,
+      );
     }
   }
 
@@ -266,10 +341,8 @@ export class MaintenanceManager {
       collection: "jobs",
       query: {
         state: "waiting",
-        $or: [
-          { createdAt: { $lte: cutoff } },
-          { "queueAdmission.state": DIARIZATOR_WAITING_FOR_SLOT },
-        ],
+        createdAt: { $lte: cutoff },
+        "queueAdmission.state": { $ne: DIARIZATOR_WAITING_FOR_SLOT },
       },
       options: { sort: { priority: 1, createdAt: 1 }, limit: 500 },
     });

@@ -2,11 +2,13 @@ import { expect } from "@std/expect";
 import { ObjectId } from "bson";
 import { withFixtures } from "@/tests/fixtures.server.ts";
 import {
+  DIARIZATOR_ADMISSION_DRAIN_LOCK_RESOURCE,
   DIARIZATOR_ROUTE_ENQUEUE_LOCK_RESOURCE,
   getQueue,
   persistAndAddJobRecord,
   reserveAndAddPersistedDiarizatorJob,
   reserveDiarizatorRouteAndCommit,
+  withDiarizatorAdmissionDrainLock,
 } from "./queue.ts";
 import "./tests/fixtures.ts";
 
@@ -26,6 +28,26 @@ const route = (
 function uniqueLockResource(): string {
   return `${DIARIZATOR_ROUTE_ENQUEUE_LOCK_RESOURCE}:${crypto.randomUUID()}`;
 }
+
+Deno.test(
+  "diarizator admission drains are serialized across concurrent triggers",
+  withFixtures(["JobQueue"], async () => {
+    const lockResource =
+      `${DIARIZATOR_ADMISSION_DRAIN_LOCK_RESOURCE}:${crypto.randomUUID()}`;
+    let running = 0;
+    let maximumRunning = 0;
+    const drain = () =>
+      withDiarizatorAdmissionDrainLock(async () => {
+        running += 1;
+        maximumRunning = Math.max(maximumRunning, running);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        running -= 1;
+      }, lockResource);
+
+    await Promise.all([drain(), drain(), drain()]);
+    expect(maximumRunning).toBe(1);
+  }),
+);
 
 Deno.test(
   "diarizator reservation serializes concurrent enqueues for one slot",

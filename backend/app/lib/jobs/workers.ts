@@ -1,6 +1,11 @@
 import type { Worker } from "bullmq";
 import { ObjectId } from "bson";
-import { createWorker, enqueueJob, getQueueEvents } from "./queue.ts";
+import {
+  createWorker,
+  enqueueJob,
+  getQueueEvents,
+  requestDiarizatorAdmissionDrain,
+} from "./queue.ts";
 import { cancelRunningJob, processJob } from "./processor.ts";
 import { discoverJobWorkers, jobRegistry } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
@@ -23,6 +28,7 @@ import {
   invalidateExternalServicesHealthCache,
 } from "./service-health.ts";
 import { isCancelledJobRecord } from "./job-state.ts";
+import { isDiarizatorRoutedJobType } from "./diarizator-admission.ts";
 import { releaseTranscriptionSequenceClaimsForJob } from "./transcription-claim-reaper.ts";
 import {
   reconcileActiveTimelineCampaigns,
@@ -128,6 +134,9 @@ export async function startWorkers() {
 
     events.on("completed", async ({ jobId, returnvalue }) => {
       console.log(`[${jobType}] Job ${jobId} completed globally`);
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorAdmissionDrain(`queue.completed:${jobType}`);
+      }
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
       const finishedAt = new Date();
@@ -154,6 +163,9 @@ export async function startWorkers() {
 
     events.on("failed", async ({ jobId, failedReason }) => {
       console.error(`[${jobType}] Job ${jobId} failed globally:`, failedReason);
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorAdmissionDrain(`queue.failed:${jobType}`);
+      }
       // A provider-shaped failure means the cached "healthy" verdict is
       // stale: drop it so the next enqueue re-probes and blocks instead of
       // starting more jobs doomed to fail the same way.
@@ -241,6 +253,14 @@ export async function startWorkers() {
         finishedOn: finishedAt.getTime(),
         failedReason: failedReason,
       });
+    });
+
+    events.on("removed", ({ jobId, prev }) => {
+      if (!isDiarizatorRoutedJobType(jobType)) return;
+      console.info(
+        `[${jobType}] Job ${jobId} was removed from queue (prev: ${prev})`,
+      );
+      requestDiarizatorAdmissionDrain(`queue.removed:${jobType}`);
     });
 
     worker.on("active", (job) => {
@@ -332,6 +352,9 @@ export async function startWorkers() {
           `[${jobType}] Not scheduling another ${job.data.type} job because the previous run made no measurable progress`,
         );
       }
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorAdmissionDrain(`continuation.checked:${jobType}`);
+      }
     });
 
     worker.on("failed", (job, err) => {
@@ -339,6 +362,9 @@ export async function startWorkers() {
         `[${jobType}] Local worker failed job ${job?.id}:`,
         err.message,
       );
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorAdmissionDrain(`worker.failed:${jobType}`);
+      }
     });
 
     worker.on("progress", async (job, progress) => {
