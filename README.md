@@ -441,6 +441,9 @@ To change it, for example to `large-v3-turbo`:
    entries use `${ASR_MODEL:-large-v3-turbo}`. They are references to one
    Portainer variable, not three independent settings, so normally you change
    only the `ASR_MODEL` value under **Environment variables**.
+   This compose is intentionally STT-only. Remote diarization is deployed from
+   `diarizator/compose.portainer.yml`, which is the canonical one-to-six process
+   pool definition.
 3. Choose **Update the stack** and confirm the redeploy. Both
    `mycelia-stt-whisper-1` and `mycelia-stt-proxy-1` must be recreated.
 4. In Portainer, inspect both containers and confirm their environment has
