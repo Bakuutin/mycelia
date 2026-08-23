@@ -239,7 +239,21 @@ uv run daemon.py --reset-errors
 
 #### Run the Complete Automatic Pipeline
 
-The recommended end-to-end command is:
+For an always-on macOS installation, install the host ingestion service once:
+
+```bash
+bash scripts/install-ingestion-service.sh
+curl -fsS http://localhost:8001/health
+```
+
+The LaunchAgent starts at login, discovers local recordings every 10 seconds,
+and ingests bounded batches on the host. The Jobs page's ingestion **Run now**
+button calls the same serialized service, so it cannot overlap the automatic
+cycle. Ingestion remains host-side because local source paths are deliberately
+not mounted into the Docker Python worker. Grant Full Disk Access to the
+background process if Apple Voice Memos reports permission errors.
+
+For a foreground session instead, use:
 
 ```bash
 cd /path/to/mycelia
@@ -250,9 +264,9 @@ It starts the Docker services and then runs local discovery/import on the host,
 where Apple Voice Memos and other local files are accessible. After each audio
 chunk is inserted, the backend automatically runs the remaining stages:
 
-The wrapper waits up to three minutes for backend readiness before starting the
-host daemon. A transient Docker Compose dependency timeout does not abort the
-pipeline if `/readiness` becomes healthy during that window.
+The foreground wrapper waits up to three minutes for backend readiness before
+starting the host daemon. Do not run it while the LaunchAgent is active, because
+both processes would discover and ingest the same source files.
 
 ```text
 daemon import -> VAD -> speech sequence creation -> remote STT -> conversations

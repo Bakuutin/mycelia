@@ -117,6 +117,9 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       PYTHON_WORKER_URL: http://python-worker:8000
+      # Source audio paths live on the macOS host and are not mounted into the
+      # container worker. Route only ingestion to the authenticated host service.
+      INGESTION_WORKER_URL: ${INGESTION_WORKER_URL:-http://host.docker.internal:8001}
       DIARIZATION_SERVER_URL: ${DIARIZATION_SERVER_URL:-http://diarizator:8085}
       # Snapshot the same request window into newly enqueued jobs so their
       # outer timeout matches the Python worker's actual sequence size.

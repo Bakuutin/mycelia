@@ -29,6 +29,7 @@ export class NetworkJobCapability<
     interval?: number;
   };
   maxConcurrency?: number;
+  allowedHosts?: string[];
   hasPendingWork?: (context: {
     mongo: (input: any) => Promise<any>;
     reason: string;
@@ -50,6 +51,7 @@ export class NetworkJobCapability<
       interval?: number;
     };
     maxConcurrency?: number;
+    allowedHosts?: string[];
     hasPendingWork?: (context: {
       mongo: (input: any) => Promise<any>;
       reason: string;
@@ -66,6 +68,7 @@ export class NetworkJobCapability<
     this.url = options.url;
     this.triggers = options.triggers;
     this.maxConcurrency = options.maxConcurrency;
+    this.allowedHosts = options.allowedHosts;
     this.hasPendingWork = options.hasPendingWork;
     this.getTriggerJobData = options.getTriggerJobData;
   }

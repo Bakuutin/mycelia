@@ -152,6 +152,7 @@ interface PipelineStats {
     total: number;
     ingested: number;
     pending: number;
+    blocked: number;
     errors: number;
     byKind: Array<{ kind: string; count: number }>;
   };
@@ -1271,11 +1272,12 @@ export default function AudioPipelinePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 lg:grid-cols-2 xl:grid-cols-5">
               {[
                 ["Total", stats?.sourceFiles?.total],
                 ["Ingested", stats?.sourceFiles?.ingested],
                 ["Pending", stats?.sourceFiles?.pending],
+                ["Blocked", stats?.sourceFiles?.blocked],
                 ["Errors", stats?.sourceFiles?.errors],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg bg-muted/40 p-3">

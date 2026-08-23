@@ -39,6 +39,18 @@ The main daemon service continuously:
 - Ingests audio files into the system
 - Backfills device information for imported recordings
 
+For normal macOS operation, install the serialized host ingestion service from
+the repository root:
+
+```bash
+bash scripts/install-ingestion-service.sh
+```
+
+It runs discovery and ingestion automatically and exposes the authenticated
+`POST /jobs/ingestion` endpoint used by Jobs -> Ingestion -> Run now. Use
+`daemon.py` directly only for a foreground session or recovery, and do not run
+both ingestion processes simultaneously.
+
 The normal daemon does **not** run voice activity detection. VAD normally runs
 as a backend job in `python-worker`; use `daemon.py --vad-only` only as a direct
 recovery or backfill path.
