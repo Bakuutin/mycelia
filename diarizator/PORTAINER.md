@@ -72,8 +72,10 @@ separate strict-affinity route. Never relabel an old endpoint as compatible from
 its configured image name alone.
 
 The published port is routing, not runtime identity. In particular, `:8085`
-was reused across the 2026-08-23 runtime cutover. Historical jobs before
-`2026-08-23T21:47:00Z` on that route belong to embedding space
+was reused across the 2026-08-23 runtime cutover. The first job with a directly
+observed current `/ready` fingerprint was created at
+`2026-08-23T21:41:53.483Z`; earlier historical jobs on that route belong to
+embedding space
 `20aea32f5e52271131f8957f0ee50d39435e2c4b6d2b9d2670e21f94147696ca`;
 jobs at or after the cutover must use the current pool fingerprint below:
 

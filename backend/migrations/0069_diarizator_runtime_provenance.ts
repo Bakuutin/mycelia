@@ -9,7 +9,7 @@ export const LEGACY_GPU_EMBEDDING_SPACE_ID =
 export const CURRENT_GPU_EMBEDDING_SPACE_ID =
   "6a1ce44db3601802f6d1d8ee0b2d7e97de1602906ce63c219816087eb7feb09f";
 export const CURRENT_8085_CUTOVER_AT = new Date(
-  "2026-08-23T21:47:00.000Z",
+  "2026-08-23T21:41:53.483Z",
 );
 
 const BACKFILL_SOURCE = "historical_backfill_0069";
