@@ -14,9 +14,9 @@ import { getOrCreatePersonByMessengerId } from "@/lib/messenger/sdk.server.ts";
 import { LLMResource } from "@/lib/llm/resource.server.ts";
 import {
   getEnabledLlmProviders,
-  resolveProviderModel,
   selectLlmProviders,
 } from "@/lib/llm/provider-routing.ts";
+import { resolveProviderModelForRequest } from "@/lib/llm/provider-model-catalog.ts";
 import { normalizeOpenAIBaseUrl } from "@/lib/llm/model-routing.ts";
 import { createChatProviderFetch } from "@/lib/llm/chat-provider-fetch.ts";
 import { ObjectId } from "bson";
@@ -577,7 +577,22 @@ export async function apiChatHandler(req: Request, res: Response) {
     );
     return;
   }
-  const resolvedChatModel = resolveProviderModel(requestedModel, chatProvider);
+  let resolvedChatModel: string | null;
+  try {
+    resolvedChatModel = await resolveProviderModelForRequest(
+      requestedModel,
+      chatProvider,
+    );
+  } catch (error) {
+    await failRun(
+      503,
+      `Could not resolve an available model from provider "${chatProvider.name}": ${
+        getErrorMessage(error)
+      }`,
+      requestedModel,
+    );
+    return;
+  }
   if (!resolvedChatModel) {
     await failRun(
       400,

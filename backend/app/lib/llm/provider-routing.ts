@@ -19,6 +19,7 @@ export type ResolvedLlmProvider = {
   // is skipped by the failover chain.
   aliases: Partial<Record<LlmModelAlias, string>>;
   defaultAlias: LlmModelAlias;
+  modelSelectionMode?: "fixed" | "automatic";
   chatModel?: string;
   enabled: boolean;
   priority: number;
@@ -47,7 +48,8 @@ export function providerAdvertisesModel(
 ): boolean {
   const requested = requestedModel.trim();
   if (isLlmModelAlias(requested)) {
-    return provider.aliases[requested] != null;
+    return provider.modelSelectionMode === "automatic" ||
+      provider.aliases[requested] != null;
   }
   return Object.values(provider.aliases).includes(requested) ||
     provider.chatModel === requested;
@@ -99,7 +101,11 @@ export function selectLlmProviders(
   return providers
     .filter((provider) =>
       provider.enabled &&
-      resolveProviderModel(requested, provider) !== null &&
+      (
+        provider.modelSelectionMode === "automatic" &&
+          isLlmModelAlias(requested) ||
+        resolveProviderModel(requested, provider) !== null
+      ) &&
       (!requireAdvertisement || providerAdvertisesModel(requested, provider))
     )
     .sort((a, b) => {

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { ModelSelector } from "@/components/ModelSelector";
 import {
+  AlertTriangle,
   CheckCircle,
   Cpu,
   ExternalLink,
@@ -24,6 +25,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Server,
   Trash2,
   XCircle,
   Zap,
@@ -42,6 +44,7 @@ type LlmProfile = {
   // routing chain skips it ("None").
   aliases: Partial<Record<ModelAlias, string>>;
   defaultAlias: ModelAlias;
+  modelSelectionMode: "fixed" | "automatic";
   chatModel?: string;
   enabled: boolean;
   priority: number;
@@ -76,6 +79,29 @@ type EnvironmentRoute = {
   message: string;
 };
 
+type ServerProbe = {
+  available: boolean;
+  success: boolean;
+  status?: number | null;
+  latencyMs?: number;
+  message: string;
+};
+
+type ModelProbe = {
+  serverAvailable: boolean;
+  modelsLoaded: boolean;
+  success: boolean;
+  status?: number | null;
+  latencyMs?: number;
+  message: string;
+  models: string[];
+};
+
+type ProviderProbeState = {
+  server?: ServerProbe;
+  models?: ModelProbe;
+};
+
 const emptyProfile = (): LlmProfile => ({
   id: `provider-${Date.now()}`,
   name: "New provider",
@@ -83,6 +109,7 @@ const emptyProfile = (): LlmProfile => ({
   apiKey: "",
   aliases: {},
   defaultAlias: "medium",
+  modelSelectionMode: "fixed",
   chatModel: "",
   enabled: true,
   priority: 50,
@@ -150,6 +177,9 @@ const InferenceSettingsPage = () => {
   >(null);
   const [routeHealth, setRouteHealth] = useState<RouteHealth[]>([]);
   const [draftModels, setDraftModels] = useState<string[]>([]);
+  const [providerProbes, setProviderProbes] = useState<
+    Record<string, ProviderProbeState>
+  >({});
   const [workerDefaults, setWorkerDefaults] = useState<
     Record<string, Record<string, unknown>>
   >({});
@@ -164,13 +194,16 @@ const InferenceSettingsPage = () => {
   >({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [checkingServer, setCheckingServer] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<
     { success: boolean; text: string } | null
   >(null);
 
-  const refreshHealth = async (): Promise<RouteHealth[]> => {
+  const refreshHealth = async (
+    showError = false,
+  ): Promise<RouteHealth[]> => {
     setRefreshing(true);
     try {
       const pipeline = await callResource("jobs", {
@@ -183,6 +216,17 @@ const InferenceSettingsPage = () => {
       const routes = llm?.routes ?? [];
       setRouteHealth(routes);
       return routes;
+    } catch (error) {
+      setRouteHealth([]);
+      if (showError) {
+        setMessage({
+          success: false,
+          text: error instanceof Error
+            ? `Could not refresh route health: ${error.message}`
+            : "Could not refresh route health",
+        });
+      }
+      return [];
     } finally {
       setRefreshing(false);
     }
@@ -244,6 +288,7 @@ const InferenceSettingsPage = () => {
             apiKey: profile.apiKey || "",
             aliases: { ...(profile.aliases || {}) },
             defaultAlias: profile.defaultAlias || "medium",
+            modelSelectionMode: profile.modelSelectionMode || "fixed",
             chatModel: profile.chatModel || "",
             enabled: profile.enabled ?? true,
             priority: profile.priority ?? 50,
@@ -260,6 +305,7 @@ const InferenceSettingsPage = () => {
               ? { small: legacyModel, medium: legacyModel, large: legacyModel }
               : {},
             defaultAlias: "medium",
+            modelSelectionMode: "fixed",
             chatModel: legacy.chatModel || legacyModel,
             enabled: true,
             priority: 50,
@@ -398,13 +444,6 @@ const InferenceSettingsPage = () => {
         profile.concurrency > 32
       ) {
         return `${profile.name}: parallel requests must be 1-32.`;
-      }
-      if (
-        profile.enabled &&
-        !MODEL_ALIASES.some((alias) => profile.aliases[alias]?.trim())
-      ) {
-        return `${profile.name}: map at least one alias to a model, ` +
-          "or disable the provider.";
       }
     }
     const enabled = nextProfiles.filter((profile) => profile.enabled);
@@ -580,12 +619,57 @@ const InferenceSettingsPage = () => {
     }
   };
 
-  const testDraft = async () => {
+  const checkDraftServer = async () => {
     if (!draft.baseUrl.trim()) {
       setMessage({ success: false, text: "Enter the provider URL first." });
       return;
     }
-    setTesting(true);
+    setCheckingServer(true);
+    setMessage(null);
+    try {
+      const result = await callResource("llm", {
+        action: "probe",
+        baseUrl: draft.baseUrl.trim(),
+        apiKey: draft.apiKey,
+      });
+      setProviderProbes((current) => ({
+        ...current,
+        [draft.id]: {
+          ...current[draft.id],
+          server: {
+            available: Boolean(result?.available),
+            success: Boolean(result?.success),
+            status: result?.status,
+            latencyMs: result?.latencyMs,
+            message: result?.message || "No response",
+          },
+        },
+      }));
+    } catch (error) {
+      setProviderProbes((current) => ({
+        ...current,
+        [draft.id]: {
+          ...current[draft.id],
+          server: {
+            available: false,
+            success: false,
+            message: error instanceof Error
+              ? error.message
+              : "Provider connection test failed",
+          },
+        },
+      }));
+    } finally {
+      setCheckingServer(false);
+    }
+  };
+
+  const loadDraftModels = async () => {
+    if (!draft.baseUrl.trim()) {
+      setMessage({ success: false, text: "Enter the provider URL first." });
+      return;
+    }
+    setLoadingModels(true);
     setMessage(null);
     try {
       const result = await callResource("llm", {
@@ -595,19 +679,40 @@ const InferenceSettingsPage = () => {
       });
       const nextModels = Array.isArray(result?.models) ? result.models : [];
       setDraftModels(nextModels);
-      setMessage({
-        success: Boolean(result?.success),
-        text: `${draft.name}: ${result?.message || "No response"}`,
-      });
+      setProviderProbes((current) => ({
+        ...current,
+        [draft.id]: {
+          ...current[draft.id],
+          models: {
+            serverAvailable: Boolean(result?.serverAvailable),
+            modelsLoaded: Boolean(result?.modelsLoaded),
+            success: Boolean(result?.success),
+            status: result?.status,
+            latencyMs: result?.latencyMs,
+            message: result?.message || "No response",
+            models: nextModels,
+          },
+        },
+      }));
     } catch (error) {
-      setMessage({
-        success: false,
-        text: error instanceof Error
-          ? error.message
-          : "Provider connection test failed",
-      });
+      setDraftModels([]);
+      setProviderProbes((current) => ({
+        ...current,
+        [draft.id]: {
+          ...current[draft.id],
+          models: {
+            serverAvailable: false,
+            modelsLoaded: false,
+            success: false,
+            message: error instanceof Error
+              ? error.message
+              : "Could not load provider models",
+            models: [],
+          },
+        },
+      }));
     } finally {
-      setTesting(false);
+      setLoadingModels(false);
     }
   };
 
@@ -622,6 +727,17 @@ const InferenceSettingsPage = () => {
   const healthById = new Map(
     routeHealth.map((route) => [route.providerProfileId, route]),
   );
+  const draftProbe = providerProbes[draft.id];
+  const preferredDefaultModel = draft.aliases[draft.defaultAlias]?.trim() || "";
+  const automaticRuntimeModel = draft.modelSelectionMode === "automatic" &&
+      draftProbe?.models?.modelsLoaded
+    ? draftProbe.models.models.includes(preferredDefaultModel)
+      ? preferredDefaultModel
+      : draftProbe.models.models[0] || ""
+    : preferredDefaultModel;
+  const automaticModelChanged = draft.modelSelectionMode === "automatic" &&
+    Boolean(preferredDefaultModel) && Boolean(automaticRuntimeModel) &&
+    automaticRuntimeModel !== preferredDefaultModel;
 
   return (
     <div className="space-y-6">
@@ -640,7 +756,7 @@ const InferenceSettingsPage = () => {
         <Button
           type="button"
           variant="outline"
-          onClick={() => void refreshHealth()}
+          onClick={() => void refreshHealth(true)}
           disabled={refreshing}
         >
           <RefreshCw
@@ -769,6 +885,7 @@ const InferenceSettingsPage = () => {
               <span className="mt-2 block text-xs text-muted-foreground">
                 P{profile.priority} · {profile.concurrency}{" "}
                 req{profile.concurrency === 1 ? "" : "s"} ·{" "}
+                {profile.modelSelectionMode === "automatic" ? "auto · " : ""}
                 {profile.defaultAlias} →{" "}
                 {profile.aliases[profile.defaultAlias] || "not mapped"}
               </span>
@@ -881,12 +998,42 @@ const InferenceSettingsPage = () => {
           </div>
         </div>
 
+        <div className="space-y-2 rounded-md border p-4">
+          <Label htmlFor="llmModelSelectionMode">Model selection policy</Label>
+          <Select
+            value={draft.modelSelectionMode}
+            onValueChange={(value) =>
+              setDraft((current) => ({
+                ...current,
+                modelSelectionMode: value as "fixed" | "automatic",
+              }))}
+          >
+            <SelectTrigger id="llmModelSelectionMode" className="max-w-xl">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="fixed">
+                Fixed — require the configured model
+              </SelectItem>
+              <SelectItem value="automatic">
+                Automatic — use a currently available model
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {draft.modelSelectionMode === "automatic"
+              ? "Alias mappings are preferences. If a preferred self-hosted model disappears, Mycelia uses the first model currently advertised by /models. Exact task and chat overrides stay fixed."
+              : "Alias mappings are strict. Requests fail or use another provider when the configured model is unavailable."}
+          </p>
+        </div>
+
         <div>
           <p className="font-medium">Alias models</p>
           <p className="text-xs text-muted-foreground">
             Tasks may request small / medium / large. Map each alias to one of
-            this provider's models, or leave it empty ("None") so this provider
-            is skipped for that alias.
+            this provider's models. In automatic mode these are preferred
+            models; in fixed mode an empty alias is skipped. Profiles can be
+            saved while offline or before any model is selected.
           </p>
           <div className="mt-3 grid gap-4 md:grid-cols-3">
             {MODEL_ALIASES.map((alias) => (
@@ -993,15 +1140,120 @@ const InferenceSettingsPage = () => {
           <Button
             type="button"
             variant="outline"
-            onClick={testDraft}
-            disabled={testing}
+            onClick={checkDraftServer}
+            disabled={checkingServer}
           >
-            {testing
+            {checkingServer
+              ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              : <Server className="mr-2 h-4 w-4" />}
+            Check server
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={loadDraftModels}
+            disabled={loadingModels}
+          >
+            {loadingModels
               ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               : <Zap className="mr-2 h-4 w-4" />}
-            Test & load models
+            Load models
           </Button>
         </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-md border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-medium">Server availability</p>
+              <Badge
+                variant={!draftProbe?.server
+                  ? "outline"
+                  : draftProbe.server.available
+                  ? "secondary"
+                  : "destructive"}
+              >
+                {!draftProbe?.server
+                  ? "Not checked"
+                  : draftProbe.server.available
+                  ? "Reachable"
+                  : "Offline"}
+              </Badge>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {draftProbe?.server?.message ||
+                "Check the host without loading its model catalogue."}
+              {typeof draftProbe?.server?.latencyMs === "number" &&
+                ` · ${draftProbe.server.latencyMs} ms`}
+            </p>
+          </div>
+          <div className="rounded-md border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-medium">Provider models</p>
+              <Badge
+                variant={!draftProbe?.models
+                  ? "outline"
+                  : draftProbe.models.modelsLoaded
+                  ? "secondary"
+                  : "destructive"}
+              >
+                {!draftProbe?.models
+                  ? "Not loaded"
+                  : draftProbe.models.modelsLoaded
+                  ? `${draftProbe.models.models.length} loaded`
+                  : "Unavailable"}
+              </Badge>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {draftProbe?.models?.message ||
+                "Load /models to see whether models are available."}
+              {typeof draftProbe?.models?.latencyMs === "number" &&
+                ` · ${draftProbe.models.latencyMs} ms`}
+            </p>
+            {draftProbe?.models?.modelsLoaded && (
+              <p className="mt-2 break-all font-mono text-xs">
+                {draftProbe.models.models.join(", ")}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {draft.modelSelectionMode === "automatic" &&
+          draftProbe?.models?.modelsLoaded && (
+          <div
+            className={`flex items-start gap-2 rounded-md border p-3 text-sm ${
+              automaticModelChanged
+                ? "border-amber-300 bg-amber-50 text-amber-800"
+                : "border-green-200 bg-green-50 text-green-700"
+            }`}
+          >
+            {automaticModelChanged
+              ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              : <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" />}
+            <div>
+              <p>
+                Runtime model:{" "}
+                <span className="font-mono">
+                  {automaticRuntimeModel || "none"}
+                </span>
+              </p>
+              {automaticModelChanged && (
+                <p className="mt-1 text-xs">
+                  Preferred {draft.defaultAlias} model{" "}
+                  <span className="font-mono">{preferredDefaultModel}</span>
+                  {" "}
+                  is no longer advertised. Automatic mode will use the available
+                  model shown above without changing the saved preference.
+                </p>
+              )}
+              {!preferredDefaultModel && (
+                <p className="mt-1 text-xs">
+                  No preferred model is saved; automatic mode uses the first
+                  advertised model.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card className="space-y-5 p-5">

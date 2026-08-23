@@ -104,7 +104,8 @@ your own words.
 ### Integrations
 
 - Messenger platform import (Telegram, Signal).
-- LLM provider configuration with model aliases (small / medium / large).
+- LLM provider configuration with model aliases (small / medium / large),
+  independent host/catalog checks, and fixed or automatic live-model selection.
 - OpenAI-compatible API endpoints (`/v1/audio/transcriptions`,
   `/llm/chat/completions`).
 - MongoDB full-text search alongside GridFS-backed storage.

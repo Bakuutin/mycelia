@@ -30,6 +30,10 @@ export const zLlmProviderProfile = z.object({
   apiKey: z.string(),
   aliases: zModelAliasMap,
   defaultAlias: z.enum(["small", "medium", "large"]).default("medium"),
+  // Fixed mode requires a configured alias model to remain available.
+  // Automatic mode treats alias mappings as preferences and selects a live
+  // /models entry when the preferred self-hosted model has changed.
+  modelSelectionMode: z.enum(["fixed", "automatic"]).default("fixed"),
   chatModel: z.string().min(1).optional(),
   enabled: z.boolean().default(true),
   // Lower values are preferred. Providers are tried in priority order and

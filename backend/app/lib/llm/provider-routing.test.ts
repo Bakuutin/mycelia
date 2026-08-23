@@ -164,6 +164,19 @@ Deno.test("Exact models route only to providers that advertise them", () => {
   ]);
 });
 
+Deno.test("Automatic providers can serve aliases without a saved mapping", () => {
+  const automatic: ResolvedLlmProvider = {
+    ...providers[1],
+    id: "selfhost-auto",
+    aliases: {},
+    modelSelectionMode: "automatic",
+  };
+
+  expect(selectLlmProviders([automatic], "medium")).toEqual([automatic]);
+  expect(providerAdvertisesModel("medium", automatic)).toBe(true);
+  expect(selectLlmProviders([automatic], "exact-model")).toEqual([]);
+});
+
 Deno.test("LLM job snapshots include an environment-only route", () => {
   const environment: ResolvedLlmProvider = {
     ...providers[0],

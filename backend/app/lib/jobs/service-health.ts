@@ -114,6 +114,7 @@ async function probeProvider(input: {
   providerProfileId?: string;
   providerProfileName?: string;
   model?: string;
+  allowModelSubstitution?: boolean;
 }): Promise<ExternalServiceHealth> {
   const usedBy = Object.entries(JOB_SERVICE_DEPENDENCIES)
     .filter(([, dependencies]) => dependencies.includes(input.id))
@@ -180,6 +181,7 @@ async function probeProvider(input: {
       ? normalizeProviderModelId(input.model)
       : undefined;
     const exactModelMissing = input.id === "llm" && response.ok &&
+      !input.allowModelSubstitution &&
       configuredModel &&
       !["small", "medium", "large"].includes(configuredModel) &&
       models.length > 0 && !models.includes(configuredModel);
@@ -353,6 +355,7 @@ export async function getExternalServicesHealth(
       enabled: provider.enabled,
       baseUrl: provider.baseUrl,
       model: provider.aliases[provider.defaultAlias],
+      modelSelectionMode: provider.modelSelectionMode,
       priority: provider.priority,
     })),
   });
@@ -486,6 +489,7 @@ export async function getExternalServicesHealth(
         providerProfileId: provider.id,
         providerProfileName: provider.name,
         model: provider.aliases[provider.defaultAlias],
+        allowModelSubstitution: provider.modelSelectionMode === "automatic",
       });
     }),
   );
@@ -537,7 +541,10 @@ export async function getExternalServicesHealth(
           enabled: provider.enabled,
           model: route?.models?.find((model) =>
             model === provider.aliases[provider.defaultAlias]
-          ) ?? provider.aliases[provider.defaultAlias] ?? route?.models?.[0],
+          ) ?? (provider.modelSelectionMode === "automatic"
+            ? route?.models?.[0]
+            : provider.aliases[provider.defaultAlias]) ??
+            route?.models?.[0],
           priority: provider.priority,
           concurrency: provider.concurrency,
           latencyMs: route?.latencyMs,

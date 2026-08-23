@@ -65,6 +65,15 @@ Deno.test("LLM provider presets preserve an optional chat default", () => {
     }).chatModel,
   ).toBe("chat-model");
   expect(zLlmProviderProfile.parse(baseProfile).chatModel).toBeUndefined();
+  expect(zLlmProviderProfile.parse(baseProfile).modelSelectionMode).toBe(
+    "fixed",
+  );
+  expect(
+    zLlmProviderProfile.parse({
+      ...baseProfile,
+      modelSelectionMode: "automatic",
+    }).modelSelectionMode,
+  ).toBe("automatic");
 });
 
 Deno.test("LLM environment exposes a separate default for new chats", async () => {
@@ -87,6 +96,56 @@ Deno.test("LLM environment exposes a separate default for new chats", async () =
   } finally {
     restoreEnv(previousEnv);
   }
+});
+
+Deno.test({
+  name:
+    "LLM provider model probe distinguishes server access from loaded models",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = () =>
+      Promise.resolve(new Response(JSON.stringify({ data: [] })));
+
+    try {
+      const result = await new LLMResource(noStoredConfig).use({
+        action: "models",
+        baseUrl: "http://selfhost.example:8080/v1",
+      }, {} as never) as Record<string, unknown>;
+
+      expect(result.serverAvailable).toBe(true);
+      expect(result.modelsLoaded).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.models).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  },
+});
+
+Deno.test({
+  name: "LLM server probe reports a responding host independently of models",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = () =>
+      Promise.resolve(new Response("not found", { status: 404 }));
+
+    try {
+      const result = await new LLMResource(noStoredConfig).use({
+        action: "probe",
+        baseUrl: "http://selfhost.example:8080/v1",
+      }, {} as never) as Record<string, unknown>;
+
+      expect(result.available).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(404);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  },
 });
 
 Deno.test({
@@ -212,6 +271,54 @@ Deno.test({
     } finally {
       globalThis.fetch = originalFetch;
       restoreEnv(previousEnv);
+    }
+  },
+});
+
+Deno.test({
+  name: "Automatic alias completion uses the provider's current model",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body?: Record<string, unknown> }> = [];
+    globalThis.fetch = async (input: string | URL | Request, init) => {
+      const url = String(input);
+      const body = typeof init?.body === "string"
+        ? JSON.parse(init.body) as Record<string, unknown>
+        : undefined;
+      requests.push({ url, body });
+      if (url.endsWith("/models")) {
+        return new Response(JSON.stringify({
+          data: [{ id: "current-selfhost-model" }],
+        }));
+      }
+      return new Response(JSON.stringify(COMPLETION));
+    };
+
+    try {
+      const result = await makeResourceWithProfiles([{
+        ...PROFILE_A,
+        id: "selfhost-auto-completion",
+        aliases: { medium: "old-selfhost-model" },
+        defaultAlias: "medium",
+        modelSelectionMode: "automatic",
+      }]).use({
+        action: "completions",
+        model: "medium",
+        messages: [{ role: "user", content: "hello" }],
+      }, {} as never) as Record<string, any>;
+
+      expect(requests.map((request) => request.url)).toEqual([
+        "https://primary.example/v1/models",
+        "https://primary.example/v1/chat/completions",
+      ]);
+      expect(requests[1].body?.model).toBe("current-selfhost-model");
+      expect(result.mycelia_routing.resolvedModel).toBe(
+        "current-selfhost-model",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   },
 });
