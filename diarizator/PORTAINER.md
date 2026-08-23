@@ -3,6 +3,10 @@
 This runbook manages the `gpu-diarization` Docker Compose stack on the remote
 NVIDIA host. The canonical stack file is `compose.portainer.yml`.
 
+This is the only Portainer compose in the repository that should deploy
+diarization. `gpu/docker-compose.portainer.yml` is reserved for the separate
+STT stack (`whisper` plus its authenticated proxy).
+
 The stack exposes independent private endpoints because Mycelia reserves one
 slot per process. All processes share the downloaded-model volume, while each
 process loads a separate model copy into GPU memory.
@@ -66,6 +70,32 @@ three after every image or model change; a healthy response alone is not proof
 of compatibility. Keep any legacy endpoint with a different fingerprint as a
 separate strict-affinity route. Never relabel an old endpoint as compatible from
 its configured image name alone.
+
+The published port is routing, not runtime identity. In particular, `:8085`
+was reused across the 2026-08-23 runtime cutover. Historical jobs before
+`2026-08-23T21:47:00Z` on that route belong to embedding space
+`20aea32f5e52271131f8957f0ee50d39435e2c4b6d2b9d2670e21f94147696ca`;
+jobs at or after the cutover must use the current pool fingerprint below:
+
+The old and current services used the same Community-1 model revision, but the
+observed old runtime reported Pyannote `4.0.7`, while the current pool reports
+`4.0.1`; lock/config fingerprints also changed. Therefore the two space IDs are
+not interchangeable even though the configured model name is the same.
+
+| Field | Current compatible-pool value |
+| --- | --- |
+| `modelId` | `pyannote/speaker-diarization-community-1` |
+| `modelVersion` | `3533c8cf8e369892e6b79ff1bf80f7b0286a54ee` |
+| `embeddingFingerprint.model` | `pyannote/wespeaker-voxceleb-resnet34-LM` |
+| `embeddingFingerprint.resolvedRevision` | `837717ddb9ff5507820346191109dc79c958d614` |
+| `embeddingFingerprint.dimension` | `256` |
+| `embeddingSpaceId` | `6a1ce44db3601802f6d1d8ee0b2d7e97de1602906ce63c219816087eb7feb09f` |
+
+Mycelia persists the runtime identity returned by `/ready` and the inference
+response on routed jobs, diarization results, and speaker profiles. A historical
+`legacy-unknown` record may be attributed to a known model family when code and
+logs support that inference, but it must not receive an invented exact model
+revision or be treated as compatible with either exact space.
 
 The `8/8/4` defaults are the safe starting point for six simultaneous
 processes on a 24 GiB RTX 4090 that also hosts other GPU services. A segment
