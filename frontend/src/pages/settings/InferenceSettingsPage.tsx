@@ -165,6 +165,73 @@ const isModelAlias = (model: string) =>
 const profileAdvertisesModel = (profile: LlmProfile, model: string) =>
   Object.values(profile.aliases).includes(model) || profile.chatModel === model;
 
+type StatusTone = "neutral" | "success" | "warning" | "error";
+
+const STATUS_TONE_CLASSES: Record<
+  StatusTone,
+  { surface: string; badge: string; dot: string }
+> = {
+  neutral: {
+    surface:
+      "border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-900/30",
+    badge:
+      "border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200",
+    dot: "bg-slate-400",
+  },
+  success: {
+    surface:
+      "border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-950/30",
+    badge:
+      "border-green-400 bg-green-100 text-green-700 dark:border-green-700 dark:bg-green-950 dark:text-green-300",
+    dot: "bg-green-500",
+  },
+  warning: {
+    surface:
+      "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30",
+    badge:
+      "border-amber-400 bg-amber-100 text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300",
+    dot: "bg-amber-500",
+  },
+  error: {
+    surface: "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30",
+    badge:
+      "border-red-400 bg-red-100 text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300",
+    dot: "bg-red-500",
+  },
+};
+
+const routeHealthTone = (status: RouteHealth["status"]): StatusTone => {
+  if (status === "healthy") return "success";
+  if (status === "loading") return "warning";
+  if (status === "unavailable" || status === "misconfigured") return "error";
+  return "neutral";
+};
+
+const StatusBadge = ({
+  tone,
+  label,
+  pulse = false,
+}: {
+  tone: StatusTone;
+  label: string;
+  pulse?: boolean;
+}) => (
+  <Badge
+    variant="outline"
+    className={`gap-1.5 whitespace-nowrap transition-colors ${
+      STATUS_TONE_CLASSES[tone].badge
+    }`}
+  >
+    <span
+      aria-hidden="true"
+      className={`h-2 w-2 rounded-full ${STATUS_TONE_CLASSES[tone].dot} ${
+        pulse ? "animate-pulse" : ""
+      }`}
+    />
+    {label}
+  </Badge>
+);
+
 const InferenceSettingsPage = () => {
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -738,6 +805,42 @@ const InferenceSettingsPage = () => {
   const automaticModelChanged = draft.modelSelectionMode === "automatic" &&
     Boolean(preferredDefaultModel) && Boolean(automaticRuntimeModel) &&
     automaticRuntimeModel !== preferredDefaultModel;
+  const serverStatusTone: StatusTone = checkingServer
+    ? "warning"
+    : !draftProbe?.server
+    ? "neutral"
+    : draftProbe.server.success
+    ? "success"
+    : draftProbe.server.available
+    ? "warning"
+    : "error";
+  const serverStatusLabel = checkingServer
+    ? "Checking…"
+    : !draftProbe?.server
+    ? "Not checked"
+    : draftProbe.server.success
+    ? "Online"
+    : draftProbe.server.available
+    ? "Reachable with errors"
+    : "Offline";
+  const modelStatusTone: StatusTone = loadingModels
+    ? "warning"
+    : !draftProbe?.models
+    ? "neutral"
+    : draftProbe.models.modelsLoaded
+    ? "success"
+    : draftProbe.models.serverAvailable
+    ? "warning"
+    : "error";
+  const modelStatusLabel = loadingModels
+    ? "Loading…"
+    : !draftProbe?.models
+    ? "Not loaded"
+    : draftProbe.models.modelsLoaded
+    ? `${draftProbe.models.models.length} loaded`
+    : draftProbe.models.serverAvailable
+    ? "No models loaded"
+    : "Unavailable";
 
   return (
     <div className="space-y-6">
@@ -812,9 +915,10 @@ const InferenceSettingsPage = () => {
             />
           </div>
           {healthById.get("environment") && (
-            <Badge variant="secondary">
-              {healthById.get("environment")!.status}
-            </Badge>
+            <StatusBadge
+              tone={routeHealthTone(healthById.get("environment")!.status)}
+              label={healthById.get("environment")!.status}
+            />
           )}
           <Badge
             variant={environmentRoute?.configured ? "outline" : "destructive"}
@@ -893,8 +997,12 @@ const InferenceSettingsPage = () => {
                 {profile.baseUrl || "URL not set"}
               </span>
               {health && (
-                <span className="mt-2 block text-xs">
-                  Health: {health.status}
+                <span className="mt-2 flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">Health</span>
+                  <StatusBadge
+                    tone={routeHealthTone(health.status)}
+                    label={health.status}
+                  />
                   {typeof health.latencyMs === "number" &&
                     ` · ${health.latencyMs} ms`}
                 </span>
@@ -1161,23 +1269,19 @@ const InferenceSettingsPage = () => {
           </Button>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-md border p-3">
+        <div className="grid gap-3 md:grid-cols-2" aria-live="polite">
+          <div
+            className={`rounded-md border p-3 transition-colors ${
+              STATUS_TONE_CLASSES[serverStatusTone].surface
+            }`}
+          >
             <div className="flex items-center justify-between gap-2">
               <p className="font-medium">Server availability</p>
-              <Badge
-                variant={!draftProbe?.server
-                  ? "outline"
-                  : draftProbe.server.available
-                  ? "secondary"
-                  : "destructive"}
-              >
-                {!draftProbe?.server
-                  ? "Not checked"
-                  : draftProbe.server.available
-                  ? "Reachable"
-                  : "Offline"}
-              </Badge>
+              <StatusBadge
+                tone={serverStatusTone}
+                label={serverStatusLabel}
+                pulse={checkingServer}
+              />
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               {draftProbe?.server?.message ||
@@ -1186,22 +1290,18 @@ const InferenceSettingsPage = () => {
                 ` · ${draftProbe.server.latencyMs} ms`}
             </p>
           </div>
-          <div className="rounded-md border p-3">
+          <div
+            className={`rounded-md border p-3 transition-colors ${
+              STATUS_TONE_CLASSES[modelStatusTone].surface
+            }`}
+          >
             <div className="flex items-center justify-between gap-2">
               <p className="font-medium">Provider models</p>
-              <Badge
-                variant={!draftProbe?.models
-                  ? "outline"
-                  : draftProbe.models.modelsLoaded
-                  ? "secondary"
-                  : "destructive"}
-              >
-                {!draftProbe?.models
-                  ? "Not loaded"
-                  : draftProbe.models.modelsLoaded
-                  ? `${draftProbe.models.models.length} loaded`
-                  : "Unavailable"}
-              </Badge>
+              <StatusBadge
+                tone={modelStatusTone}
+                label={modelStatusLabel}
+                pulse={loadingModels}
+              />
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               {draftProbe?.models?.message ||

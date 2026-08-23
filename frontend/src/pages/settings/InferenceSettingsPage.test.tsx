@@ -13,6 +13,8 @@ vi.mock("@/lib/api", () => ({
 
 const mockCallResource = vi.mocked(api.callResource);
 
+let serverProbeResponse: Record<string, unknown>;
+
 const config = {
   llmProfiles: {
     includeEnvironment: false,
@@ -41,6 +43,13 @@ const renderPage = () =>
 describe("InferenceSettingsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    serverProbeResponse = {
+      success: true,
+      available: true,
+      status: 200,
+      latencyMs: 12,
+      message: "Server is available (HTTP 200)",
+    };
     mockCallResource.mockImplementation((resource, input) => {
       if (resource === "config" && input.action === "get") {
         return Promise.resolve(config);
@@ -61,13 +70,7 @@ describe("InferenceSettingsPage", () => {
         return Promise.reject(new Error("self-host is offline"));
       }
       if (resource === "llm" && input.action === "probe") {
-        return Promise.resolve({
-          success: true,
-          available: true,
-          status: 200,
-          latencyMs: 12,
-          message: "Server is available (HTTP 200)",
-        });
+        return Promise.resolve(serverProbeResponse);
       }
       if (resource === "llm" && input.action === "models") {
         return Promise.resolve({
@@ -90,17 +93,36 @@ describe("InferenceSettingsPage", () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Check server" }));
-    expect(await screen.findByText("Reachable")).toBeInTheDocument();
+    expect(await screen.findByText("Online")).toHaveClass("text-green-700");
     expect(screen.getByText(/Server is available \(HTTP 200\)/))
       .toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Load models" }));
-    expect(await screen.findByText("1 loaded")).toBeInTheDocument();
+    expect(await screen.findByText("1 loaded")).toHaveClass("text-green-700");
     expect(screen.getAllByText("new-model")).toHaveLength(2);
     expect(screen.getByText(/Preferred medium model/)).toHaveTextContent(
       "old-model",
     );
     expect(screen.getByText(/Automatic mode will use/)).toBeInTheDocument();
+  });
+
+  it("shows an offline server as a red status", async () => {
+    serverProbeResponse = {
+      success: false,
+      available: false,
+      status: null,
+      latencyMs: 5,
+      message: "Could not reach the provider server",
+    };
+    renderPage();
+    expect(await screen.findByText("Self-hosted")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Check server" }));
+
+    expect(await screen.findByText("Offline")).toHaveClass("text-red-700");
+    expect(screen.getByText(/Could not reach the provider server/))
+      .toBeInTheDocument();
   });
 
   it("saves a new offline provider without requiring a loaded model", async () => {
