@@ -60,6 +60,13 @@ Ports default to `8085` through `8090`. Override `DIARIZATION_PORT_1` through
 device `0`; a multi-GPU host can override `DIARIZATION_GPU_1` through
 `DIARIZATION_GPU_6`.
 
+Routes intended to share Mycelia's compatible fallback pool must return the
+same `modelId`, `modelVersion`, and `embeddingSpaceId` from `/ready`. Compare all
+three after every image or model change; a healthy response alone is not proof
+of compatibility. Keep any legacy endpoint with a different fingerprint as a
+separate strict-affinity route. Never relabel an old endpoint as compatible from
+its configured image name alone.
+
 The `8/8/4` defaults are the safe starting point for six simultaneous
 processes on a 24 GiB RTX 4090 that also hosts other GPU services. A segment
 embedding batch of `16` completed through the service's per-segment fallback,

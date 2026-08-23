@@ -237,6 +237,22 @@ limited to the current sequence plus at most one leased lookahead, stopped
 batches leave no application cursor registered in the backend, and expired
 `diarization_recording_leases` can be acquired by a new worker.
 
+Archive-wide `diarization` jobs in `missing` mode use route affinity as a
+preference, not a hard constraint. A continuation keeps its previous route when
+that slot is free, otherwise admission may select another healthy route only
+when `modelId`, `modelVersion`, and `embeddingSpaceId` match exactly. Enrollment,
+profile re-enrollment, targeted diarization, and generation builds retain hard
+route affinity. Every newly routed job snapshots this runtime contract from the
+route readiness payload, and the Python worker checks the inference response
+again before it persists diarizations or profile embeddings. Legacy or unknown
+fingerprints never qualify for compatible fallback.
+On every diarizator terminal event, the backend first drains persisted work in
+priority/FIFO order and then immediately fills any remaining provider capacity
+with archive-wide missing work. This refill uses live BullMQ reservations and
+healthy route slots; Mongo waiting rows are history/admission state and must not
+suppress an otherwise free GPU. The 60-second maintenance pass remains only a
+watchdog for missed events.
+
 The Audio Pipeline page does not run exact corpus counts on a timer. A small
 `/api/audio/pipeline/live` response polls the current global campaign, the
 BullMQ-reconciled diarization queue, effective worker concurrency, and enabled

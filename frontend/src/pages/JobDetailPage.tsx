@@ -988,6 +988,46 @@ export default function JobDetailPage() {
                         {route.url}
                       </div>
                     )}
+                    {(route.modelId || route.modelVersion) && (
+                      <div className="mt-2 space-y-1 text-xs">
+                        {route.modelId && (
+                          <div>
+                            <span className="text-muted-foreground">
+                              Model:
+                            </span>{" "}
+                            <span className="font-mono">{route.modelId}</span>
+                          </div>
+                        )}
+                        {route.modelVersion && (
+                          <div className="break-all">
+                            <span className="text-muted-foreground">
+                              Version:
+                            </span>{" "}
+                            <span className="font-mono">
+                              {route.modelVersion}
+                            </span>
+                          </div>
+                        )}
+                        {route.embeddingSpaceId && (
+                          <div className="break-all">
+                            <span className="text-muted-foreground">
+                              Embedding space:
+                            </span>{" "}
+                            <span className="font-mono">
+                              {route.embeddingSpaceId}
+                            </span>
+                          </div>
+                        )}
+                        {route.runtimeProvenanceSource && (
+                          <Badge variant="outline" className="font-normal">
+                            {route.runtimeProvenanceSource ===
+                                "historical_backfill_0069"
+                              ? "historical backfill"
+                              : "verified at admission"}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )
                 : null;

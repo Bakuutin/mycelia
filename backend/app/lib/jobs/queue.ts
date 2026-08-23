@@ -29,6 +29,10 @@ import { selectTranscriptionProvider } from "@/lib/transcription/provider-routin
 import {
   applyDiarizatorHealthConstraints,
   buildDiarizatorJobSnapshot,
+  type DiarizatorRouteAffinity,
+  type DiarizatorRuntimeProvenance,
+  extractDiarizatorRuntimeProvenance,
+  isSameDiarizatorRuntime,
   resolveDiarizatorRoutes,
   selectDiarizatorRoute,
 } from "@/lib/diarization/provider-routing.ts";
@@ -39,6 +43,7 @@ import {
   selectLlmJobProvider,
 } from "@/lib/llm/provider-routing.ts";
 import {
+  allowsCompatibleDiarizatorFallback,
   DIARIZATOR_WAITING_FOR_SLOT,
   type DiarizatorAdmissionCandidate,
   drainDiarizatorAdmissionCandidates,
@@ -143,6 +148,17 @@ async function getDiarizatorProviderLoad(): Promise<Record<string, number>> {
   return load;
 }
 
+export async function getReservedDiarizatorQueueJobCount(
+  jobType: typeof DIARIZATOR_ROUTED_QUEUE_TYPES[number],
+): Promise<number> {
+  return (await getQueue(jobType).getJobs(
+    [...RESERVED_PROVIDER_JOB_STATES],
+    0,
+    -1,
+    true,
+  )).length;
+}
+
 export type DiarizatorRouteReservationDependencies = {
   getLoad?: () => Promise<Record<string, number>>;
   lockResource?: string;
@@ -169,6 +185,7 @@ export async function reserveDiarizatorRouteAndCommit<T>(input: {
   routes: ReturnType<typeof resolveDiarizatorRoutes>;
   healthyIds: Set<string>;
   requestedProviderId?: string;
+  affinity?: DiarizatorRouteAffinity;
   commit: (
     selected: ReturnType<typeof resolveDiarizatorRoutes>[number],
     load: Record<string, number>,
@@ -194,6 +211,7 @@ export async function reserveDiarizatorRouteAndCommit<T>(input: {
           input.healthyIds,
           load,
           input.requestedProviderId,
+          input.affinity,
         );
         if (!selected) {
           if (input.requestedProviderId) {
@@ -204,6 +222,11 @@ export async function reserveDiarizatorRouteAndCommit<T>(input: {
               `Diarizator provider ${
                 requested?.name ?? input.requestedProviderId
               } has no free concurrency slots`,
+            );
+          }
+          if (input.affinity?.compatibleWith) {
+            throw new Error(
+              "No compatible healthy diarizator provider concurrency slots are available",
             );
           }
           throw new Error(
@@ -413,9 +436,9 @@ export async function persistAndAddJobRecord(input: {
 }
 
 /**
- * Re-add a persisted routed job without changing its saved provider snapshot.
- * Maintenance recovery must compete for the same pool lock as new jobs; it
- * must never silently move an old job to a different diarizator.
+ * Re-add a persisted routed job under the shared pool lock. Sensitive work
+ * keeps its exact provider; archive-wide missing coverage may use an explicitly
+ * compatible runtime and persists the replacement snapshot before enqueue.
  */
 export async function reserveAndAddPersistedDiarizatorJob(input: {
   routes: ReturnType<typeof resolveDiarizatorRoutes>;
@@ -424,6 +447,10 @@ export async function reserveAndAddPersistedDiarizatorJob(input: {
   jobId: string;
   jobData: JobData;
   priority?: number;
+  compatibleFallback?: {
+    provenance: DiarizatorRuntimeProvenance;
+    persistSelectedData?: (jobData: JobData) => Promise<void>;
+  };
 }, dependencies: DiarizatorRouteReservationDependencies = {}): Promise<
   Job<JobData>
 > {
@@ -436,29 +463,65 @@ export async function reserveAndAddPersistedDiarizatorJob(input: {
   const savedRoute = input.routes.find((route) =>
     route.id === savedProviderId && route.enabled
   );
-  if (!savedRoute) {
+  if (!savedRoute && !input.compatibleFallback) {
     throw new Error(
       `Saved diarizator provider ${savedProviderId} is disabled or no longer configured`,
     );
   }
-  if (!input.healthyIds.has(savedProviderId)) {
+  if (!input.healthyIds.has(savedProviderId) && !input.compatibleFallback) {
     throw new Error(
-      `Saved diarizator provider ${savedRoute.name} is not healthy`,
+      `Saved diarizator provider ${savedRoute!.name} is not healthy`,
     );
   }
 
   return await reserveDiarizatorRouteAndCommit({
     routes: input.routes,
     healthyIds: input.healthyIds,
-    requestedProviderId: savedProviderId,
-    commit: async (_selected, _load, signal) =>
-      await addQueueJobWithReconciliation({
+    requestedProviderId: input.compatibleFallback ? undefined : savedProviderId,
+    affinity: input.compatibleFallback
+      ? {
+        preferredProviderId: savedProviderId,
+        compatibleWith: input.compatibleFallback.provenance,
+      }
+      : undefined,
+    commit: async (selected, _load, signal) => {
+      let selectedData = input.jobData;
+      const savedProvenance = extractDiarizatorRuntimeProvenance(
+        input.jobData.routingContext,
+      );
+      if (
+        input.compatibleFallback &&
+        (selected.id !== savedProviderId ||
+          !isSameDiarizatorRuntime(
+            savedProvenance,
+            selected.runtimeProvenance,
+          ))
+      ) {
+        const snapshot = buildDiarizatorJobSnapshot(
+          {
+            providerProfileId: selected.id,
+            providerProfileName: selected.name,
+            baseUrl: selected.baseUrl,
+            runtimeProvenance: selected.runtimeProvenance,
+          },
+          input.jobData.routingContext,
+          new Date().toISOString(),
+        );
+        selectedData = {
+          ...input.jobData,
+          diarizationServerUrl: snapshot.diarizationServerUrl,
+          routingContext: snapshot.routingContext,
+        };
+        await input.compatibleFallback.persistSelectedData?.(selectedData);
+      }
+      return await addQueueJobWithReconciliation({
         queue: input.queue,
         jobId: input.jobId,
-        jobData: input.jobData,
+        jobData: selectedData,
         priority: input.priority,
         reservationSignal: signal,
-      }),
+      });
+    },
   }, dependencies);
 }
 
@@ -513,6 +576,7 @@ export async function requeuePersistedJob(input: {
             providerProfileId: selected.id,
             providerProfileName: selected.name,
             baseUrl: selected.baseUrl,
+            runtimeProvenance: selected.runtimeProvenance,
           },
           input.jobData.routingContext,
           new Date().toISOString(),
@@ -545,6 +609,20 @@ export async function requeuePersistedJob(input: {
     });
   }
 
+  const savedRoute = routes.find((route) => route.id === savedProviderId);
+  const fallbackCandidate = allowsCompatibleDiarizatorFallback(
+      input.jobData,
+    )
+    ? extractDiarizatorRuntimeProvenance(input.jobData.routingContext) ??
+      savedRoute?.runtimeProvenance
+    : undefined;
+  const compatibleProvenance = isSameDiarizatorRuntime(
+      fallbackCandidate,
+      fallbackCandidate,
+    )
+    ? fallbackCandidate
+    : undefined;
+  const mongo = compatibleProvenance ? await getMongoResource(auth) : undefined;
   return await reserveAndAddPersistedDiarizatorJob({
     routes,
     healthyIds,
@@ -554,6 +632,29 @@ export async function requeuePersistedJob(input: {
     // maxSequenceChunks value into jobs whose timeout must remain 15 minutes.
     jobData: input.jobData,
     priority: input.priority,
+    ...(compatibleProvenance
+      ? {
+        compatibleFallback: {
+          provenance: compatibleProvenance,
+          persistSelectedData: async (jobData: JobData) => {
+            await mongo!({
+              action: "updateOne",
+              collection: "jobs",
+              query: { _id: new ObjectId(input.jobId), state: "waiting" },
+              update: {
+                $set: {
+                  data: jobData,
+                  routingContext: jobData.routingContext,
+                  "queueAdmission.requestedProviderId": jobData.routingContext
+                    ?.providerProfileId,
+                  updatedAt: new Date(),
+                },
+              },
+            });
+          },
+        },
+      }
+      : {}),
   });
 }
 
@@ -635,7 +736,7 @@ export async function withDiarizatorAdmissionDrainLock<T>(
   }
 }
 
-async function getDiarizatorCapacitySnapshot(auth: Auth): Promise<{
+export async function getDiarizatorCapacitySnapshot(auth: Auth): Promise<{
   capacity: number;
   occupied: number;
   free: number;
@@ -1143,6 +1244,7 @@ export async function enqueueJob(
   let diarizatorRoutes: ReturnType<typeof resolveDiarizatorRoutes> | undefined;
   let healthyDiarizatorIds: Set<string> | undefined;
   let requestedDiarizatorProviderId: string | undefined;
+  let diarizatorAffinity: DiarizatorRouteAffinity | undefined;
   if (isDiarizatorRoutedJobType(data.type)) {
     const diarizator = (await getExternalServicesHealth()).find((service) =>
       service.id === "diarizator"
@@ -1165,9 +1267,32 @@ export async function enqueueJob(
       resolveDiarizatorRoutes(config),
       diarizator?.routes,
     );
-    requestedDiarizatorProviderId = reuseDiarizatorRoute
-      ? mergedData.routingContext?.providerProfileId
-      : undefined;
+    if (reuseDiarizatorRoute) {
+      const previousProviderId = mergedData.routingContext?.providerProfileId;
+      const previousRoute = diarizatorRoutes.find((route) =>
+        route.id === previousProviderId
+      );
+      const fallbackCandidate = allowsCompatibleDiarizatorFallback(
+          mergedData,
+        )
+        ? extractDiarizatorRuntimeProvenance(mergedData.routingContext) ??
+          previousRoute?.runtimeProvenance
+        : undefined;
+      const compatibleProvenance = isSameDiarizatorRuntime(
+          fallbackCandidate,
+          fallbackCandidate,
+        )
+        ? fallbackCandidate
+        : undefined;
+      if (compatibleProvenance) {
+        diarizatorAffinity = {
+          preferredProviderId: previousProviderId,
+          compatibleWith: compatibleProvenance,
+        };
+      } else {
+        requestedDiarizatorProviderId = previousProviderId;
+      }
+    }
   }
 
   const parsedData = jobRegistry.validateJobData(mergedData);
@@ -1256,12 +1381,14 @@ export async function enqueueJob(
         routes: diarizatorRoutes,
         healthyIds: healthyDiarizatorIds,
         requestedProviderId: requestedDiarizatorProviderId,
+        affinity: diarizatorAffinity,
         commit: async (selected, load, signal) => {
           const snapshot = buildDiarizatorJobSnapshot(
             {
               providerProfileId: selected.id,
               providerProfileName: selected.name,
               baseUrl: selected.baseUrl,
+              runtimeProvenance: selected.runtimeProvenance,
             },
             parsedData.routingContext,
             new Date().toISOString(),

@@ -28,6 +28,7 @@ from diarization_worker import (  # noqa: E402
     claim_sequence,
     combine_chunks_to_wav,
     diarize_sequence,
+    extract_diarizator_runtime_provenance,
     get_diarization_recording_candidates,
     get_diarization_sequences,
     hydrate_claimed_sequence,
@@ -70,6 +71,10 @@ def _diarize_response(
         raise_for_status=lambda: None,
         json=lambda: {
             "embeddingSpaceId": "space-1",
+            "diarizationFingerprint": {
+                "model": "pyannote/community-1",
+                "resolvedRevision": "model-revision-1",
+            },
             "timings": timings or {},
             "segments": [
                 {
@@ -85,6 +90,16 @@ def _diarize_response(
 
 
 class DiarizationWorkerTest(TestCase):
+    def test_runtime_provenance_accepts_full_fingerprint(self):
+        self.assertEqual(
+            extract_diarizator_runtime_provenance(_diarize_response().json()),
+            {
+                "modelId": "pyannote/community-1",
+                "modelVersion": "model-revision-1",
+                "embeddingSpaceId": "space-1",
+            },
+        )
+
     def test_speaker_profile_resource_accepts_direct_and_legacy_arrays(self):
         profile = {
             "_id": ObjectId(),
@@ -495,6 +510,47 @@ class DiarizationWorkerTest(TestCase):
         self.assertEqual(result["status"], "error")
         record_failure.assert_not_called()
 
+    def test_runtime_mismatch_is_rejected_before_segment_persistence(self):
+        sequence = _sequence()
+        writes = []
+
+        def mongo(_resource, request):
+            if (
+                request.get("collection") == "diarizations"
+                and request["action"] == "bulkWrite"
+            ):
+                writes.append(request)
+            if request["action"] in ("find", "aggregate"):
+                return []
+            if request["action"] == "count":
+                return 0
+            return {}
+
+        with (
+            patch("diarization_worker.claim_sequence", return_value=(True, None)),
+            patch(
+                "diarization_worker.combine_chunks_to_wav",
+                return_value=(BytesIO(b"wav"), 16000),
+            ),
+            patch(
+                "diarization_worker.requests.post",
+                return_value=_diarize_response(),
+            ),
+            patch("diarization_worker.release_sequence"),
+            patch("diarization_worker.call_resource", side_effect=mongo),
+        ):
+            result = diarize_sequence(
+                sequence,
+                "worker-1",
+                mark_chunks=False,
+                expected_model_version="different-revision",
+                server_url="https://diar.example",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("model version changed", result["error"])
+        self.assertEqual(writes, [])
+
     def test_partial_sequence_reports_only_newly_committed_audio(self):
         sequence = _sequence(partial=True)
         wav_file = BytesIO(b"wav")
@@ -698,6 +754,9 @@ class DiarizationWorkerTest(TestCase):
             self.assertEqual(update["filter"]["runId"], "legacy-v0")
             self.assertTrue(update["filter"]["segmentKey"])
             self.assertTrue(update["upsert"])
+            stored = update["update"]["$setOnInsert"]
+            self.assertEqual(stored["modelId"], "pyannote/community-1")
+            self.assertEqual(stored["modelVersion"], "model-revision-1")
 
 
 if __name__ == "__main__":

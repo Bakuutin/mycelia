@@ -58,6 +58,13 @@ export function isDiarizatorRoutedJobType(type: string): boolean {
   return DIARIZATOR_ROUTED_JOB_TYPES.has(type);
 }
 
+/** Only archive-wide missing-coverage batches may move between equivalent runtimes. */
+export function allowsCompatibleDiarizatorFallback(data: JobData): boolean {
+  return data.type === "diarization" &&
+    (data.mode === undefined || data.mode === "missing") &&
+    !data.originalId;
+}
+
 /**
  * Shared ordering for every job type that uses the diarizator pool. BullMQ
  * queues are per job type, so this priority is also persisted for the common
@@ -82,7 +89,8 @@ export function isDiarizatorSlotUnavailable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes(
     "All healthy diarizator provider concurrency slots are reserved",
-  ) || message.includes("has no free concurrency slots");
+  ) || message.includes("has no free concurrency slots") ||
+    message.includes("No compatible healthy diarizator provider");
 }
 
 export function getDiarizatorCapacityBlockScope(
@@ -97,6 +105,9 @@ export function getDiarizatorCapacityBlockScope(
     return "pool";
   }
   if (message.includes("has no free concurrency slots")) return "route";
+  if (message.includes("No compatible healthy diarizator provider")) {
+    return "route";
+  }
   return undefined;
 }
 

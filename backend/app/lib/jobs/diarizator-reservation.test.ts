@@ -25,6 +25,12 @@ const route = (
   concurrency,
 });
 
+const runtime = {
+  modelId: "pyannote/community-1",
+  modelVersion: "model-revision-1",
+  embeddingSpaceId: "space-1",
+};
+
 function uniqueLockResource(): string {
   return `${DIARIZATOR_ROUTE_ENQUEUE_LOCK_RESOURCE}:${crypto.randomUUID()}`;
 }
@@ -241,6 +247,59 @@ Deno.test(
     expect(added?.jobId).toBe(jobId);
     expect(added?.data).toBe(jobData);
     expect(added?.data.maxSequenceChunks).toBeUndefined();
+  }),
+);
+
+Deno.test(
+  "historical recovery repins to a compatible free route",
+  withFixtures(["JobQueue"], async () => {
+    const jobId = new ObjectId().toString();
+    const preferred = { ...route("gpu-1", 1), runtimeProvenance: runtime };
+    const compatible = { ...route("gpu-2", 1), runtimeProvenance: runtime };
+    const incompatible = {
+      ...route("legacy", 1),
+      runtimeProvenance: { ...runtime, embeddingSpaceId: "legacy-space" },
+    };
+    let persisted: Record<string, any> | undefined;
+    let added: Record<string, any> | undefined;
+
+    await reserveAndAddPersistedDiarizatorJob({
+      routes: [preferred, compatible, incompatible],
+      healthyIds: new Set(["gpu-1", "gpu-2", "legacy"]),
+      queue: {
+        add: (_name: string, data: Record<string, any>) => {
+          added = data;
+          return Promise.resolve({ id: jobId, data });
+        },
+        getJob: () => Promise.resolve(undefined),
+      } as any,
+      jobId,
+      jobData: {
+        type: "diarization",
+        mode: "missing",
+        diarizationServerUrl: preferred.baseUrl,
+        routingContext: {
+          providerProfileId: preferred.id,
+          resolvedAt: "2026-08-23T00:00:00.000Z",
+          ...runtime,
+        },
+      },
+      compatibleFallback: {
+        provenance: runtime,
+        persistSelectedData: (data) => {
+          persisted = data;
+          return Promise.resolve();
+        },
+      },
+    }, {
+      lockResource: uniqueLockResource(),
+      getLoad: () => Promise.resolve({ "gpu-1": 1 }),
+    });
+
+    expect(added?.routingContext.providerProfileId).toBe("gpu-2");
+    expect(added?.diarizationServerUrl).toBe(compatible.baseUrl);
+    expect(added?.routingContext).toMatchObject(runtime);
+    expect(persisted).toBe(added);
   }),
 );
 

@@ -1,6 +1,17 @@
 export type DiarizatorReadinessMode = "auto" | "strict" | "legacy";
 export type DetectedDiarizatorReadinessMode = "ready" | "legacy-health";
 
+export interface DiarizatorRuntimeProvenance {
+  modelId: string;
+  modelVersion: string;
+  embeddingSpaceId: string;
+}
+
+export interface DiarizatorRouteAffinity {
+  preferredProviderId?: string;
+  compatibleWith?: DiarizatorRuntimeProvenance;
+}
+
 export interface ResolvedDiarizatorRoute {
   id: string;
   name: string;
@@ -10,6 +21,7 @@ export interface ResolvedDiarizatorRoute {
   concurrency: number;
   readinessMode?: DiarizatorReadinessMode;
   source?: string;
+  runtimeProvenance?: DiarizatorRuntimeProvenance;
 }
 
 export type DiarizatorProviderLoad = Record<string, number>;
@@ -17,12 +29,57 @@ export type DiarizatorProviderLoad = Record<string, number>;
 export interface DiarizatorRouteHealthConstraint {
   providerProfileId?: string;
   detectedReadinessMode?: DetectedDiarizatorReadinessMode;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DiarizatorJobRoute {
   providerProfileId: string;
   providerProfileName: string;
   baseUrl: string;
+  runtimeProvenance?: DiarizatorRuntimeProvenance;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+/** Normalize the compact aliases or the full /ready fingerprint payload. */
+export function extractDiarizatorRuntimeProvenance(
+  value: unknown,
+): DiarizatorRuntimeProvenance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const fingerprint = record.diarizationFingerprint;
+  const diarization = fingerprint && typeof fingerprint === "object" &&
+      !Array.isArray(fingerprint)
+    ? fingerprint as Record<string, unknown>
+    : undefined;
+  const modelId = nonEmptyString(record.modelId) ??
+    nonEmptyString(diarization?.model);
+  const modelVersion = nonEmptyString(record.modelVersion) ??
+    nonEmptyString(diarization?.resolvedRevision);
+  const embeddingSpaceId = nonEmptyString(record.embeddingSpaceId);
+  if (!modelId || !modelVersion || !embeddingSpaceId) return undefined;
+  return { modelId, modelVersion, embeddingSpaceId };
+}
+
+export function isSameDiarizatorRuntime(
+  left: DiarizatorRuntimeProvenance | undefined,
+  right: DiarizatorRuntimeProvenance | undefined,
+): boolean {
+  return Boolean(
+    left && right && left.modelVersion !== "unknown" &&
+      right.modelVersion !== "unknown" &&
+      left.embeddingSpaceId !== "legacy-unknown" &&
+      right.embeddingSpaceId !== "legacy-unknown" &&
+      left.modelId === right.modelId &&
+      left.modelVersion === right.modelVersion &&
+      left.embeddingSpaceId === right.embeddingSpaceId,
+  );
 }
 
 export function buildDiarizatorJobSnapshot(
@@ -37,6 +94,10 @@ export function buildDiarizatorJobSnapshot(
       providerProfileName: route.providerProfileName,
       sourceId: `diarization:${route.providerProfileId}`,
       resolvedAt,
+      ...(route.runtimeProvenance ?? {}),
+      ...(route.runtimeProvenance
+        ? { runtimeProvenanceSource: "route_readiness" as const }
+        : {}),
     },
   };
 }
@@ -46,17 +107,26 @@ export function selectDiarizatorRoute(
   healthyIds?: Set<string>,
   load: DiarizatorProviderLoad = {},
   requestedProviderId?: string,
+  affinity?: DiarizatorRouteAffinity,
 ): ResolvedDiarizatorRoute | undefined {
   return routes
     .filter((route) =>
       route.enabled && (!healthyIds || healthyIds.has(route.id)) &&
       (!requestedProviderId || route.id === requestedProviderId) &&
+      (!affinity?.compatibleWith ||
+        isSameDiarizatorRuntime(
+          route.runtimeProvenance,
+          affinity.compatibleWith,
+        )) &&
       (load[route.id] ?? 0) < route.concurrency
     )
     .sort((a, b) => {
+      const aPreferred = a.id === affinity?.preferredProviderId ? 0 : 1;
+      const bPreferred = b.id === affinity?.preferredProviderId ? 0 : 1;
       const aRatio = (load[a.id] ?? 0) / a.concurrency;
       const bRatio = (load[b.id] ?? 0) / b.concurrency;
-      return a.priority - b.priority || aRatio - bRatio ||
+      return aPreferred - bPreferred || a.priority - b.priority ||
+        aRatio - bRatio ||
         a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
     })[0];
 }
@@ -125,9 +195,21 @@ export function applyDiarizatorHealthConstraints(
       .map((route) => route.providerProfileId)
       .filter((id): id is string => Boolean(id)),
   );
-  return routes.map((route) =>
-    detectedLegacyIds.has(route.id) && route.concurrency !== 1
-      ? { ...route, concurrency: 1 }
-      : route
+  const healthById = new Map(
+    (healthRoutes ?? []).flatMap((route) =>
+      route.providerProfileId ? [[route.providerProfileId, route] as const] : []
+    ),
   );
+  return routes.map((route) => {
+    const runtimeProvenance = extractDiarizatorRuntimeProvenance(
+      healthById.get(route.id)?.metadata,
+    );
+    return {
+      ...route,
+      ...(detectedLegacyIds.has(route.id) && route.concurrency !== 1
+        ? { concurrency: 1 }
+        : {}),
+      ...(runtimeProvenance ? { runtimeProvenance } : {}),
+    };
+  });
 }

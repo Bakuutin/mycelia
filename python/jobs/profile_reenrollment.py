@@ -10,6 +10,7 @@ from bson import ObjectId
 from pydantic import BaseModel
 
 from jobs.enrollment import _extract_embedding, _get_audio_from_gridfs
+from lib.diarization_runtime import extract_diarizator_runtime_provenance
 from lib.resources import call_resource
 from speaker_identification.profiles import get_profile_by_id
 
@@ -17,6 +18,7 @@ from speaker_identification.profiles import get_profile_by_id
 class ProfileReenrollmentJobData(BaseModel):
     profileId: str
     diarizationServerUrl: str | None = None
+    routingContext: Dict[str, Any] | None = None
 
 
 def process_profile_reenrollment_job(
@@ -39,6 +41,7 @@ def process_profile_reenrollment_job(
     embeddings = []
     durations = []
     spaces = set()
+    runtimes: set[tuple[str, str, str]] = set()
     for index, sample in enumerate(samples):
         result = _extract_embedding(
             _get_audio_from_gridfs(str(sample["_id"])),
@@ -47,9 +50,18 @@ def process_profile_reenrollment_job(
         embeddings.append(np.asarray(result["embedding"], dtype=np.float32))
         durations.append(float(result["duration"]))
         spaces.add(result.get("embeddingSpaceId", "legacy-unknown"))
+        runtime = extract_diarizator_runtime_provenance(result)
+        if runtime:
+            runtimes.add((
+                runtime["modelId"],
+                runtime["modelVersion"],
+                runtime["embeddingSpaceId"],
+            ))
         progress_callback({"stage": "reenrollment", "processed": index + 1, "total": len(samples)})
     if len(spaces) != 1:
         raise ValueError(f"Diarizator changed embedding space during re-enrollment: {sorted(spaces)}")
+    if len(runtimes) > 1:
+        raise ValueError("Diarizator runtime changed during re-enrollment")
 
     merged = np.mean(np.stack(embeddings), axis=0)
     norm = float(np.linalg.norm(merged))
@@ -57,6 +69,23 @@ def process_profile_reenrollment_job(
         raise ValueError("Re-enrollment produced a zero embedding")
     merged /= norm
     embedding_space_id = spaces.pop()
+    runtime_provenance = None
+    if runtimes:
+        model_id, model_version, runtime_space = runtimes.pop()
+        runtime_provenance = {
+            "modelId": model_id,
+            "modelVersion": model_version,
+            "embeddingSpaceId": runtime_space,
+            "source": "inference_response",
+        }
+    expected_runtime = data.routingContext or {}
+    for key in ("modelId", "modelVersion", "embeddingSpaceId"):
+        expected = expected_runtime.get(key)
+        if expected and (runtime_provenance or {}).get(key) != expected:
+            raise ValueError(
+                f"Diarizator {key} changed after route admission: "
+                f"{(runtime_provenance or {}).get(key)} != {expected}"
+            )
     revision = int(profile.get("revision", 1)) + 1
     now = datetime.now(UTC)
     update = {
@@ -72,7 +101,13 @@ def process_profile_reenrollment_job(
             "embeddingSpaceId": embedding_space_id,
             "jobId": job_id,
             "rebuiltAt": now,
+            **(runtime_provenance or {}),
         },
+        **(
+            {"runtimeProvenance": runtime_provenance}
+            if runtime_provenance
+            else {}
+        ),
         "updated_at": now,
     }
     result = call_resource("mongo", {
@@ -83,4 +118,11 @@ def process_profile_reenrollment_job(
     })
     if (result or {}).get("matchedCount", 0) != 1:
         raise RuntimeError("Profile changed while it was being re-enrolled")
-    return {"processed": len(samples), "profileId": data.profileId, "profileRevision": revision, "embeddingSpaceId": embedding_space_id, "hasMore": False}
+    return {
+        "processed": len(samples),
+        "profileId": data.profileId,
+        "profileRevision": revision,
+        "embeddingSpaceId": embedding_space_id,
+        "runtimeProvenance": runtime_provenance,
+        "hasMore": False,
+    }

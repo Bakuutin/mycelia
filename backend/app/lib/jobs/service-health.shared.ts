@@ -44,6 +44,7 @@ export interface ExternalServiceHealth {
     concurrency?: number;
     readinessMode?: DiarizatorReadinessMode;
     detectedReadinessMode?: DetectedDiarizatorReadinessMode;
+    metadata?: Record<string, unknown>;
     latencyMs?: number;
     message: string;
   }>;

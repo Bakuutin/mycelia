@@ -3,9 +3,16 @@ import { zDiarizationProfilesConfig } from "@myceliasdk/config.ts";
 import {
   applyDiarizatorHealthConstraints,
   buildDiarizatorJobSnapshot,
+  extractDiarizatorRuntimeProvenance,
   resolveDiarizatorRoutes,
   selectDiarizatorRoute,
 } from "./provider-routing.ts";
+
+const runtime = {
+  modelId: "pyannote/community-1",
+  modelVersion: "model-revision-1",
+  embeddingSpaceId: "space-1",
+};
 
 Deno.test("selectDiarizatorRoute prefers the lowest-priority healthy route", () => {
   const selected = selectDiarizatorRoute([
@@ -109,6 +116,76 @@ Deno.test("selectDiarizatorRoute keeps a requested provider within its slots", (
   );
 });
 
+Deno.test("compatible affinity falls back from a busy preferred route", () => {
+  const selected = selectDiarizatorRoute(
+    [
+      {
+        id: "preferred",
+        name: "Preferred",
+        baseUrl: "http://preferred",
+        enabled: true,
+        priority: 1,
+        concurrency: 1,
+        runtimeProvenance: runtime,
+      },
+      {
+        id: "compatible",
+        name: "Compatible",
+        baseUrl: "http://compatible",
+        enabled: true,
+        priority: 1,
+        concurrency: 1,
+        runtimeProvenance: runtime,
+      },
+      {
+        id: "different",
+        name: "Different",
+        baseUrl: "http://different",
+        enabled: true,
+        priority: 1,
+        concurrency: 1,
+        runtimeProvenance: { ...runtime, embeddingSpaceId: "space-2" },
+      },
+    ],
+    new Set(["preferred", "compatible", "different"]),
+    { preferred: 1 },
+    undefined,
+    { preferredProviderId: "preferred", compatibleWith: runtime },
+  );
+
+  assertEquals(selected?.id, "compatible");
+});
+
+Deno.test("health metadata becomes a routable runtime contract", () => {
+  const [resolved] = applyDiarizatorHealthConstraints(
+    [{
+      id: "gpu",
+      name: "GPU",
+      baseUrl: "http://gpu",
+      enabled: true,
+      priority: 1,
+      concurrency: 1,
+    }],
+    [{
+      providerProfileId: "gpu",
+      detectedReadinessMode: "ready",
+      metadata: {
+        diarizationFingerprint: {
+          model: runtime.modelId,
+          resolvedRevision: runtime.modelVersion,
+        },
+        embeddingSpaceId: runtime.embeddingSpaceId,
+      },
+    }],
+  );
+
+  assertEquals(resolved.runtimeProvenance, runtime);
+  assertEquals(
+    extractDiarizatorRuntimeProvenance(resolved.runtimeProvenance),
+    runtime,
+  );
+});
+
 Deno.test("diarization config preserves an intentionally disabled route set", () => {
   const parsed = zDiarizationProfilesConfig.parse({
     includeEnvironment: false,
@@ -199,6 +276,7 @@ Deno.test("diarizator snapshot replaces an inherited LLM provider name", () => {
         providerProfileId: "remote-1",
         providerProfileName: "remote-diarizer",
         baseUrl: "http://diarizer.example.test:8085",
+        runtimeProvenance: runtime,
       },
       { providerProfileName: "selfhost" },
       "2026-08-10T00:00:00.000Z",
@@ -210,6 +288,8 @@ Deno.test("diarizator snapshot replaces an inherited LLM provider name", () => {
         providerProfileName: "remote-diarizer",
         sourceId: "diarization:remote-1",
         resolvedAt: "2026-08-10T00:00:00.000Z",
+        ...runtime,
+        runtimeProvenanceSource: "route_readiness",
       },
     },
   );

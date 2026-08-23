@@ -2,6 +2,7 @@ import type { Worker } from "bullmq";
 import { ObjectId } from "bson";
 import {
   createWorker,
+  drainWaitingDiarizatorJobs,
   enqueueJob,
   getQueueEvents,
   requestDiarizatorAdmissionDrain,
@@ -34,12 +35,55 @@ import {
   reconcileActiveTimelineCampaigns,
   syncTimelineCampaign,
 } from "./timeline-campaign-recovery.ts";
+import { triggerManager } from "./trigger-manager.ts";
 
 const workers = new Map<string, Worker>();
 let timelineRecoveryInterval: ReturnType<typeof setInterval> | null = null;
+const pendingDiarizatorRefillReasons = new Set<string>();
+let diarizatorRefillScheduled = false;
+let diarizatorRefillRunning = false;
 
 const PROVIDER_FAILURE_PATTERN =
   /LLM API error|Failed to call resource llm|LLM_EMPTY_RESPONSE|LLM_INVALID_RESPONSE|No healthy (LLM|STT|provider)|error sending request|Connection refused|ECONNREFUSED|fetch failed/i;
+
+function requestDiarizatorPoolRefill(reason: string): void {
+  pendingDiarizatorRefillReasons.add(reason);
+  if (diarizatorRefillScheduled || diarizatorRefillRunning) return;
+  diarizatorRefillScheduled = true;
+  queueMicrotask(() => void flushDiarizatorPoolRefill());
+}
+
+async function flushDiarizatorPoolRefill(): Promise<void> {
+  diarizatorRefillScheduled = false;
+  diarizatorRefillRunning = true;
+  const reason = [...pendingDiarizatorRefillReasons].sort().join(",") ||
+    "unspecified";
+  pendingDiarizatorRefillReasons.clear();
+  try {
+    // Preserve global admission priority first. If a sensitive pinned job
+    // cannot use the free route, synthesize ordinary historical work for the
+    // remaining provider capacity immediately instead of waiting 10 seconds.
+    await drainWaitingDiarizatorJobs({
+      reason: `slot_release:${reason}`,
+    });
+    await triggerManager.triggerNow(
+      "diarization",
+      `slot_release:${reason}`,
+    );
+  } catch (error) {
+    console.warn(
+      `[DIARIZATION_ADMISSION] Pool refill failed (${reason}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    requestDiarizatorAdmissionDrain(`slot_release.retry:${reason}`);
+  } finally {
+    diarizatorRefillRunning = false;
+    if (pendingDiarizatorRefillReasons.size > 0) {
+      requestDiarizatorPoolRefill("coalesced");
+    }
+  }
+}
 
 export async function startWorkers() {
   console.log("Starting job workers...");
@@ -134,9 +178,6 @@ export async function startWorkers() {
 
     events.on("completed", async ({ jobId, returnvalue }) => {
       console.log(`[${jobType}] Job ${jobId} completed globally`);
-      if (isDiarizatorRoutedJobType(jobType)) {
-        requestDiarizatorAdmissionDrain(`queue.completed:${jobType}`);
-      }
       const auth = await getServerAuth();
       const mongo = await getMongoResource(auth);
       const finishedAt = new Date();
@@ -163,9 +204,6 @@ export async function startWorkers() {
 
     events.on("failed", async ({ jobId, failedReason }) => {
       console.error(`[${jobType}] Job ${jobId} failed globally:`, failedReason);
-      if (isDiarizatorRoutedJobType(jobType)) {
-        requestDiarizatorAdmissionDrain(`queue.failed:${jobType}`);
-      }
       // A provider-shaped failure means the cached "healthy" verdict is
       // stale: drop it so the next enqueue re-probes and blocks instead of
       // starting more jobs doomed to fail the same way.
@@ -260,7 +298,7 @@ export async function startWorkers() {
       console.info(
         `[${jobType}] Job ${jobId} was removed from queue (prev: ${prev})`,
       );
-      requestDiarizatorAdmissionDrain(`queue.removed:${jobType}`);
+      requestDiarizatorPoolRefill(`queue.removed:${jobType}`);
     });
 
     worker.on("active", (job) => {
@@ -353,7 +391,7 @@ export async function startWorkers() {
         );
       }
       if (isDiarizatorRoutedJobType(jobType)) {
-        requestDiarizatorAdmissionDrain(`continuation.checked:${jobType}`);
+        requestDiarizatorPoolRefill(`continuation.checked:${jobType}`);
       }
     });
 
@@ -363,7 +401,7 @@ export async function startWorkers() {
         err.message,
       );
       if (isDiarizatorRoutedJobType(jobType)) {
-        requestDiarizatorAdmissionDrain(`worker.failed:${jobType}`);
+        requestDiarizatorPoolRefill(`worker.failed:${jobType}`);
       }
     });
 

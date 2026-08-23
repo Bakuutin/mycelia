@@ -38,6 +38,50 @@ from jobs.speaker_matching import (  # noqa: E402
 
 
 class EnrollmentJobTest(TestCase):
+    def test_enrollment_persists_the_actual_admitted_runtime(self):
+        runtime = {
+            "modelId": "pyannote/community-1",
+            "modelVersion": "model-revision-1",
+            "embeddingSpaceId": "space-v1",
+        }
+        with (
+            patch("jobs.enrollment._get_audio_from_gridfs", return_value=b"wav"),
+            patch(
+                "jobs.enrollment._extract_embedding",
+                return_value={
+                    "embedding": [1.0, 0.0],
+                    "duration": 10.0,
+                    **runtime,
+                },
+            ),
+            patch(
+                "jobs.enrollment.create_or_update_profile",
+                return_value={
+                    "_id": ObjectId(),
+                    "embeddingSpaceId": "space-v1",
+                },
+            ) as create,
+            patch(
+                "jobs.enrollment.call_resource",
+                return_value={"matchedCount": 1},
+            ),
+        ):
+            result = process_enrollment_job(
+                "job-runtime",
+                EnrollmentJobData(
+                    name="Sky",
+                    sample_file_id=str(ObjectId()),
+                    routingContext=runtime,
+                ),
+                lambda _progress: None,
+            )
+
+        self.assertEqual(
+            create.call_args.kwargs["runtime_provenance"],
+            runtime,
+        )
+        self.assertEqual(result["runtimeProvenance"], runtime)
+
     def test_existing_profile_is_updated_by_id_and_sample_link_is_required(self):
         profile_id = str(ObjectId())
         sample_id = str(ObjectId())

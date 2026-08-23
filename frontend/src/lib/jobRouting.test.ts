@@ -43,4 +43,30 @@ describe("getDiarizationJobRoute", () => {
       timestamp: 1,
     })).toBeNull();
   });
+
+  it("returns runtime provenance from a historical data snapshot", () => {
+    expect(getDiarizationJobRoute({
+      id: "job-runtime",
+      type: "diarization",
+      data: {
+        diarizationServerUrl: "http://100.119.163.116:8085",
+        routingContext: {
+          modelId: "pyannote/speaker-diarization-community-1",
+          modelVersion: "revision-1",
+          embeddingSpaceId: "space-old",
+          runtimeProvenanceSource: "historical_backfill_0069",
+          resolvedAt: "2026-08-23T00:00:00.000Z",
+        },
+      },
+      state: "completed",
+      progress: {},
+      timestamp: 1,
+    })).toMatchObject({
+      name: "Diarizator",
+      modelId: "pyannote/speaker-diarization-community-1",
+      modelVersion: "revision-1",
+      embeddingSpaceId: "space-old",
+      runtimeProvenanceSource: "historical_backfill_0069",
+    });
+  });
 });

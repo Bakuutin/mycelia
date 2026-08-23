@@ -23,9 +23,11 @@ The in-network URL for local jobs is `http://diarizator:8085`. Prefer the
 container-internal health command above: local IDE/SSH port forwards may also
 claim host port 8085 and make `curl localhost:8085` reach a different machine.
 
-The health response must include `diarizationFingerprint` and
-`embeddingSpaceId`. The backend Jobs health panel must show the diarizator as
-healthy before enrollment or re-diarization.
+The health response must include `modelId`, `modelVersion`,
+`diarizationFingerprint`, and `embeddingSpaceId`. Older compatible servers may
+omit the compact aliases only when `diarizationFingerprint.model` and
+`diarizationFingerprint.resolvedRevision` are present. The backend Jobs health
+panel must show the diarizator as healthy before enrollment or re-diarization.
 
 ## First migration
 
@@ -127,6 +129,22 @@ order. The 60-second maintenance pass is only a recovery watchdog for missed
 events. Backend logs emit structured `[DIARIZATION_ADMISSION]` drain records
 with admission wait time and occupied/free slot counts; while backlog exists,
 all slots becoming idle for more than a few seconds is a fault signal.
+After the priority/FIFO drain, terminal events also trigger ordinary historical
+work for any still-free compatible route using BullMQ reservations rather than
+persisted waiting counts. The periodic maintenance drain is only a watchdog.
+
+Historical `missing` continuations prefer their previous diarizator but may use
+another free route only when `modelId`, `modelVersion`, and `embeddingSpaceId`
+match exactly. Enrollment, profile re-enrollment, targeted work, and generation
+builds keep strict route affinity. Job routing snapshots and new diarization
+segments store the runtime contract; enrollment and re-enrollment also store it
+on the speaker profile. The worker compares the actual inference response with
+the admitted contract before saving. Migration
+`0069_diarizator_runtime_provenance` records the verified historical model
+revision on existing segments, runs, profiles, and diarizator jobs. Existing job
+routes on `8085` keep the legacy embedding space, while `8086`–`8090` and `8185`
+use the current compatible space; local URLs whose exact embedding runtime is
+not provable receive the model revision without a fabricated embedding space.
 
 Absence of `speakerIdentity` means not evaluated. After evaluation, every
 eligible segment is `matched`, `rejected` or `uncertain`. Automatic decisions

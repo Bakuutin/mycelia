@@ -25,6 +25,10 @@ export type JobInfo = {
     providerProfileId?: string;
     providerProfileName?: string;
     model?: string;
+    modelId?: string;
+    modelVersion?: string;
+    embeddingSpaceId?: string;
+    runtimeProvenanceSource?: string;
     resolvedAt: string;
   };
   updatedOn?: number;

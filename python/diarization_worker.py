@@ -13,7 +13,10 @@ from dataclasses import dataclass, field
 from tqdm import tqdm
 from lib.resources import call_resource
 from lib.worker import setup_worker_logging, get_worker_id, mongo_cursor, claim_chunks, release_chunks
-from lib.diarization_runtime import StageTimings
+from lib.diarization_runtime import (
+    StageTimings,
+    extract_diarizator_runtime_provenance,
+)
 
 logger = setup_worker_logging('diarization_worker')
 
@@ -906,6 +909,8 @@ def diarize_sequence(
     lifecycle_status: str = "active",
     mark_chunks: bool = True,
     expected_embedding_space_id: Optional[str] = None,
+    expected_model_id: Optional[str] = None,
+    expected_model_version: Optional[str] = None,
     server_url: Optional[str] = None,
     prepared: Optional[PreparedDiarizationSequence] = None,
     provider_session: Optional[requests.Session] = None,
@@ -1066,9 +1071,26 @@ def diarize_sequence(
                 )
         segments = data.get('segments', [])
         embedding_space_id = data.get('embeddingSpaceId', 'legacy-unknown')
+        runtime_provenance = extract_diarizator_runtime_provenance(data)
         if expected_embedding_space_id and embedding_space_id != expected_embedding_space_id:
             raise ValueError(
                 f"Diarizator embedding space changed while building run: {embedding_space_id} != {expected_embedding_space_id}"
+            )
+        if expected_model_id and (
+            runtime_provenance or {}
+        ).get("modelId") != expected_model_id:
+            raise ValueError(
+                "Diarizator model changed after route admission: "
+                f"{(runtime_provenance or {}).get('modelId')} != "
+                f"{expected_model_id}"
+            )
+        if expected_model_version and (
+            runtime_provenance or {}
+        ).get("modelVersion") != expected_model_version:
+            raise ValueError(
+                "Diarizator model version changed after route admission: "
+                f"{(runtime_provenance or {}).get('modelVersion')} != "
+                f"{expected_model_version}"
             )
 
         with timings.measure("continuity"):
@@ -1102,6 +1124,7 @@ def diarize_sequence(
                 "chunks_diarized": chunks_marked,
                 "duration": duration,
                 "segments": 0,
+                "runtimeProvenance": runtime_provenance,
             })
 
         # Generate unique inference_id for this diarization run
@@ -1148,6 +1171,15 @@ def diarize_sequence(
                 "runId": run_id,
                 "generation": generation,
                 "embeddingSpaceId": embedding_space_id,
+                **(
+                    {
+                        "modelId": runtime_provenance["modelId"],
+                        "modelVersion": runtime_provenance["modelVersion"],
+                        "runtimeProvenanceSource": "inference_response",
+                    }
+                    if runtime_provenance
+                    else {}
+                ),
                 "lifecycleStatus": lifecycle_status,
             }
             diar_doc["segmentKey"] = _segment_identity_key(
@@ -1215,6 +1247,7 @@ def diarize_sequence(
             "duration": duration,
             "segments": saved_segments,
             "matched_segments": matched_segments,
+            "runtimeProvenance": runtime_provenance,
         })
 
     except requests.exceptions.ReadTimeout:

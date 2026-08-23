@@ -24,8 +24,20 @@ def test_rebuilds_profile_in_one_embedding_space() -> None:
         return {"matchedCount": 1}
 
     embeddings = iter([
-        {"embedding": [1.0, 0.0], "duration": 3.0, "embeddingSpaceId": "space-v1"},
-        {"embedding": [0.8, 0.2], "duration": 4.0, "embeddingSpaceId": "space-v1"},
+        {
+            "embedding": [1.0, 0.0],
+            "duration": 3.0,
+            "embeddingSpaceId": "space-v1",
+            "modelId": "diar-v1",
+            "modelVersion": "rev-1",
+        },
+        {
+            "embedding": [0.8, 0.2],
+            "duration": 4.0,
+            "embeddingSpaceId": "space-v1",
+            "modelId": "diar-v1",
+            "modelVersion": "rev-1",
+        },
     ])
     with (
         patch("jobs.profile_reenrollment.get_profile_by_id", return_value={"_id": profile_id, "revision": 1}),
@@ -39,3 +51,9 @@ def test_rebuilds_profile_in_one_embedding_space() -> None:
     update = writes[-1]["update"]["$set"]
     assert update["embeddingSpaceId"] == "space-v1"
     assert update["sample_count"] == 2
+    assert update["runtimeProvenance"] == {
+        "modelId": "diar-v1",
+        "modelVersion": "rev-1",
+        "embeddingSpaceId": "space-v1",
+        "source": "inference_response",
+    }

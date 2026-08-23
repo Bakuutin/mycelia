@@ -586,6 +586,7 @@ export async function getExternalServicesHealth(
         : route.concurrency,
       readinessMode: route.readinessMode ?? "auto",
       detectedReadinessMode: health?.detectedReadinessMode,
+      metadata: health?.metadata,
       latencyMs: health?.latencyMs,
       message: route.enabled
         ? health?.message ?? "Route health is unavailable"
