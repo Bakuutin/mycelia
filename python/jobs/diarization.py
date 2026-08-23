@@ -700,8 +700,11 @@ def process_diarization_job(
             max_sequence_length=effective_max_sequence_chunks,
         )
 
+    routing_context = data.routingContext or {}
     speaker_profiles_snapshot = (
-        get_speaker_profiles_snapshot()
+        get_speaker_profiles_snapshot(
+            routing_context.get("embeddingSpaceId"),
+        )
         if not building_generation and not route_disabled
         else []
     )
@@ -719,7 +722,6 @@ def process_diarization_job(
         sequence: Any,
         prepared: Optional[PreparedDiarizationSequence] = None,
     ) -> Dict[str, Any]:
-        routing_context = data.routingContext or {}
         return diarize_sequence(
             sequence,
             worker_id,

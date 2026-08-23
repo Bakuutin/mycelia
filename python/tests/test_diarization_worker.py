@@ -31,6 +31,7 @@ from diarization_worker import (  # noqa: E402
     extract_diarizator_runtime_provenance,
     get_diarization_recording_candidates,
     get_diarization_sequences,
+    get_speaker_profiles_snapshot,
     hydrate_claimed_sequence,
     mark_as_diarized,
 )
@@ -137,8 +138,39 @@ class DiarizationWorkerTest(TestCase):
             options = resource.call_args.args[1]["options"]
             self.assertEqual(
                 set(options["projection"]),
-                {"_id", "name", "embedding", "embeddingSpaceId"},
+                {"_id", "name", "embedding", "embeddingSpaceId", "revision"},
             )
+
+    def test_speaker_profile_snapshot_requires_exact_admitted_space(self):
+        compatible = {
+            "_id": ObjectId(),
+            "name": "Sky",
+            "embedding": [1.0, 0.0],
+            "embeddingSpaceId": "space-1",
+            "revision": 4,
+        }
+        incompatible = {
+            "_id": ObjectId(),
+            "name": "Old Sky",
+            "embedding": [1.0, 0.0],
+            "embeddingSpaceId": "space-0",
+            "revision": 3,
+        }
+        with (
+            patch(
+                "diarization_worker._is_speaker_identification_enabled",
+                return_value=True,
+            ),
+            patch(
+                "diarization_worker._get_speaker_profiles",
+                return_value=[compatible, incompatible],
+            ),
+        ):
+            self.assertEqual(
+                get_speaker_profiles_snapshot("space-1"),
+                [compatible],
+            )
+            self.assertEqual(get_speaker_profiles_snapshot(), [])
 
     def test_empty_speaker_profile_result_is_cached(self):
         with (

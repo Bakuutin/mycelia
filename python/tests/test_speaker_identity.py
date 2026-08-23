@@ -138,6 +138,10 @@ def test_job_persists_a_terminal_state_for_every_eligible_segment() -> None:
     assert identities[1]["identityState"] == "unknown"
     assert identities[2]["identityState"] == "uncertain"
     assert identities[0]["candidates"][0]["profileId"] == profile_id
+    compatibility = writes[0]["updateOne"]["update"]["$set"]["matched_speaker"]
+    assert compatibility["profile_revision"] == 2
+    assert compatibility["embedding_space_id"] == "space-v1"
+    assert compatibility["calibration_id"] == "cal-1"
     assert {
         "speakerIdentity.topCandidate.profileId": {"$ne": profile_id}
     } in segment_queries[0]["$or"]

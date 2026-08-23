@@ -285,6 +285,8 @@ class DiarizationJobTest(TestCase):
             "_id": ObjectId(),
             "name": "Sky",
             "embedding": [1.0, 0.0],
+            "embeddingSpaceId": "space-v1",
+            "revision": 4,
         }
         with (
             patch("jobs.diarization._campaign_call", return_value=None),
@@ -320,7 +322,10 @@ class DiarizationJobTest(TestCase):
         ):
             process_diarization_job(
                 "job-profile-snapshot",
-                DiarizationJobData(limit=2),
+                DiarizationJobData(
+                    limit=2,
+                    routingContext={"embeddingSpaceId": "space-v1"},
+                ),
                 lambda _progress: None,
             )
 
@@ -1461,12 +1466,29 @@ class SpeakerMatchingJobTest(TestCase):
     def test_time_range_is_applied_and_continuation_uses_camel_case(self):
         start = datetime(2026, 8, 1, tzinfo=UTC)
         end = datetime(2026, 8, 2, tzinfo=UTC)
-        profile = {"_id": ObjectId(), "name": "Sky", "embedding": [1.0, 0.0]}
-        segment = {"_id": ObjectId(), "embedding": [0.0, 1.0]}
+        profile = {
+            "_id": ObjectId(),
+            "name": "Sky",
+            "embedding": [1.0, 0.0],
+            "embeddingSpaceId": "space-v1",
+            "revision": 4,
+        }
+        segment = {
+            "_id": ObjectId(),
+            "embedding": [0.0, 1.0],
+            "embeddingSpaceId": "space-v1",
+        }
 
         def resource(_name, request):
             if request["action"] == "getFirstBatch":
                 self.assertEqual(request["query"]["start"], {"$gte": start, "$lte": end})
+                self.assertEqual(
+                    request["query"]["embeddingSpaceId"],
+                    {
+                        "$exists": True,
+                        "$nin": ["", "unknown", "legacy-unknown"],
+                    },
+                )
                 return {"cursorId": "cursor", "hasMore": True, "data": [segment]}
             raise AssertionError(request)
 

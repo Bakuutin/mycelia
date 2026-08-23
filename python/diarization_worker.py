@@ -119,6 +119,7 @@ def _get_speaker_profiles() -> list:
                         "name": 1,
                         "embedding": 1,
                         "embeddingSpaceId": 1,
+                        "revision": 1,
                     },
                     "sort": {"created_at": 1},
                 },
@@ -183,11 +184,33 @@ def _get_speaker_profiles() -> list:
             return []
 
 
-def get_speaker_profiles_snapshot() -> list:
-    """Resolve the feature flag and immutable profile view once per job."""
+def get_speaker_profiles_snapshot(
+    expected_embedding_space_id: Optional[str] = None,
+) -> list:
+    """Resolve an immutable, embedding-space-compatible profile view per job."""
     if not _is_speaker_identification_enabled():
         return []
-    return list(_get_speaker_profiles())
+    if not expected_embedding_space_id:
+        # Legacy jobs without admitted runtime provenance keep the historical
+        # no-identification behavior instead of risking cross-space matching.
+        return []
+    profiles = list(_get_speaker_profiles())
+    compatible = [
+        profile
+        for profile in profiles
+        if profile.get("embeddingSpaceId") == expected_embedding_space_id
+        and isinstance(profile.get("revision"), int)
+        and not isinstance(profile.get("revision"), bool)
+        and profile["revision"] > 0
+    ]
+    skipped = len(profiles) - len(compatible)
+    if skipped:
+        logger.warning(
+            "Skipping %d speaker profiles outside admitted embedding space %s",
+            skipped,
+            expected_embedding_space_id,
+        )
+    return compatible
 
 
 def _build_clusters_param(profiles: list) -> str:
@@ -1033,6 +1056,20 @@ def diarize_sequence(
                 speaker_profiles = speaker_profiles_snapshot
             elif run_id == "legacy-v0" and _is_speaker_identification_enabled():
                 speaker_profiles = _get_speaker_profiles()
+            if expected_embedding_space_id:
+                speaker_profiles = [
+                    profile
+                    for profile in speaker_profiles
+                    if profile.get("embeddingSpaceId")
+                    == expected_embedding_space_id
+                    and isinstance(profile.get("revision"), int)
+                    and not isinstance(profile.get("revision"), bool)
+                    and profile["revision"] > 0
+                ]
+            else:
+                # A route without exact runtime provenance cannot safely use
+                # enrolled embeddings for automatic identification.
+                speaker_profiles = []
             if speaker_profiles:
                 clusters_param = _build_clusters_param(speaker_profiles)
                 log_info(f'  → Speaker identification enabled with {len(speaker_profiles)} profiles')
@@ -1195,7 +1232,9 @@ def diarize_sequence(
                     "name": profile.get("name", "Unknown"),
                     "similarity": segment.get('similarity', 0),
                     "matched_at": datetime.now(tz=UTC),
-                    "method": "live"
+                    "method": "live",
+                    "profile_revision": profile["revision"],
+                    "embedding_space_id": embedding_space_id,
                 }
                 matched_segments += 1
 

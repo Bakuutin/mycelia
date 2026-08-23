@@ -124,6 +124,15 @@ curl -fsS http://localhost:8085/health | jq
 Ответ должен содержать `status=ok`, `ready=true`, `device=cpu`, fingerprint и
 `embeddingSpaceId`.
 
+Автоматическое live/retroactive-сопоставление допускается только при точном
+совпадении `embeddingSpaceId` сегмента и voice profile. Маршрут или сегмент без
+точного provenance пропускается. Новые `matched_speaker` сохраняют использованные
+`profile_revision` и `embedding_space_id`; старым совпадениям эти значения
+ретроспективно не приписываются, потому что это не доказывает исходную revision.
+Такие совпадения являются лишь некалиброванными кандидатами. Проверенной
+идентификацией считается совместимое решение `speakerIdentity`, созданное по
+валидной calibration; ручные назначения спикеров остаются авторитетными.
+
 На Apple Silicon Docker не даёт этому CUDA/PyTorch сервису Apple GPU.
 Используйте CPU image и выделите Docker Desktop минимум 10 GB, лучше 12 GB RAM.
 

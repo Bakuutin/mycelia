@@ -9,6 +9,20 @@
   restore before the first physical purge.
 - Keep manual labels in `speaker_annotations`; do not rewrite transcript text.
 
+Live and retroactive convenience matching must receive exact embedding
+provenance. They compare a segment only with profiles whose
+`embeddingSpaceId` equals the admitted route/segment space, and skip automatic
+matching when that value is missing or legacy. New `matched_speaker` values
+record the profile revision and embedding space used. Older automatic matches
+without those fields remain unverified legacy candidates: do not backfill a
+current revision onto them, because that would not prove which profile revision
+made the original decision.
+
+`matched_speaker` from generic live/retroactive matching is not a calibrated
+identity decision. Only a compatible `speakerIdentity` result produced from a
+validated calibration is verified. Manual speaker annotations remain
+authoritative and are not affected by rebuilding embeddings or calibration.
+
 ## Bring-up
 
 ```bash

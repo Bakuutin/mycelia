@@ -467,6 +467,9 @@ def process_speaker_identity_job(
                 "similarity": round(score, 4),
                 "matched_at": datetime.now(UTC),
                 "method": "speakerIdentity",
+                "profile_revision": data.profileRevision,
+                "embedding_space_id": segment_space,
+                "calibration_id": data.calibrationId,
             }
         update: Dict[str, Any] = {"$set": {"speakerIdentity": decision}}
         if compatibility:
