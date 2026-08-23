@@ -81,6 +81,8 @@ The daemon now intelligently handles errors:
 ### Error Management (`manage_errors.py`)
 
 A utility script to manage files that failed during ingestion.
+Each command initializes daemon API authentication before reading or changing
+source-file state.
 
 #### List Errored Files
 
@@ -99,7 +101,8 @@ Shows all files with ingestion errors, including:
 uv run manage_errors.py retry-all
 ```
 
-Clears all errors and attempts to re-ingest all previously failed files.
+Attempts to re-ingest all previously failed files without clearing their cached
+errors first. Each error is removed only after that exact source succeeds.
 
 #### Retry Specific File
 
@@ -107,12 +110,30 @@ Clears all errors and attempts to re-ingest all previously failed files.
 uv run manage_errors.py retry <file_id>
 ```
 
-Clears the error for a specific file (by MongoDB ObjectId) and retries ingestion.
+Retries a specific file by MongoDB ObjectId. Its cached error is preserved until
+ingestion succeeds.
 
 Example:
 ```bash
 uv run manage_errors.py retry 68ee1a98a5ba09aadf9a8838
 ```
+
+The cached error remains attached until that exact source succeeds. The retry
+is scoped by source ID, so unrelated pending files cannot be selected by the
+daemon's normal newest-first ordering. Existing chunks for the same source are
+upserted by chunk index; a retry fills missing chunks instead of duplicating
+them.
+
+If the original container is damaged but a verified repaired copy exists, pass
+it as a second argument:
+
+```bash
+uv run manage_errors.py retry <file_id> ~/Library/mycelia/recovered_audio/repaired.m4a
+```
+
+The daemon reads audio from the replacement only for that retry. The stored
+Voice Memos path remains unchanged, so discovery does not create a duplicate
+source record.
 
 #### Clear All Errors (Without Retry)
 

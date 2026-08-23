@@ -291,9 +291,16 @@ successor. A legacy campaign remains `paused_legacy` until an operator confirms
 links are available from Jobs, and the job list filters by `campaignId`.
 
 Campaign completion requires a manual exact Timeline audit after all planned
-batches finish. Audio/transcription mismatches require **Rebuild Timeline
-density**; stale buckets use **Update stale ranges**. Terminal-marker repair is
-a separate Preview then Apply workflow.
+batches finish. Jobs -> Timeline integrity & recovery shows **Run exact
+verification** while the campaign is `verifying`, and polls every two seconds
+while the audit runs. This manual audit scans date-bearing raw rows for exact
+counts; maintained collection metadata is used only for fast campaign range
+planning because it can lag behind recent bulk ingestion. Matching source and
+histogram totals closes the campaign as `completed`; remaining differences
+close it as `completed_with_errors`, release the rebuild control, and require a
+new bounded campaign over the current source range. Stale buckets use **Update
+stale ranges**.
+Terminal-marker repair is a separate Preview then Apply workflow.
 
 Recent source-file metadata loads independently once and is ordered by
 `source_files.updatedAt`, `start`, and `_id`; it is not described as downstream

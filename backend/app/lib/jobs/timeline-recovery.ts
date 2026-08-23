@@ -57,3 +57,54 @@ export function timelineCampaignStatus(counts: {
   if (counts.failed + counts.cancelled > 0) return "completed_with_errors";
   return counts.completed >= counts.total ? "completed" : "queued";
 }
+
+export type TimelineCampaignRecoveryStatus =
+  | "paused_legacy"
+  | "paused"
+  | "paused_error"
+  | "queued"
+  | "running"
+  | "recovering"
+  | "verifying"
+  | "completed"
+  | "completed_with_errors";
+
+export function deriveTimelineCampaignRecoveryStatus(input: {
+  storedStatus?: string;
+  active: number;
+  waiting: number;
+  delayed: number;
+  failed: number;
+  cancelled: number;
+  missingJobs: number;
+}): TimelineCampaignRecoveryStatus {
+  if (input.storedStatus?.startsWith("paused")) {
+    return input.storedStatus as TimelineCampaignRecoveryStatus;
+  }
+  if (input.active > 0) return "running";
+  if (input.waiting + input.delayed > 0) return "queued";
+  if (input.failed + input.cancelled > 0) return "paused_error";
+  if (input.missingJobs > 0) return "recovering";
+  if (
+    input.storedStatus === "completed" ||
+    input.storedStatus === "completed_with_errors"
+  ) {
+    return input.storedStatus;
+  }
+  return "verifying";
+}
+
+export function timelineVerificationOutcome(
+  reportStatus: "healthy" | "needs_attention",
+) {
+  return reportStatus === "healthy"
+    ? {
+      status: "completed" as const,
+      blockingReason: null,
+    }
+    : {
+      status: "completed_with_errors" as const,
+      blockingReason:
+        "Exact integrity verification found remaining differences. Review the audit and start a new bounded rebuild for the current source range.",
+    };
+}

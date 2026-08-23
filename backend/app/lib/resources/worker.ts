@@ -29,6 +29,7 @@ import {
 import {
   buildTimelineRebuildBatches,
   timelineCampaignStatus,
+  timelineVerificationOutcome,
 } from "@/lib/jobs/timeline-recovery.ts";
 import {
   ensureTimelineCampaignDocument,
@@ -2160,17 +2161,27 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     };
   }
 
-  private async timelineSourceStats(auth: Auth) {
+  private async timelineSourceStats(auth: Auth, exactCounts = false) {
     const mongo = await getMongoResource(auth);
     return await Promise.all(
       TIMELINE_SOURCE_COLLECTIONS.map(async ([collection, label]) => {
-        const [collectionStats, first, last] = await Promise.all([
-          mongo({
-            action: "aggregate",
-            collection,
-            pipeline: [{ $collStats: { count: {} } }],
-            options: { maxTimeMS: 5_000 },
-          }),
+        const [countRows, first, last] = await Promise.all([
+          exactCounts
+            ? mongo({
+              action: "aggregate",
+              collection,
+              pipeline: [
+                { $match: { start: { $type: "date" } } },
+                { $count: "count" },
+              ],
+              options: { allowDiskUse: true, maxTimeMS: 60_000 },
+            })
+            : mongo({
+              action: "aggregate",
+              collection,
+              pipeline: [{ $collStats: { count: {} } }],
+              options: { maxTimeMS: 5_000 },
+            }),
           mongo({
             action: "findOne",
             collection,
@@ -2199,10 +2210,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return {
           collection,
           label,
-          // countDocuments({}) walks the entire 949k-chunk collection on the
-          // live database. $collStats reads the maintained collection count
-          // instead, keeping this explicit audit sub-second.
-          documents: Number(collectionStats?.[0]?.count ?? 0),
+          // Campaign planning uses maintained metadata. The operator-triggered
+          // exact audit scans date-bearing rows because $collStats can lag
+          // behind recent bulk ingestion and produce false mismatches.
+          documents: Number(countRows?.[0]?.count ?? 0),
           firstStart: firstStart?.toISOString() ?? null,
           lastStart: lastStart?.toISOString() ?? null,
           lastEnd: lastEnd?.toISOString() ?? null,
@@ -2566,20 +2577,21 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         operationId,
         report,
       );
-      if (
-        report.status === "healthy" &&
-        report.campaign?.status === "verifying"
-      ) {
+      if (report.campaign?.status === "verifying") {
+        const verification = timelineVerificationOutcome(
+          report.status === "healthy" ? "healthy" : "needs_attention",
+        );
         await mongo({
           action: "updateOne",
           collection: TIMELINE_REBUILD_CAMPAIGNS,
           query: { _id: report.campaign.campaignId },
           update: {
             $set: {
-              status: "completed",
+              ...verification,
               autoRecover: false,
               completedAt: new Date(),
-              blockingReason: null,
+              verifiedAt: new Date(),
+              verificationStatus: report.status,
             },
           },
           options: { touchUpdatedAt: false },
@@ -2615,7 +2627,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       campaign,
       lastBookkeepingRepair,
     ] = await Promise.all([
-      timed("sourceMetadata", () => this.timelineSourceStats(auth)),
+      timed("sourceExactCounts", () => this.timelineSourceStats(auth, true)),
       timed(
         "histogramTotals",
         () =>
@@ -2752,7 +2764,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         totalMs: Math.round(performance.now() - auditStartedAt),
         stages: stageMs,
         note:
-          "The main audit uses collection metadata and indexed ranges. Exact terminal-marker reconciliation runs separately so it cannot stall this report.",
+          "The manual audit exactly counts date-bearing raw rows and reads indexed ranges. Exact terminal-marker reconciliation runs separately so it cannot stall this report.",
       },
     };
   }

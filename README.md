@@ -250,6 +250,10 @@ It starts the Docker services and then runs local discovery/import on the host,
 where Apple Voice Memos and other local files are accessible. After each audio
 chunk is inserted, the backend automatically runs the remaining stages:
 
+The wrapper waits up to three minutes for backend readiness before starting the
+host daemon. A transient Docker Compose dependency timeout does not abort the
+pipeline if `/readiness` becomes healthy during that window.
+
 ```text
 daemon import -> VAD -> speech sequence creation -> remote STT -> conversations
 ```

@@ -1,7 +1,9 @@
 import { expect } from "@std/expect";
 import {
   buildTimelineRebuildBatches,
+  deriveTimelineCampaignRecoveryStatus,
   timelineCampaignStatus,
+  timelineVerificationOutcome,
 } from "./timeline-recovery.ts";
 
 Deno.test("timeline rebuild batches are contiguous and cover the exact range", () => {
@@ -44,4 +46,37 @@ Deno.test("timeline campaign status keeps failures visible after the queue drain
     cancelled: 0,
     completed: 1,
   })).toBe("running");
+});
+
+Deno.test("timeline campaign preserves the terminal exact-verification result", () => {
+  const drained = {
+    active: 0,
+    waiting: 0,
+    delayed: 0,
+    failed: 0,
+    cancelled: 0,
+    missingJobs: 0,
+  };
+  expect(deriveTimelineCampaignRecoveryStatus({
+    ...drained,
+    storedStatus: "completed",
+  })).toBe("completed");
+  expect(deriveTimelineCampaignRecoveryStatus({
+    ...drained,
+    storedStatus: "completed_with_errors",
+  })).toBe("completed_with_errors");
+  expect(deriveTimelineCampaignRecoveryStatus({
+    ...drained,
+    storedStatus: "running",
+  })).toBe("verifying");
+});
+
+Deno.test("exact verification releases a drained campaign on mismatch", () => {
+  expect(timelineVerificationOutcome("healthy")).toEqual({
+    status: "completed",
+    blockingReason: null,
+  });
+  expect(timelineVerificationOutcome("needs_attention")).toMatchObject({
+    status: "completed_with_errors",
+  });
 });

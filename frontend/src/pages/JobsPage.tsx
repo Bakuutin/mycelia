@@ -3701,7 +3701,8 @@ export default function JobsPage() {
   const timelineCampaignBusy = timelineIntegrity?.campaign?.status ===
       "queued" ||
     timelineIntegrity?.campaign?.status === "running" ||
-    timelineIntegrity?.campaign?.status === "recovering" ||
+    timelineIntegrity?.campaign?.status === "recovering";
+  const timelineVerificationRequired =
     timelineIntegrity?.campaign?.status === "verifying";
   const hasTimelineSnapshot = timelineIntegrity?.status !== "not_checked" &&
     timelineIntegrity?.checkedAt != null;
@@ -5127,6 +5128,8 @@ export default function JobsPage() {
                 />
                 {timelineIntegrity?.snapshot?.state === "refreshing"
                   ? "Checking…"
+                  : timelineVerificationRequired
+                  ? "Run exact verification"
                   : hasTimelineSnapshot
                   ? "Refresh audit"
                   : "Run audit"}
@@ -5397,11 +5400,14 @@ export default function JobsPage() {
                           }
                         }}
                         disabled={timelineCampaignBusy ||
+                          timelineVerificationRequired ||
                           startTimelineRebuildMutation.isPending}
                       >
                         <Play className="mr-2 h-3.5 w-3.5" />
                         {timelineCampaignBusy
                           ? "Rebuild in progress"
+                          : timelineVerificationRequired
+                          ? "Exact verification required"
                           : "Queue full rebuild"}
                       </Button>
                       <Button asChild variant="outline" size="sm">
@@ -5434,6 +5440,8 @@ export default function JobsPage() {
                       <Badge variant="secondary">
                         {timelineIntegrity.campaign.status === "paused_legacy"
                           ? "Stopped"
+                          : timelineVerificationRequired
+                          ? "verification required"
                           : timelineIntegrity.campaign.status.replaceAll(
                             "_",
                             " ",
@@ -5510,11 +5518,30 @@ export default function JobsPage() {
                       </div>
                     )}
                     {timelineIntegrity.campaign.blockingReason && (
-                      <div className="mt-2 rounded bg-red-500/5 p-2 text-red-500">
+                      <div
+                        className={`mt-2 rounded p-2 ${
+                          timelineVerificationRequired
+                            ? "bg-amber-500/5 text-amber-500"
+                            : "bg-red-500/5 text-red-500"
+                        }`}
+                      >
                         {timelineIntegrity.campaign.blockingReason}
                       </div>
                     )}
                     <div className="mt-3 flex flex-wrap gap-2">
+                      {timelineVerificationRequired && (
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            refreshTimelineIntegrityMutation.mutate()}
+                          disabled={refreshTimelineIntegrityMutation
+                            .isPending ||
+                            timelineIntegrity.snapshot?.state === "refreshing"}
+                        >
+                          <Search className="mr-2 h-3.5 w-3.5" />
+                          Run exact verification
+                        </Button>
+                      )}
                       {timelineIntegrity.campaign.canResume && (
                         <Button
                           size="sm"
