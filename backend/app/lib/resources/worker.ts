@@ -27,7 +27,9 @@ import {
   getAvailableForceStartSlots,
 } from "@/lib/jobs/worker-concurrency.ts";
 import {
-  buildTimelineRebuildBatches,
+  buildTimelineRebuildRangeBatches,
+  findTimelineRepairRanges,
+  normalizeTimelineRebuildRanges,
   timelineCampaignStatus,
   timelineVerificationOutcome,
 } from "@/lib/jobs/timeline-recovery.ts";
@@ -392,6 +394,10 @@ const StartTimelineRebuildSchema = z.object({
   action: z.literal("start_timeline_rebuild"),
   start: z.string().datetime({ offset: true }).optional(),
   end: z.string().datetime({ offset: true }).optional(),
+  ranges: z.array(z.object({
+    start: z.string().datetime({ offset: true }),
+    end: z.string().datetime({ offset: true }),
+  })).min(1).max(240).optional(),
   batchDays: z.number().int().min(1).max(62).default(31),
 });
 
@@ -2222,6 +2228,98 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     );
   }
 
+  private async timelineDailyRepairRanges(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const [sourceDays, histogramDays] = await Promise.all([
+      Promise.all(
+        TIMELINE_SOURCE_COLLECTIONS.map(async ([collection]) => ({
+          collection,
+          rows: await mongo({
+            action: "aggregate",
+            collection,
+            pipeline: [
+              { $match: { start: { $type: "date" } } },
+              {
+                $group: {
+                  _id: { $dateTrunc: { date: "$start", unit: "day" } },
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { _id: 1 } },
+            ],
+            options: { allowDiskUse: true, maxTimeMS: 60_000 },
+          }) as Array<{ _id: Date; count: number }>,
+        })),
+      ),
+      mongo({
+        action: "aggregate",
+        collection: "histogram_1day",
+        pipeline: [
+          {
+            $group: {
+              _id: "$start",
+              audio_chunks: {
+                $sum: { $ifNull: ["$totals.audio_chunks.count", 0] },
+              },
+              transcriptions: {
+                $sum: { $ifNull: ["$totals.transcriptions.count", 0] },
+              },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ],
+        options: { allowDiskUse: true, maxTimeMS: 60_000 },
+      }) as Promise<
+        Array<{
+          _id: Date;
+          audio_chunks: number;
+          transcriptions: number;
+        }>
+      >,
+    ]);
+
+    const rawByDay = new Map<
+      number,
+      Record<"audio_chunks" | "transcriptions", number>
+    >();
+    for (const { collection, rows } of sourceDays) {
+      for (const row of rows) {
+        const start = validDate(row._id);
+        if (!start) continue;
+        const counts = rawByDay.get(start.getTime()) ?? {
+          audio_chunks: 0,
+          transcriptions: 0,
+        };
+        counts[collection] = Number(row.count ?? 0);
+        rawByDay.set(start.getTime(), counts);
+      }
+    }
+
+    return findTimelineRepairRanges(
+      [...rawByDay.entries()].map(([start, counts]) => ({
+        start: new Date(start),
+        counts,
+      })),
+      histogramDays.flatMap((row) => {
+        const start = validDate(row._id);
+        return start
+          ? [{
+            start,
+            counts: {
+              audio_chunks: Number(row.audio_chunks ?? 0),
+              transcriptions: Number(row.transcriptions ?? 0),
+            },
+          }]
+          : [];
+      }),
+    ).map((range) => ({
+      start: range.start.toISOString(),
+      end: range.end.toISOString(),
+      days: range.days,
+      differences: range.differences,
+    }));
+  }
+
   private async terminalTranscriptionMarkerStats(
     auth: Auth,
     apply: boolean,
@@ -2392,7 +2490,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     });
     const campaignId = latest?.data?.timelineRebuildCampaignId;
     if (!campaignId) return null;
-    await ensureTimelineCampaignDocument(mongo, campaignId);
+    const campaignDocument = await ensureTimelineCampaignDocument(
+      mongo,
+      campaignId,
+    );
     const durableReport = await syncTimelineCampaign(mongo, campaignId);
 
     const jobs = await mongo({
@@ -2477,6 +2578,22 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
             }, null),
           )?.toISOString() ?? null
           : null,
+      mode: campaignDocument?.mode ??
+        (Array.isArray(campaignDocument?.ranges)
+          ? "selected_ranges"
+          : "selected_period"),
+      ranges: Array.isArray(campaignDocument?.ranges)
+        ? campaignDocument.ranges.flatMap((range: any) => {
+          const rangeStart = validDate(range?.start);
+          const rangeEnd = validDate(range?.end);
+          return rangeStart && rangeEnd
+            ? [{
+              start: rangeStart.toISOString(),
+              end: rangeEnd.toISOString(),
+            }]
+            : [];
+        })
+        : [],
       failures: jobs.filter((job) =>
         job.state === "failed" || job.state === "cancelled"
       ).slice(0, 5).map((job) => ({
@@ -2508,6 +2625,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       status: "not_checked",
       sources: [],
       histograms: [],
+      repairPlan: { ranges: [], days: 0 },
       bookkeeping: {
         checked: false,
         terminalSequences: null,
@@ -2694,11 +2812,18 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       difference: daily.totals[source.collection as keyof typeof daily.totals] -
         source.documents,
     }));
+    const repairRanges =
+      sourcesWithHistogram.some((source) => source.difference !== 0)
+        ? await timed(
+          "repairRangePlan",
+          () => this.timelineDailyRepairRanges(auth),
+        )
+        : [];
     const issues: Array<{
       severity: "warning" | "error";
       code: string;
       message: string;
-      action: "full_rebuild" | "stale_only" | "resume_campaign";
+      action: "repair_ranges" | "stale_only" | "resume_campaign";
       actionLabel: string;
     }> = [];
     for (const source of sourcesWithHistogram) {
@@ -2707,9 +2832,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           severity: "error",
           code: `histogram_count_${source.collection}`,
           message:
-            `${source.label}: daily histogram differs from raw documents by ${source.difference}.`,
-          action: "full_rebuild",
-          actionLabel: "Rebuild Timeline density",
+            `${source.label}: Timeline density differs from raw documents by ${source.difference}.`,
+          action: "repair_ranges",
+          actionLabel: "Repair affected dates",
         });
       }
     }
@@ -2745,6 +2870,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       status: issues.length === 0 ? "healthy" : "needs_attention",
       sources: sourcesWithHistogram,
       histograms,
+      repairPlan: {
+        ranges: repairRanges,
+        days: repairRanges.reduce((sum, range) => sum + range.days, 0),
+      },
       bookkeeping,
       lastBookkeepingRepair,
       campaign,
@@ -2758,7 +2887,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           "latest rebuild campaign completion",
         ],
         note:
-          "Matching totals and ranges are a reconciliation check, not a byte-for-byte proof of every bucket. A full rebuild is the deterministic repair when any difference is found.",
+          "Matching totals and ranges are a reconciliation check, not a byte-for-byte proof of every bucket. When totals differ, the repair plan identifies exact UTC days and rebuilds only those bounded ranges.",
       },
       performance: {
         totalMs: Math.round(performance.now() - auditStartedAt),
@@ -2823,20 +2952,37 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       );
     }
 
-    const sources = await this.timelineSourceStats(auth);
-    const earliest = sources.map((source) => validDate(source.firstStart))
-      .filter((date): date is Date => date != null)
-      .sort((a, b) => a.getTime() - b.getTime())[0];
-    const latest = sources.map((source) => validDate(source.lastEnd))
-      .filter((date): date is Date => date != null)
-      .sort((a, b) => b.getTime() - a.getTime())[0];
-    const start = input.start ? new Date(input.start) : earliest;
-    const end = input.end ? new Date(input.end) : latest;
-    if (!start || !end) {
-      throw new Error("No timeline source range is available to rebuild");
+    if (input.ranges && (input.start || input.end)) {
+      throw new Error("Use either Timeline rebuild ranges or start/end");
+    }
+    let mode: "affected_dates" | "selected_period" | "full";
+    let ranges: Array<{ start: Date; end: Date }>;
+    if (input.ranges) {
+      mode = "affected_dates";
+      ranges = normalizeTimelineRebuildRanges(
+        input.ranges.map((range) => ({
+          start: new Date(range.start),
+          end: new Date(range.end),
+        })),
+      );
+    } else {
+      const sources = await this.timelineSourceStats(auth);
+      const earliest = sources.map((source) => validDate(source.firstStart))
+        .filter((date): date is Date => date != null)
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      const latest = sources.map((source) => validDate(source.lastEnd))
+        .filter((date): date is Date => date != null)
+        .sort((a, b) => b.getTime() - a.getTime())[0];
+      const start = input.start ? new Date(input.start) : earliest;
+      const end = input.end ? new Date(input.end) : latest;
+      if (!start || !end) {
+        throw new Error("No timeline source range is available to rebuild");
+      }
+      mode = input.start || input.end ? "selected_period" : "full";
+      ranges = [{ start, end }];
     }
 
-    const batches = buildTimelineRebuildBatches(start, end, input.batchDays);
+    const batches = buildTimelineRebuildRangeBatches(ranges, input.batchDays);
     if (batches.length > 240) {
       throw new Error(
         `Refusing to enqueue ${batches.length} jobs at once; choose a larger batch size or a smaller range.`,
@@ -2846,6 +2992,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const campaignId = new ObjectId().toString();
     const createdAt = new Date();
     const firstBatch = batches[0];
+    const start = ranges[0].start;
+    const end = ranges.at(-1)!.end;
     await mongo({
       action: "insertOne",
       collection: TIMELINE_REBUILD_CAMPAIGNS,
@@ -2860,6 +3008,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         batchDays: input.batchDays,
         start,
         end,
+        mode,
+        ranges,
         createdAt,
         lastActivityAt: createdAt,
       },
@@ -2923,6 +3073,11 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       status: "queued",
       start: start.toISOString(),
       end: end.toISOString(),
+      mode,
+      ranges: ranges.map((range) => ({
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+      })),
       batchDays: input.batchDays,
       plannedJobs: batches.length,
       queuedJobs: 1,

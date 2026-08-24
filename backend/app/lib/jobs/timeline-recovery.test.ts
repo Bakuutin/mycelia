@@ -1,7 +1,9 @@
 import { expect } from "@std/expect";
 import {
   buildTimelineRebuildBatches,
+  buildTimelineRebuildRangeBatches,
   deriveTimelineCampaignRecoveryStatus,
+  findTimelineRepairRanges,
   timelineCampaignStatus,
   timelineVerificationOutcome,
 } from "./timeline-recovery.ts";
@@ -25,6 +27,73 @@ Deno.test("timeline rebuild rejects empty and reversed ranges", () => {
   expect(() => buildTimelineRebuildBatches(date, date)).toThrow();
   expect(() => buildTimelineRebuildBatches(new Date(date.getTime() + 1), date))
     .toThrow();
+});
+
+Deno.test("sparse Timeline repair ranges stay sparse and merge adjacent days", () => {
+  const batches = buildTimelineRebuildRangeBatches([
+    {
+      start: new Date("2026-08-21T00:00:00.000Z"),
+      end: new Date("2026-08-23T00:00:00.000Z"),
+    },
+    {
+      start: new Date("2023-08-10T00:00:00.000Z"),
+      end: new Date("2023-08-11T00:00:00.000Z"),
+    },
+    {
+      start: new Date("2026-08-10T00:00:00.000Z"),
+      end: new Date("2026-08-11T00:00:00.000Z"),
+    },
+  ]);
+
+  expect(batches).toHaveLength(3);
+  expect(batches.map((batch) => batch.start.toISOString())).toEqual([
+    "2023-08-10T00:00:00.000Z",
+    "2026-08-10T00:00:00.000Z",
+    "2026-08-21T00:00:00.000Z",
+  ]);
+  expect(batches.map((batch) => batch.batchIndex)).toEqual([0, 1, 2]);
+});
+
+Deno.test("Timeline mismatch planner returns only affected UTC days", () => {
+  const counts = (audio_chunks: number, transcriptions: number) => ({
+    audio_chunks,
+    transcriptions,
+  });
+  const repairs = findTimelineRepairRanges([
+    {
+      start: new Date("2023-08-10T00:00:00.000Z"),
+      counts: counts(0, 6),
+    },
+    {
+      start: new Date("2026-08-21T00:00:00.000Z"),
+      counts: counts(1_862, 77),
+    },
+    {
+      start: new Date("2026-08-22T00:00:00.000Z"),
+      counts: counts(3_822, 255),
+    },
+  ], [
+    {
+      start: new Date("2023-08-10T00:00:00.000Z"),
+      counts: counts(0, 5),
+    },
+    {
+      start: new Date("2026-08-21T00:00:00.000Z"),
+      counts: counts(70, 4),
+    },
+  ]);
+
+  expect(repairs).toHaveLength(2);
+  expect(repairs[0]).toMatchObject({
+    days: 1,
+    differences: { audio_chunks: 0, transcriptions: -1 },
+  });
+  expect(repairs[1]).toMatchObject({
+    days: 2,
+    differences: { audio_chunks: -5_614, transcriptions: -328 },
+  });
+  expect(repairs[1].start.toISOString()).toBe("2026-08-21T00:00:00.000Z");
+  expect(repairs[1].end.toISOString()).toBe("2026-08-23T00:00:00.000Z");
 });
 
 Deno.test("timeline campaign status keeps failures visible after the queue drains", () => {

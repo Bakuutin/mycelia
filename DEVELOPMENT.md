@@ -277,30 +277,43 @@ there is no second live-slots dashboard.
 
 #### Timeline density rebuild recovery
 
-Timeline density rebuilds affect only derived audio/transcription histogram
-buckets. They never rewrite raw audio, transcript text, terminal transcription
-markers, or speaker identity. Speaker identity reads active speaker segments
-directly, so diarizations are not part of histogram audit totals or rebuilds.
+Timeline density repairs affect only derived audio/transcription density buckets
+(the bars historically called histograms). They never rewrite raw audio,
+transcript text, transcription completion markers, or speaker identity. Speaker
+identity reads active speaker segments directly, so diarizations are not part of
+density totals or repairs.
 
-A full rebuild creates a durable `timeline_rebuild_campaigns` row before its
-first 31-day batch. `histRecalculation` runs at concurrency one and reports its
-delete, 5-minute, hourly, daily, and weekly phases. The backend reconciles an
-explicitly started, unpaused campaign every 30 seconds and restores a missing
-successor. A legacy campaign remains `paused_legacy` until an operator confirms
-**Resume**; page load or deployment never starts it. Pause/Resume and campaign
-links are available from Jobs, and the job list filters by `campaignId`.
+The manual exact check compares UTC-day raw counts with daily density totals. If
+they differ, Jobs proposes only the mismatched days, merges adjacent days, and
+starts one sparse durable campaign for those ranges. A known continuous period
+can also be selected manually. Rebuilding all history is reserved for a density
+schema change or widespread corruption that cannot be localized. New imports do
+not automatically start `histRecalculation`; run **Check now** after a large or
+historical import.
+
+Every repair creates a durable `timeline_rebuild_campaigns` row before its first
+bounded job. Long continuous periods split into 31-day jobs; disjoint affected
+dates remain disjoint. `histRecalculation` runs at concurrency one and reports
+its delete, 5-minute, hourly, daily, and weekly phases. The backend reconciles
+an explicitly started, unpaused campaign every 30 seconds and restores the next
+selected range. A legacy campaign remains `paused_legacy` until an operator
+confirms **Resume**; page load or deployment never starts it. Pause/Resume and
+campaign links are available from Jobs, and the job list filters by
+`campaignId`.
 
 Campaign completion requires a manual exact Timeline audit after all planned
-batches finish. Jobs -> Timeline integrity & recovery shows **Run exact
+batches finish. Jobs -> Timeline density integrity shows **Run exact
 verification** while the campaign is `verifying`, and polls every two seconds
 while the audit runs. This manual audit scans date-bearing raw rows for exact
 counts; maintained collection metadata is used only for fast campaign range
 planning because it can lag behind recent bulk ingestion. Matching source and
-histogram totals closes the campaign as `completed`; remaining differences
-close it as `completed_with_errors`, release the rebuild control, and require a
-new bounded campaign over the current source range. Stale buckets use **Update
-stale ranges**.
-Terminal-marker repair is a separate Preview then Apply workflow.
+density totals closes the campaign as `completed`; remaining differences close
+it as `completed_with_errors`, release the rebuild control, and require a new
+bounded campaign over the affected dates. Stale buckets use **Update stale
+ranges**. Transcription completion-marker repair is separate: **Check markers**
+is read-only, and **Repair markers** is needed only when the check finds chunks
+whose completed/empty sequence still has `transcribed_at=null`. It never creates
+or changes transcript text.
 
 Recent source-file metadata loads independently once and is ordered by
 `source_files.updatedAt`, `start`, and `_id`; it is not described as downstream

@@ -3,7 +3,10 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { enqueueJob, getQueue } from "./queue.ts";
 import { redlock } from "@/lib/redis.ts";
-import { deriveTimelineCampaignRecoveryStatus } from "./timeline-recovery.ts";
+import {
+  buildTimelineRebuildRangeBatches,
+  deriveTimelineCampaignRecoveryStatus,
+} from "./timeline-recovery.ts";
 
 export const TIMELINE_REBUILD_CAMPAIGNS = "timeline_rebuild_campaigns";
 
@@ -288,13 +291,26 @@ export async function reconcileTimelineCampaign(
       const campaignStart = validDate(campaign.start)!;
       const campaignEnd = validDate(campaign.end)!;
       const batchDays = Number(campaign.batchDays ?? 31);
-      const start = validDate(previous?.result?.nextStart) ?? new Date(
+      const selectedRanges = Array.isArray(campaign.ranges)
+        ? campaign.ranges.flatMap((range: any) => {
+          const start = validDate(range?.start);
+          const end = validDate(range?.end);
+          return start && end ? [{ start, end }] : [];
+        })
+        : [];
+      const selectedBatches = selectedRanges.length > 0
+        ? buildTimelineRebuildRangeBatches(selectedRanges, batchDays)
+        : [];
+      const selectedBatch = selectedBatches[nextBatchIndex];
+      const start = selectedBatch?.start ??
+        validDate(previous?.result?.nextStart) ?? new Date(
         campaignStart.getTime() + nextBatchIndex * batchDays * 86_400_000,
       );
-      const end = validDate(previous?.result?.nextEnd) ?? new Date(Math.min(
-        start.getTime() + batchDays * 86_400_000,
-        campaignEnd.getTime(),
-      ));
+      const end = selectedBatch?.end ?? validDate(previous?.result?.nextEnd) ??
+        new Date(Math.min(
+          start.getTime() + batchDays * 86_400_000,
+          campaignEnd.getTime(),
+        ));
       const job = await enqueueJob({
         type: "histRecalculation",
         start,

@@ -76,7 +76,7 @@ export function TimelineRecoveryStatus() {
                 : data?.status === "needs_attention"
                 ? "action required"
                 : data
-                ? "audit passed"
+                ? "density current"
                 : "checking"}
             </Badge>
           </div>
@@ -95,10 +95,11 @@ export function TimelineRecoveryStatus() {
           )}
           {data && histogramIssues.length > 0 && !campaignBusy && (
             <div className="mt-1 text-xs text-muted-foreground">
-              Full histogram rebuild is recommended. Persisted totals differ
-              from raw sources: {data.sources.filter((source) =>
-                source.difference !== 0
-              ).map((source) =>
+              Timeline density repair is recommended. Jobs will identify and
+              rebuild only affected dates. Current differences:{" "}
+              {data.sources.filter((source) => source.difference !== 0).map((
+                source,
+              ) =>
                 `${source.label} ${source.difference > 0 ? "+" : ""}${
                   formatCount(source.difference)
                 }`
@@ -115,7 +116,7 @@ export function TimelineRecoveryStatus() {
           )}
           {data && histogramIssues.length === 0 && !campaignBusy && (
             <p className="mt-1 text-xs text-muted-foreground">
-              Raw source totals match the persisted daily histogram and no stale
+              Raw source totals match the persisted daily density and no stale
               buckets were found.
             </p>
           )}

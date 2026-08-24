@@ -62,6 +62,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Command,
@@ -509,10 +517,12 @@ function JobDateRange({
     >
       {label ? `${label}: ` : ""}
       {isSameDay
-        ? `${format(start, "MMM d, HH:mm")}–${format(end, "HH:mm")}`
+        ? `${format(start, "yyyy-MM-dd HH:mm")}–${format(end, "HH:mm")}`
         : end
-        ? `${format(start, "MMM d, HH:mm")} — ${format(end, "MMM d, HH:mm")}`
-        : `from ${format(start, "MMM d, HH:mm")}`}
+        ? `${format(start, "yyyy-MM-dd HH:mm")} — ${
+          format(end, "yyyy-MM-dd HH:mm")
+        }`
+        : `from ${format(start, "yyyy-MM-dd HH:mm")}`}
     </Link>
   );
 }
@@ -1525,6 +1535,8 @@ export default function JobsPage() {
   const [timelineRepairPreview, setTimelineRepairPreview] = useState<
     TimelineBookkeepingRepair | null
   >(null);
+  const [timelinePeriodStart, setTimelinePeriodStart] = useState("");
+  const [timelinePeriodEnd, setTimelinePeriodEnd] = useState("");
 
   const setJobsView = (view: "operational" | "idle_auto") => {
     setSearchParams(withJobsListView(searchParams, view));
@@ -2327,9 +2339,14 @@ export default function JobsPage() {
   });
 
   const startTimelineRebuildMutation = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (request?: {
+      start?: string;
+      end?: string;
+      ranges?: Array<{ start: string; end: string }>;
+    }) =>
       await api.callResource("jobs", {
         action: "start_timeline_rebuild",
+        ...request,
         batchDays: 31,
       }) as {
         campaignId: string;
@@ -2337,10 +2354,11 @@ export default function JobsPage() {
         queuedJobs: number;
         start: string;
         end: string;
+        mode: "affected_dates" | "selected_period" | "full";
       },
     onSuccess: (result) => {
       toast.success(
-        `Timeline rebuild ${result.campaignId} queued ${result.queuedJobs}/${result.plannedJobs} bounded jobs.`,
+        `Timeline density repair queued: ${result.queuedJobs}/${result.plannedJobs} range job(s).`,
       );
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job-stats"] });
@@ -3706,10 +3724,54 @@ export default function JobsPage() {
     timelineIntegrity?.campaign?.status === "verifying";
   const hasTimelineSnapshot = timelineIntegrity?.status !== "not_checked" &&
     timelineIntegrity?.checkedAt != null;
+  const timelineRepairRanges = timelineIntegrity?.repairPlan?.ranges ?? [];
+  const timelineRepairDays = timelineIntegrity?.repairPlan?.days ?? 0;
   const timelineRepairEligible = timelineRepairPreview?.eligibleChunks ??
     timelineIntegrity?.bookkeeping.eligibleChunks ?? 0;
   const formatTimelineAuditDate = (value: string | null | undefined) =>
     value ? format(new Date(value), "yyyy-MM-dd HH:mm") : "—";
+  const formatTimelineDay = (value: string) => value.slice(0, 10);
+
+  const queueAffectedTimelineDates = async () => {
+    if (timelineRepairRanges.length === 0) return;
+    if (
+      await confirmAction({
+        title: "Repair Timeline density for affected dates?",
+        description:
+          `Rebuild only ${timelineRepairDays} mismatched day(s) in ${timelineRepairRanges.length} separate range(s). Raw audio and transcript text remain unchanged.`,
+        actionLabel: "Repair affected dates",
+      })
+    ) {
+      startTimelineRebuildMutation.mutate({
+        ranges: timelineRepairRanges.map(({ start, end }) => ({ start, end })),
+      });
+    }
+  };
+
+  const queueSelectedTimelinePeriod = async () => {
+    if (!timelinePeriodStart || !timelinePeriodEnd) return;
+    const start = new Date(`${timelinePeriodStart}T00:00:00.000Z`);
+    const inclusiveEnd = new Date(`${timelinePeriodEnd}T00:00:00.000Z`);
+    const end = new Date(inclusiveEnd);
+    end.setUTCDate(end.getUTCDate() + 1);
+    if (start > inclusiveEnd) {
+      toast.error("Start date must be on or before end date.");
+      return;
+    }
+    if (
+      await confirmAction({
+        title: "Rebuild Timeline density for this period?",
+        description:
+          `${timelinePeriodStart} through ${timelinePeriodEnd}, inclusive. Only derived density bars are replaced; raw audio and transcript text remain unchanged.`,
+        actionLabel: "Rebuild selected period",
+      })
+    ) {
+      startTimelineRebuildMutation.mutate({
+        start: start.toISOString(),
+        end: end.toISOString(),
+      });
+    }
+  };
 
   const [currentTime, setCurrentTime] = useState(Date.now());
 
@@ -5099,519 +5161,799 @@ export default function JobsPage() {
         </Card>
 
         <Card id="timeline-integrity" className="order-5 scroll-mt-4">
-          <CardHeader className="pb-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle className="text-base">
-                  Timeline integrity & recovery
-                </CardTitle>
-                <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
-                  Audit raw timeline sources against persisted histograms,
-                  repair terminal transcription bookkeeping, and run a bounded
-                  full histogram rebuild with a persistent campaign report.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => refreshTimelineIntegrityMutation.mutate()}
-                disabled={refreshTimelineIntegrityMutation.isPending ||
-                  timelineIntegrity?.snapshot?.state === "refreshing"}
-              >
-                <RefreshCw
-                  className={`mr-2 h-3.5 w-3.5 ${
-                    refreshTimelineIntegrityMutation.isPending ||
-                      timelineIntegrity?.snapshot?.state === "refreshing"
-                      ? "animate-spin"
-                      : ""
-                  }`}
-                />
-                {timelineIntegrity?.snapshot?.state === "refreshing"
-                  ? "Checking…"
-                  : timelineVerificationRequired
-                  ? "Run exact verification"
-                  : hasTimelineSnapshot
-                  ? "Refresh audit"
-                  : "Run audit"}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!hasTimelineSnapshot && (
-              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                No persisted integrity snapshot yet. Run audit manually; the
-                previous successful result will remain visible after failures.
-              </div>
-            )}
-            {timelineIntegrity?.snapshot?.lastError && (
-              <div className="text-xs text-red-500">
-                Refresh failed:{" "}
-                {timelineIntegrity.snapshot.lastError}. Showing the snapshot
-                from {formatTimelineAuditDate(
-                  timelineIntegrity.snapshot.asOf,
-                )}.
-              </div>
-            )}
-            {timelineIntegrity &&
-              (hasTimelineSnapshot || Boolean(timelineIntegrity.campaign)) && (
-              <>
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge
-                    variant="secondary"
-                    className={!hasTimelineSnapshot
-                      ? "bg-muted text-muted-foreground"
-                      : timelineIntegrity.status === "healthy"
-                      ? "bg-green-500/10 text-green-500"
-                      : "bg-amber-500/10 text-amber-500"}
+          <Sheet>
+            <CardHeader className="px-3 py-2.5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base">
+                    Timeline density integrity
+                  </CardTitle>
+                  <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+                    Checks whether Timeline density bars match raw audio and
+                    transcriptions.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2.5 text-xs"
+                    onClick={() => refreshTimelineIntegrityMutation.mutate()}
+                    disabled={refreshTimelineIntegrityMutation.isPending ||
+                      timelineIntegrity?.snapshot?.state === "refreshing"}
                   >
-                    {!hasTimelineSnapshot
-                      ? "Audit not checked"
-                      : timelineIntegrity.status === "healthy"
-                      ? "Histogram audit passed"
-                      : "Needs attention"}
-                  </Badge>
-                  {hasTimelineSnapshot && (
-                    <>
-                      <span className="text-muted-foreground">
-                        Checked {formatTimelineAuditDate(
-                          timelineIntegrity.checkedAt,
-                        )}
-                      </span>
-                      <span className="text-muted-foreground">
-                        · totals use the 1-day histogram
-                      </span>
-                      <span className="text-muted-foreground">
-                        · loaded in {timelineIntegrity.performance.totalMs} ms (
-                        {Object.entries(timelineIntegrity.performance.stages)
-                          .map(
-                            ([stage, duration]) => `${stage} ${duration} ms`,
-                          ).join(" · ")})
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-3">
-                  {timelineIntegrity.sources.map((source) => (
-                    <div
-                      key={source.collection}
-                      className="rounded-lg border p-3"
+                    <RefreshCw
+                      className={`mr-2 h-3.5 w-3.5 ${
+                        refreshTimelineIntegrityMutation.isPending ||
+                          timelineIntegrity?.snapshot?.state === "refreshing"
+                          ? "animate-spin"
+                          : ""
+                      }`}
+                    />
+                    {timelineIntegrity?.snapshot?.state === "refreshing"
+                      ? "Checking…"
+                      : timelineVerificationRequired
+                      ? "Run exact verification"
+                      : hasTimelineSnapshot
+                      ? "Check now"
+                      : "Run check"}
+                  </Button>
+                  <SheetTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2.5 text-xs"
                     >
-                      <div className="text-sm font-medium">{source.label}</div>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                        <div>
-                          <div className="text-muted-foreground">
-                            Raw documents
-                          </div>
-                          <div className="font-mono text-sm">
-                            {source.documents}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-muted-foreground">
-                            Histogram total
-                          </div>
-                          <div className="font-mono text-sm">
-                            {source.histogramDocuments}
-                          </div>
-                        </div>
-                      </div>
-                      <div
-                        className={`mt-2 text-xs ${
-                          source.difference === 0
-                            ? "text-green-500"
-                            : "text-red-500"
-                        }`}
-                      >
-                        Difference: {source.difference > 0 ? "+" : ""}
-                        {source.difference}
-                      </div>
-                      <div className="mt-2 text-[11px] text-muted-foreground">
-                        {formatTimelineAuditDate(source.firstStart)} —{"  "}
-                        {formatTimelineAuditDate(source.lastEnd)}
-                      </div>
-                    </div>
-                  ))}
+                      Details
+                    </Button>
+                  </SheetTrigger>
                 </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3 px-3 pb-3 pt-0">
+              {!hasTimelineSnapshot && (
+                <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                  No saved check yet. Run the check to find dates that need a
+                  density repair.
+                </div>
+              )}
+              {timelineIntegrity?.snapshot?.lastError && (
+                <div className="text-xs text-red-500">
+                  Check failed:{" "}
+                  {timelineIntegrity.snapshot.lastError}. Showing the saved
+                  result from {formatTimelineAuditDate(
+                    timelineIntegrity.snapshot.asOf,
+                  )}.
+                </div>
+              )}
+              {timelineIntegrity && hasTimelineSnapshot && (
+                <>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <Badge
+                      variant="secondary"
+                      className={timelineIntegrity.status === "healthy"
+                        ? "bg-green-500/10 text-green-500"
+                        : "bg-amber-500/10 text-amber-500"}
+                    >
+                      {timelineIntegrity.status === "healthy"
+                        ? "Density is up to date"
+                        : "Repair needed"}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      Checked {formatTimelineAuditDate(
+                        timelineIntegrity.checkedAt,
+                      )}
+                    </span>
+                    {timelineRepairRanges.length > 0 && (
+                      <span className="text-muted-foreground">
+                        · {timelineRepairDays} affected day(s) in{" "}
+                        {timelineRepairRanges.length} range(s)
+                      </span>
+                    )}
+                  </div>
+                  {timelineIntegrity.issues.length > 0 && (
+                    <div className="space-y-2">
+                      {timelineIntegrity.issues.map((issue) => (
+                        <div
+                          key={issue.code}
+                          className={`flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-xs ${
+                            issue.severity === "error"
+                              ? "border-red-500/30 bg-red-500/5"
+                              : "border-amber-500/30 bg-amber-500/5"
+                          }`}
+                        >
+                          <div
+                            className={issue.severity === "error"
+                              ? "flex min-w-0 items-start gap-2 text-red-500"
+                              : "flex min-w-0 items-start gap-2 text-amber-500"}
+                          >
+                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                            <span>{issue.message}</span>
+                          </div>
+                          {issue.action === "repair_ranges" && (
+                            <Button
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-xs"
+                              onClick={() => void queueAffectedTimelineDates()}
+                              disabled={timelineRepairRanges.length === 0 ||
+                                timelineCampaignBusy ||
+                                timelineVerificationRequired ||
+                                startTimelineRebuildMutation.isPending}
+                            >
+                              <Play className="mr-1.5 h-3.5 w-3.5" />
+                              Repair affected dates
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {timelineIntegrity.campaign && (timelineCampaignBusy ||
+                    timelineVerificationRequired) &&
+                    (
+                      <div className="rounded-md border p-3 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium">
+                            Density repair {timelineCampaignBusy
+                              ? "in progress"
+                              : "finished — verification needed"}
+                          </span>
+                          {timelineVerificationRequired && (
+                            <Button
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() =>
+                                refreshTimelineIntegrityMutation.mutate()}
+                              disabled={refreshTimelineIntegrityMutation
+                                .isPending ||
+                                timelineIntegrity.snapshot?.state ===
+                                  "refreshing"}
+                            >
+                              Verify result
+                            </Button>
+                          )}
+                        </div>
+                        <Progress
+                          value={timelineIntegrity.campaign.plannedJobs > 0
+                            ? timelineIntegrity.campaign.completed /
+                              timelineIntegrity.campaign.plannedJobs * 100
+                            : 0}
+                          className="mt-2 h-2"
+                        />
+                      </div>
+                    )}
+                </>
+              )}
+            </CardContent>
+            <SheetContent className="w-[min(920px,95vw)] overflow-y-auto sm:max-w-3xl">
+              <SheetHeader className="mb-4 pr-8">
+                <SheetTitle>Timeline density details</SheetTitle>
+                <SheetDescription>
+                  Source totals, density buckets, transcription completion
+                  markers, manual repair periods, and campaign history.
+                </SheetDescription>
+              </SheetHeader>
+              <div className="space-y-3">
+                {!hasTimelineSnapshot && (
+                  <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                    No persisted integrity snapshot yet. Run audit manually; the
+                    previous successful result will remain visible after
+                    failures.
+                  </div>
+                )}
+                {timelineIntegrity?.snapshot?.lastError && (
+                  <div className="text-xs text-red-500">
+                    Refresh failed:{" "}
+                    {timelineIntegrity.snapshot.lastError}. Showing the snapshot
+                    from {formatTimelineAuditDate(
+                      timelineIntegrity.snapshot.asOf,
+                    )}.
+                  </div>
+                )}
+                {timelineIntegrity &&
+                  (hasTimelineSnapshot ||
+                    Boolean(timelineIntegrity.campaign)) &&
+                  (
+                    <>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Badge
+                          variant="secondary"
+                          className={!hasTimelineSnapshot
+                            ? "bg-muted text-muted-foreground"
+                            : timelineIntegrity.status === "healthy"
+                            ? "bg-green-500/10 text-green-500"
+                            : "bg-amber-500/10 text-amber-500"}
+                        >
+                          {!hasTimelineSnapshot
+                            ? "Audit not checked"
+                            : timelineIntegrity.status === "healthy"
+                            ? "Density check passed"
+                            : "Needs attention"}
+                        </Badge>
+                        {hasTimelineSnapshot && (
+                          <>
+                            <span className="text-muted-foreground">
+                              Checked {formatTimelineAuditDate(
+                                timelineIntegrity.checkedAt,
+                              )}
+                            </span>
+                            <span className="text-muted-foreground">
+                              · totals use daily density buckets
+                            </span>
+                            <span className="text-muted-foreground">
+                              · loaded in{" "}
+                              {timelineIntegrity.performance.totalMs} ms (
+                              {Object.entries(
+                                timelineIntegrity.performance.stages,
+                              )
+                                .map(
+                                  ([stage, duration]) =>
+                                    `${stage} ${duration} ms`,
+                                ).join(" · ")})
+                            </span>
+                          </>
+                        )}
+                      </div>
 
-                {hasTimelineSnapshot && (
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Resolution</TableHead>
-                          <TableHead className="text-right">Buckets</TableHead>
-                          <TableHead className="text-right">Stale</TableHead>
-                          <TableHead>Coverage</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {timelineIntegrity.histograms.map((histogram) => (
-                          <TableRow key={histogram.resolution}>
-                            <TableCell className="font-mono text-xs">
-                              {histogram.resolution}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-xs">
-                              {histogram.buckets}
-                            </TableCell>
-                            <TableCell
-                              className={`text-right font-mono text-xs ${
-                                histogram.stale > 0 ? "text-amber-500" : ""
+                      <div className="grid gap-3 md:grid-cols-3">
+                        {timelineIntegrity.sources.map((source) => (
+                          <div
+                            key={source.collection}
+                            className="rounded-lg border p-3"
+                          >
+                            <div className="text-sm font-medium">
+                              {source.label}
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                              <div>
+                                <div className="text-muted-foreground">
+                                  Raw documents
+                                </div>
+                                <div className="font-mono text-sm">
+                                  {source.documents}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-muted-foreground">
+                                  Density total
+                                </div>
+                                <div className="font-mono text-sm">
+                                  {source.histogramDocuments}
+                                </div>
+                              </div>
+                            </div>
+                            <div
+                              className={`mt-2 text-xs ${
+                                source.difference === 0
+                                  ? "text-green-500"
+                                  : "text-red-500"
                               }`}
                             >
-                              {histogram.stale}
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {formatTimelineAuditDate(histogram.firstStart)} —
+                              Difference: {source.difference > 0 ? "+" : ""}
+                              {source.difference}
+                            </div>
+                            <div className="mt-2 text-[11px] text-muted-foreground">
+                              {formatTimelineAuditDate(source.firstStart)} —
                               {" "}
-                              {formatTimelineAuditDate(histogram.lastStart)}
-                            </TableCell>
-                          </TableRow>
+                              {formatTimelineAuditDate(
+                                source.lastEnd,
+                              )}
+                            </div>
+                          </div>
                         ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
+                      </div>
 
-                {timelineIntegrity.issues.length > 0 && (
-                  <div className="space-y-2">
-                    {timelineIntegrity.issues.map((issue) => (
-                      <div
-                        key={issue.code}
-                        className={`flex gap-2 rounded-md border p-3 text-xs ${
-                          issue.severity === "error"
-                            ? "border-red-500/30 bg-red-500/5 text-red-500"
-                            : "border-amber-500/30 bg-amber-500/5 text-amber-500"
-                        }`}
-                      >
-                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        <span>
-                          {issue.message}
-                          {issue.actionLabel && (
-                            <span className="ml-2 font-medium">
-                              Action: {issue.actionLabel}.
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="space-y-3 rounded-lg border p-4">
-                    <div>
-                      <div className="text-sm font-medium">
-                        Terminal transcription bookkeeping
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {timelineIntegrity.bookkeeping.checked
-                          ? `${
-                            timelineIntegrity.bookkeeping.eligibleChunks ?? 0
-                          } chunk(s) still have transcribed_at=null although their owning sequence is completed or empty.`
-                          : "The exact marker check is separate from the fast histogram audit. Run Preview repair to scan it."}
-                        {" "}
-                        This repair never creates or changes transcript text.
-                      </p>
-                    </div>
-                    {timelineRepairPreview && (
-                      <div className="rounded bg-muted/50 p-2 text-xs">
-                        Preview: {timelineRepairPreview.eligibleChunks}{" "}
-                        eligible ·
-                        {timelineRepairPreview.applied
-                          ? ` ${timelineRepairPreview.modifiedChunks} repaired`
-                          : " no writes applied"}
-                      </div>
-                    )}
-                    {!timelineRepairPreview &&
-                      timelineIntegrity.lastBookkeepingRepair && (
-                      <div className="rounded bg-muted/50 p-2 text-xs">
-                        Last applied repair: {timelineIntegrity
-                          .lastBookkeepingRepair.modifiedChunks} marker(s) ·
-                        {" "}
-                        {formatTimelineAuditDate(
-                          timelineIntegrity.lastBookkeepingRepair.checkedAt,
-                        )} ·{" "}
-                        {timelineIntegrity.lastBookkeepingRepair.durationMs} ms
-                      </div>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          previewTimelineBookkeepingMutation.mutate()}
-                        disabled={previewTimelineBookkeepingMutation
-                          .isPending ||
-                          applyTimelineBookkeepingMutation.isPending}
-                      >
-                        <Search className="mr-2 h-3.5 w-3.5" />
-                        Preview repair
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={async () => {
-                          if (
-                            await confirmAction({
-                              title: "Repair terminal transcription markers?",
-                              description:
-                                `Update transcribed_at for ${timelineRepairEligible} audio chunk(s) whose transcription sequence is already completed or empty. Transcript text and sequence state will not be changed.`,
-                              actionLabel: "Apply marker repair",
-                            })
-                          ) {
-                            applyTimelineBookkeepingMutation.mutate();
-                          }
-                        }}
-                        disabled={timelineRepairEligible === 0 ||
-                          applyTimelineBookkeepingMutation.isPending ||
-                          previewTimelineBookkeepingMutation.isPending}
-                      >
-                        <Check className="mr-2 h-3.5 w-3.5" />
-                        Apply repair ({timelineRepairEligible})
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 rounded-lg border p-4">
-                    <div>
-                      <div className="text-sm font-medium">
-                        Full histogram rebuild
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Deletes and regenerates only derived audio/transcript
-                        density buckets in sequential 31-day batches. Raw audio
-                        and transcripts are untouched; this does not repair
-                        terminal markers or speaker identity.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        onClick={async () => {
-                          if (
-                            await confirmAction({
-                              title: "Rebuild the complete timeline histogram?",
-                              description:
-                                "This deletes and rebuilds derived audio/transcript histogram buckets across the full source range. Raw audio and transcripts are read only.",
-                              actionLabel: "Queue full rebuild",
-                            })
-                          ) {
-                            startTimelineRebuildMutation.mutate();
-                          }
-                        }}
-                        disabled={timelineCampaignBusy ||
-                          timelineVerificationRequired ||
-                          startTimelineRebuildMutation.isPending}
-                      >
-                        <Play className="mr-2 h-3.5 w-3.5" />
-                        {timelineCampaignBusy
-                          ? "Rebuild in progress"
-                          : timelineVerificationRequired
-                          ? "Exact verification required"
-                          : "Queue full rebuild"}
-                      </Button>
-                      <Button asChild variant="outline" size="sm">
-                        <Link
-                          to={timelineIntegrity.campaign
-                            ? `/jobs?type=histRecalculation&campaignId=${timelineIntegrity.campaign.campaignId}`
-                            : "/jobs?type=histRecalculation"}
-                        >
-                          View histogram jobs
-                        </Link>
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                {timelineIntegrity.campaign && (
-                  <div className="rounded-lg border p-4 text-xs">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <span className="font-medium">
-                          Latest rebuild campaign
-                        </span>
-                        <Link
-                          className="ml-2 font-mono text-primary hover:underline"
-                          to={`/jobs?type=histRecalculation&campaignId=${timelineIntegrity.campaign.campaignId}`}
-                        >
-                          {timelineIntegrity.campaign.campaignId}
-                        </Link>
-                      </div>
-                      <Badge variant="secondary">
-                        {timelineIntegrity.campaign.status === "paused_legacy"
-                          ? "Stopped"
-                          : timelineVerificationRequired
-                          ? "verification required"
-                          : timelineIntegrity.campaign.status.replaceAll(
-                            "_",
-                            " ",
-                          )}
-                      </Badge>
-                    </div>
-                    <div className="mt-2 text-muted-foreground">
-                      Worker {timelineIntegrity.campaign.workerType ??
-                        "histRecalculation"} · queue{" "}
-                      {timelineIntegrity.campaign.queue ??
-                        "jobs-histRecalculation"}
-                      {timelineIntegrity.campaign.activeJobId
-                        ? ` · job ${timelineIntegrity.campaign.activeJobId}`
-                        : ""}
-                    </div>
-                    <div className="mt-3 space-y-1">
-                      <Progress
-                        value={timelineIntegrity.campaign.plannedJobs > 0
-                          ? timelineIntegrity.campaign.completed /
-                            timelineIntegrity.campaign.plannedJobs * 100
-                          : 0}
-                        className="h-2"
-                      />
-                      <div className="text-muted-foreground">
-                        {timelineIntegrity.campaign.status === "paused_legacy"
-                          ? `${timelineIntegrity.campaign.queuedJobs}/${timelineIntegrity.campaign.plannedJobs} batches · ${timelineIntegrity.campaign.missingJobs} not queued`
-                          : timelineIntegrity.campaign.plannedJobs > 0
-                          ? `${
-                            Math.round(
-                              timelineIntegrity.campaign.completed /
-                                timelineIntegrity.campaign.plannedJobs * 100,
-                            )
-                          }% complete`
-                          : "0% complete"}
-                      </div>
-                    </div>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                      <div>
-                        Completed: {timelineIntegrity.campaign.completed}
-                      </div>
-                      <div>Active: {timelineIntegrity.campaign.active}</div>
-                      <div>Waiting: {timelineIntegrity.campaign.waiting}</div>
-                      <div>Failed: {timelineIntegrity.campaign.failed}</div>
-                      <div>
-                        Cancelled: {timelineIntegrity.campaign.cancelled}
-                      </div>
-                      <div>
-                        Queued: {timelineIntegrity.campaign.queuedJobs}/
-                        {timelineIntegrity.campaign.plannedJobs}
-                      </div>
-                      <div
-                        className={timelineIntegrity.campaign.missingJobs > 0
-                          ? "text-red-500"
-                          : ""}
-                      >
-                        Missing: {timelineIntegrity.campaign.missingJobs}
-                      </div>
-                    </div>
-                    {typeof timelineIntegrity.campaign.progress?.phase ===
-                        "string" && (
-                      <div className="mt-2 text-muted-foreground">
-                        Current phase: {String(
-                          timelineIntegrity.campaign.progress.phase,
-                        )} · batch {Number(
-                          timelineIntegrity.campaign.progress.batchNumber ?? 1,
-                        )}/{timelineIntegrity.campaign.plannedJobs}
-                      </div>
-                    )}
-                    {timelineIntegrity.campaign.processedThrough && (
-                      <div className="mt-2 text-muted-foreground">
-                        Processed through {formatTimelineAuditDate(
-                          timelineIntegrity.campaign.processedThrough,
-                        )}
-                      </div>
-                    )}
-                    {timelineIntegrity.campaign.blockingReason && (
-                      <div
-                        className={`mt-2 rounded p-2 ${
-                          timelineVerificationRequired
-                            ? "bg-amber-500/5 text-amber-500"
-                            : "bg-red-500/5 text-red-500"
-                        }`}
-                      >
-                        {timelineIntegrity.campaign.blockingReason}
-                      </div>
-                    )}
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {timelineVerificationRequired && (
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            refreshTimelineIntegrityMutation.mutate()}
-                          disabled={refreshTimelineIntegrityMutation
-                            .isPending ||
-                            timelineIntegrity.snapshot?.state === "refreshing"}
-                        >
-                          <Search className="mr-2 h-3.5 w-3.5" />
-                          Run exact verification
-                        </Button>
+                      {hasTimelineSnapshot && (
+                        <div className="overflow-x-auto rounded-lg border">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Density bucket</TableHead>
+                                <TableHead className="text-right">
+                                  Buckets
+                                </TableHead>
+                                <TableHead className="text-right">
+                                  Stale
+                                </TableHead>
+                                <TableHead>Coverage</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {timelineIntegrity.histograms.map((histogram) => (
+                                <TableRow key={histogram.resolution}>
+                                  <TableCell className="font-mono text-xs">
+                                    {histogram.resolution}
+                                  </TableCell>
+                                  <TableCell className="text-right font-mono text-xs">
+                                    {histogram.buckets}
+                                  </TableCell>
+                                  <TableCell
+                                    className={`text-right font-mono text-xs ${
+                                      histogram.stale > 0
+                                        ? "text-amber-500"
+                                        : ""
+                                    }`}
+                                  >
+                                    {histogram.stale}
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">
+                                    {formatTimelineAuditDate(
+                                      histogram.firstStart,
+                                    )} — {formatTimelineAuditDate(
+                                      histogram.lastStart,
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )}
-                      {timelineIntegrity.campaign.canResume && (
-                        <Button
-                          size="sm"
-                          onClick={async () => {
-                            if (
-                              await confirmAction({
-                                title: "Resume Timeline rebuild?",
-                                description: `Resume from batch index ${
-                                  timelineIntegrity.campaign?.nextBatchIndex ??
-                                    0
-                                }. Missing continuations will recover automatically after this confirmation.`,
-                                actionLabel: "Resume campaign",
-                              })
-                            ) {
-                              resumeTimelineRebuildMutation.mutate(
-                                timelineIntegrity.campaign!.campaignId,
-                              );
-                            }
-                          }}
-                          disabled={resumeTimelineRebuildMutation.isPending}
-                        >
-                          <Play className="mr-2 h-3.5 w-3.5" />
-                          Resume from batch {timelineIntegrity.campaign
-                            .nextBatchIndex ?? 0}
-                        </Button>
+
+                      {timelineIntegrity.issues.length > 0 && (
+                        <div className="space-y-2">
+                          {timelineIntegrity.issues.map((issue) => (
+                            <div
+                              key={issue.code}
+                              className={`flex gap-2 rounded-md border p-3 text-xs ${
+                                issue.severity === "error"
+                                  ? "border-red-500/30 bg-red-500/5 text-red-500"
+                                  : "border-amber-500/30 bg-amber-500/5 text-amber-500"
+                              }`}
+                            >
+                              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                              <span>
+                                {issue.message}
+                                {issue.actionLabel && (
+                                  <span className="ml-2 font-medium">
+                                    Action: {issue.actionLabel}.
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       )}
-                      {timelineIntegrity.campaign.canPause && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            pauseTimelineRebuildMutation.mutate(
-                              timelineIntegrity.campaign!.campaignId,
+
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="space-y-3 rounded-lg border p-4">
+                          <div>
+                            <div className="text-sm font-medium">
+                              Transcription completion markers
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {timelineIntegrity.bookkeeping.checked
+                                ? `${
+                                  timelineIntegrity.bookkeeping
+                                    .eligibleChunks ?? 0
+                                } chunk(s) still have transcribed_at=null although their owning sequence is completed or empty.`
+                                : "Use this only when a completed transcription sequence may still contain chunks marked as not transcribed. Preview is read-only; if it finds 0, no action is needed."}
+                              {" "}
+                              Applying the repair changes only the completion
+                              marker. It never creates or edits transcript text.
+                            </p>
+                          </div>
+                          {timelineRepairPreview && (
+                            <div className="rounded bg-muted/50 p-2 text-xs">
+                              Preview: {timelineRepairPreview.eligibleChunks}
+                              {" "}
+                              eligible ·
+                              {timelineRepairPreview.applied
+                                ? ` ${timelineRepairPreview.modifiedChunks} repaired`
+                                : " no writes applied"}
+                            </div>
+                          )}
+                          {!timelineRepairPreview &&
+                            timelineIntegrity.lastBookkeepingRepair && (
+                            <div className="rounded bg-muted/50 p-2 text-xs">
+                              Last applied repair: {timelineIntegrity
+                                .lastBookkeepingRepair.modifiedChunks}{" "}
+                              marker(s) · {formatTimelineAuditDate(
+                                timelineIntegrity.lastBookkeepingRepair
+                                  .checkedAt,
+                              )} · {timelineIntegrity.lastBookkeepingRepair
+                                .durationMs} ms
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                previewTimelineBookkeepingMutation.mutate()}
+                              disabled={previewTimelineBookkeepingMutation
+                                .isPending ||
+                                applyTimelineBookkeepingMutation.isPending}
+                            >
+                              <Search className="mr-2 h-3.5 w-3.5" />
+                              Check markers
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={async () => {
+                                if (
+                                  await confirmAction({
+                                    title:
+                                      "Repair terminal transcription markers?",
+                                    description:
+                                      `Update transcribed_at for ${timelineRepairEligible} audio chunk(s) whose transcription sequence is already completed or empty. Transcript text and sequence state will not be changed.`,
+                                    actionLabel: "Apply marker repair",
+                                  })
+                                ) {
+                                  applyTimelineBookkeepingMutation.mutate();
+                                }
+                              }}
+                              disabled={timelineRepairEligible === 0 ||
+                                applyTimelineBookkeepingMutation.isPending ||
+                                previewTimelineBookkeepingMutation.isPending}
+                            >
+                              <Check className="mr-2 h-3.5 w-3.5" />
+                              Repair markers ({timelineRepairEligible})
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3 rounded-lg border p-4">
+                          <div>
+                            <div className="text-sm font-medium">
+                              Manual density repair
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Prefer the affected dates found by the check.
+                              Choose a period only when you know which dates
+                              changed. New imports do not start this repair
+                              automatically; run Check now after a large or
+                              historical import.
+                            </p>
+                          </div>
+                          {timelineRepairRanges.length > 0 && (
+                            <div className="space-y-2 rounded-md bg-muted/40 p-2 text-xs">
+                              <div className="font-medium">
+                                Suggested: {timelineRepairDays}{" "}
+                                affected day(s) in {timelineRepairRanges.length}
+                                {" "}
+                                range(s)
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 text-muted-foreground">
+                                {timelineRepairRanges.map((range) => (
+                                  <span
+                                    key={`${range.start}:${range.end}`}
+                                    className="rounded border px-1.5 py-0.5 font-mono"
+                                  >
+                                    {formatTimelineDay(range.start)} —{" "}
+                                    {formatTimelineDay(
+                                      new Date(
+                                        new Date(range.end).getTime() - 1,
+                                      )
+                                        .toISOString(),
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  void queueAffectedTimelineDates()}
+                                disabled={timelineCampaignBusy ||
+                                  timelineVerificationRequired ||
+                                  startTimelineRebuildMutation.isPending}
+                              >
+                                Repair affected dates
+                              </Button>
+                            </div>
+                          )}
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <div>
+                              <Label
+                                htmlFor="timeline-period-start"
+                                className="text-xs"
+                              >
+                                Start date (UTC)
+                              </Label>
+                              <Input
+                                id="timeline-period-start"
+                                type="date"
+                                className="mt-1 h-8 text-xs"
+                                value={timelinePeriodStart}
+                                onChange={(event) =>
+                                  setTimelinePeriodStart(event.target.value)}
+                              />
+                            </div>
+                            <div>
+                              <Label
+                                htmlFor="timeline-period-end"
+                                className="text-xs"
+                              >
+                                End date (UTC, inclusive)
+                              </Label>
+                              <Input
+                                id="timeline-period-end"
+                                type="date"
+                                className="mt-1 h-8 text-xs"
+                                value={timelinePeriodEnd}
+                                onChange={(event) =>
+                                  setTimelinePeriodEnd(event.target.value)}
+                              />
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void queueSelectedTimelinePeriod()}
+                              disabled={!timelinePeriodStart ||
+                                !timelinePeriodEnd ||
+                                timelineCampaignBusy ||
+                                timelineVerificationRequired ||
+                                startTimelineRebuildMutation.isPending}
+                            >
+                              Rebuild selected period
+                            </Button>
+                            <Button asChild variant="outline" size="sm">
+                              <Link
+                                to={timelineIntegrity.campaign
+                                  ? `/jobs?type=histRecalculation&campaignId=${timelineIntegrity.campaign.campaignId}`
+                                  : "/jobs?type=histRecalculation"}
+                              >
+                                View density jobs
+                              </Link>
+                            </Button>
+                          </div>
+                          <div className="border-t pt-3 text-xs text-muted-foreground">
+                            Rebuild all history only after a density schema
+                            change or when mismatches are widespread and cannot
+                            be localized. It runs in sequential 31-day jobs and
+                            can load MongoDB.
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="mt-1 h-7 px-2 text-xs"
+                              onClick={async () => {
+                                if (
+                                  await confirmAction({
+                                    title:
+                                      "Rebuild all Timeline density history?",
+                                    description:
+                                      "This replaces derived density buckets across the entire source history in 31-day jobs. Raw audio and transcript text remain unchanged.",
+                                    actionLabel: "Rebuild all history",
+                                  })
+                                ) {
+                                  startTimelineRebuildMutation.mutate(
+                                    undefined,
+                                  );
+                                }
+                              }}
+                              disabled={timelineCampaignBusy ||
+                                timelineVerificationRequired ||
+                                startTimelineRebuildMutation.isPending}
+                            >
+                              Rebuild all history
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {timelineIntegrity.campaign && (
+                        <div className="rounded-lg border p-4 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <span className="font-medium">
+                                Latest density repair
+                              </span>
+                              <Link
+                                className="ml-2 font-mono text-primary hover:underline"
+                                to={`/jobs?type=histRecalculation&campaignId=${timelineIntegrity.campaign.campaignId}`}
+                              >
+                                {timelineIntegrity.campaign.campaignId}
+                              </Link>
+                            </div>
+                            <Badge variant="secondary">
+                              {timelineIntegrity.campaign.status ===
+                                  "paused_legacy"
+                                ? "Stopped"
+                                : timelineVerificationRequired
+                                ? "verification required"
+                                : timelineIntegrity.campaign.status.replaceAll(
+                                  "_",
+                                  " ",
+                                )}
+                            </Badge>
+                          </div>
+                          <div className="mt-2 text-muted-foreground">
+                            Scope: {timelineIntegrity.campaign.mode ===
+                                "affected_dates"
+                              ? `${
+                                timelineIntegrity.campaign.ranges?.length ??
+                                  timelineIntegrity.campaign.plannedJobs
+                              } affected date range(s)`
+                              : timelineIntegrity.campaign.mode === "full"
+                              ? "all history"
+                              : "selected period"}
+                          </div>
+                          <div className="mt-2 text-muted-foreground">
+                            Worker {timelineIntegrity.campaign.workerType ??
+                              "histRecalculation"} · queue{" "}
+                            {timelineIntegrity.campaign.queue ??
+                              "jobs-histRecalculation"}
+                            {timelineIntegrity.campaign.activeJobId
+                              ? ` · job ${timelineIntegrity.campaign.activeJobId}`
+                              : ""}
+                          </div>
+                          <div className="mt-3 space-y-1">
+                            <Progress
+                              value={timelineIntegrity.campaign.plannedJobs > 0
+                                ? timelineIntegrity.campaign.completed /
+                                  timelineIntegrity.campaign.plannedJobs * 100
+                                : 0}
+                              className="h-2"
+                            />
+                            <div className="text-muted-foreground">
+                              {timelineIntegrity.campaign.status ===
+                                  "paused_legacy"
+                                ? `${timelineIntegrity.campaign.queuedJobs}/${timelineIntegrity.campaign.plannedJobs} batches · ${timelineIntegrity.campaign.missingJobs} not queued`
+                                : timelineIntegrity.campaign.plannedJobs > 0
+                                ? `${
+                                  Math.round(
+                                    timelineIntegrity.campaign.completed /
+                                      timelineIntegrity.campaign.plannedJobs *
+                                      100,
+                                  )
+                                }% complete`
+                                : "0% complete"}
+                            </div>
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                            <div>
+                              Completed: {timelineIntegrity.campaign.completed}
+                            </div>
+                            <div>
+                              Active: {timelineIntegrity.campaign.active}
+                            </div>
+                            <div>
+                              Waiting: {timelineIntegrity.campaign.waiting}
+                            </div>
+                            <div>
+                              Failed: {timelineIntegrity.campaign.failed}
+                            </div>
+                            <div>
+                              Cancelled: {timelineIntegrity.campaign.cancelled}
+                            </div>
+                            <div>
+                              Queued: {timelineIntegrity.campaign.queuedJobs}/
+                              {timelineIntegrity.campaign.plannedJobs}
+                            </div>
+                            <div
+                              className={timelineIntegrity.campaign
+                                  .missingJobs > 0
+                                ? "text-red-500"
+                                : ""}
+                            >
+                              Missing: {timelineIntegrity.campaign.missingJobs}
+                            </div>
+                          </div>
+                          {typeof timelineIntegrity.campaign.progress?.phase ===
+                              "string" && (
+                            <div className="mt-2 text-muted-foreground">
+                              Current phase: {String(
+                                timelineIntegrity.campaign.progress.phase,
+                              )} · batch {Number(
+                                timelineIntegrity.campaign.progress
+                                  .batchNumber ?? 1,
+                              )}/{timelineIntegrity.campaign.plannedJobs}
+                            </div>
+                          )}
+                          {timelineIntegrity.campaign.processedThrough && (
+                            <div className="mt-2 text-muted-foreground">
+                              Processed through {formatTimelineAuditDate(
+                                timelineIntegrity.campaign.processedThrough,
+                              )}
+                            </div>
+                          )}
+                          {timelineIntegrity.campaign.blockingReason && (
+                            <div
+                              className={`mt-2 rounded p-2 ${
+                                timelineVerificationRequired
+                                  ? "bg-amber-500/5 text-amber-500"
+                                  : "bg-red-500/5 text-red-500"
+                              }`}
+                            >
+                              {timelineIntegrity.campaign.blockingReason}
+                            </div>
+                          )}
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {timelineVerificationRequired && (
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  refreshTimelineIntegrityMutation.mutate()}
+                                disabled={refreshTimelineIntegrityMutation
+                                  .isPending ||
+                                  timelineIntegrity.snapshot?.state ===
+                                    "refreshing"}
+                              >
+                                <Search className="mr-2 h-3.5 w-3.5" />
+                                Run exact verification
+                              </Button>
                             )}
-                          disabled={pauseTimelineRebuildMutation.isPending}
-                        >
-                          Pause auto-recovery
-                        </Button>
+                            {timelineIntegrity.campaign.canResume && (
+                              <Button
+                                size="sm"
+                                onClick={async () => {
+                                  if (
+                                    await confirmAction({
+                                      title: "Resume Timeline rebuild?",
+                                      description: `Resume from batch index ${
+                                        timelineIntegrity.campaign
+                                          ?.nextBatchIndex ??
+                                          0
+                                      }. Missing continuations will recover automatically after this confirmation.`,
+                                      actionLabel: "Resume campaign",
+                                    })
+                                  ) {
+                                    resumeTimelineRebuildMutation.mutate(
+                                      timelineIntegrity.campaign!.campaignId,
+                                    );
+                                  }
+                                }}
+                                disabled={resumeTimelineRebuildMutation
+                                  .isPending}
+                              >
+                                <Play className="mr-2 h-3.5 w-3.5" />
+                                Resume from batch {timelineIntegrity.campaign
+                                  .nextBatchIndex ?? 0}
+                              </Button>
+                            )}
+                            {timelineIntegrity.campaign.canPause && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  pauseTimelineRebuildMutation.mutate(
+                                    timelineIntegrity.campaign!.campaignId,
+                                  )}
+                                disabled={pauseTimelineRebuildMutation
+                                  .isPending}
+                              >
+                                Pause auto-recovery
+                              </Button>
+                            )}
+                          </div>
+                          <div className="mt-2 text-muted-foreground">
+                            {formatTimelineAuditDate(
+                              timelineIntegrity.campaign.start,
+                            )} —{"  "}{formatTimelineAuditDate(
+                              timelineIntegrity.campaign.end,
+                            )}
+                          </div>
+                          {timelineIntegrity.campaign.finishedAt && (
+                            <div className="mt-2 text-muted-foreground">
+                              Finished {formatTimelineAuditDate(
+                                timelineIntegrity.campaign.finishedAt,
+                              )}
+                            </div>
+                          )}
+                          {timelineIntegrity.campaign.failures.map((
+                            failure,
+                          ) => (
+                            <div
+                              key={failure.jobId ?? failure.batchIndex}
+                              className="mt-2 rounded bg-red-500/5 p-2 text-red-500"
+                            >
+                              Batch {(failure.batchIndex ?? 0) + 1}:{" "}
+                              {failure.reason}
+                            </div>
+                          ))}
+                        </div>
                       )}
-                    </div>
-                    <div className="mt-2 text-muted-foreground">
-                      {formatTimelineAuditDate(
-                        timelineIntegrity.campaign.start,
-                      )} —{"  "}
-                      {formatTimelineAuditDate(timelineIntegrity.campaign.end)}
-                    </div>
-                    {timelineIntegrity.campaign.finishedAt && (
-                      <div className="mt-2 text-muted-foreground">
-                        Finished {formatTimelineAuditDate(
-                          timelineIntegrity.campaign.finishedAt,
-                        )}
-                      </div>
-                    )}
-                    {timelineIntegrity.campaign.failures.map((failure) => (
-                      <div
-                        key={failure.jobId ?? failure.batchIndex}
-                        className="mt-2 rounded bg-red-500/5 p-2 text-red-500"
-                      >
-                        Batch {(failure.batchIndex ?? 0) + 1}: {failure.reason}
-                      </div>
-                    ))}
-                  </div>
-                )}
 
-                <p className="text-[11px] text-muted-foreground">
-                  {timelineIntegrity.scope.note}
-                </p>
-              </>
-            )}
-          </CardContent>
+                      <p className="text-[11px] text-muted-foreground">
+                        {timelineIntegrity.scope.note}
+                      </p>
+                    </>
+                  )}
+              </div>
+            </SheetContent>
+          </Sheet>
         </Card>
 
         {/* Workers & Statistics */}
