@@ -2,9 +2,19 @@ import { assertEquals, assertThrows } from "jsr:@std/assert@^1.0.15";
 import {
   applyPositiveThresholdOverride,
   chooseCalibrationThresholds,
+  classifyCalibrationScore,
   evaluateCalibration,
   splitCalibrationRecordings,
 } from "./calibration.ts";
+
+Deno.test("calibration exposes the exact decision behind validation errors", () => {
+  assertEquals(classifyCalibrationScore(0.81, 0.8, 0.4), "identified");
+  assertEquals(classifyCalibrationScore(0.2, 0.8, 0.4), "rejected");
+  assertEquals(
+    classifyCalibrationScore(0.2, 0.8, -1, "uncertain_only"),
+    "uncertain",
+  );
+});
 
 Deno.test("calibration thresholds maximize safe automatic coverage", () => {
   const examples = [

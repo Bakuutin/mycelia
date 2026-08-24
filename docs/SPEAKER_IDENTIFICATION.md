@@ -520,21 +520,23 @@ Review queue содержит активные unclassified/uncertain segments:
 - undo удаляет последнее ручное решение;
 - **Skip** сохраняется как отдельное review-решение и оставляет segment вне
   training/calibration;
-- autoplay и shortcuts двигают очередь;
+- autoplay и shortcuts двигают очередь; три недавно выбранных других спикера
+  доступны отдельными кнопками и клавишами `1`–`3`, остальные остаются в
+  dropdown;
 - playback всегда координируется как один активный clip; видимый playhead и
   elapsed time сбрасываются при переходе к следующему segment;
 - review session, небольшое окно из 5/10/20 segments и текущая позиция
   сохраняются на backend, поэтому работу можно продолжить позже;
-- default 10-item window автоматически сменяется следующим после разметки всех
-  элементов; toggle **Rolling** разрешает оставить переход ручным;
+- default 10-item buffer автоматически сменяется следующим после разметки всех
+  элементов; это только preload, а не batch, который надо отдельно завершать;
 - завершение неполной session безопасно: уже сохранённые labels учитываются
   сразу, а unanswered segments могут попасть в следующую session;
 - compact list показывает все элементы текущего небольшого окна;
 - **Edit** доступен и для speaker label, и для Skip: старую метку можно заменить
   другим профилем или шумом;
-- **Reviewed history** показывает последние решения из всех сохранённых окон и
-  сессий. `Listen / edit` повторно открывает audio, а Timeline даёт временной
-  контекст;
+- **Latest saved label** всегда показывает последнее решение. **Show all**
+  раскрывает остальные решения newest-first; выбор строки повторно открывает
+  audio и редактирование, а Timeline даёт временной контекст;
 - соседние короткие segments одного anonymous speaker можно объединить в
   playback group и разметить одним подтверждённым batch.
 
@@ -568,7 +570,9 @@ validation recordings проверяют переносимость.
   выбранного профиля. Этот режим полезен после смены calibration и для поиска
   false positives.
 
-Затем выберите источник и сначала нажмите **Preview source**:
+Затем выполните два соседних шага: **1 · Check available audio**, после
+успешного счётчика — **2 · Start review**. Вторая кнопка остаётся disabled, пока
+выбранный source не зафиксирован:
 
 - **All matching recordings** — весь совместимый диапазон;
 - **Selected recordings** — сначала показывает найденные recordings, затем
@@ -578,7 +582,7 @@ validation recordings проверяют переносимость.
 - **Specific diarization generation** — только одна активная generation в том же
   embedding space.
 
-Preview показывает число подходящих segments и recordings, причины исключения
+Check показывает число подходящих segments и recordings, причины исключения
 коротких/дублирующихся фрагментов и до пяти проигрываемых примеров. Создание
 session использует именно зафиксированный preview scope: изменения периода,
 recordings, run или embedding space требуют нового preview. Эти фильтры также
@@ -657,18 +661,22 @@ labels из всех streams. Завершённый stream не теряет о
 reviewing** создаёт следующий, а старые ответы остаются доступны в Reviewed
 history.
 
-Карточки recordings показывают дату/время и label mix без raw ObjectId. Роли
-теперь называются по результату: **Learn** выбирает threshold, **Independent
-check** измеряет его на других recordings, **Not used** исключает recording
-только из текущего расчёта и не удаляет labels. **Review saved labels**
-открывает history, отфильтрованную по этой записи. Если Check содержит только
-Sky или только not-Sky, добавьте другой класс из другой записи.
+Карточки recordings показывают дату/время и label mix без raw ObjectId. Один
+селектор роли явно предлагает **Learn — choose threshold**, **Check — test
+unseen audio** или **Not used — ignore for now**. Последний вариант исключает
+recording только из текущего расчёта и не удаляет labels. **Review saved
+labels** открывает history, отфильтрованную по этой записи. Если Check содержит
+только Sky или только not-Sky, добавьте другой класс из другой записи.
 
 Смена роли recording пересчитывает preview автоматически. **Refresh result**
 повторяет server calculation с последними saved labels и показывает фактическую
 independent accuracy, false Sky matches и coverage. Это не сохраняет calibration
-и не запускает classification. Кнопка сохранения остаётся disabled, пока
-blockers не устранены; при сохранении backend повторно вычисляет метрики.
+и не запускает classification. **Review problem clips** раскрывает конкретные
+false-Sky и missed-Sky segments из Check с waveform, Timeline и тем же
+редактором label. Исправляйте только действительно ошибочную ручную метку; если
+метка верна, проблема относится к threshold/model, а не к review history. Кнопка
+сохранения остаётся disabled, пока blockers не устранены; при сохранении backend
+повторно вычисляет метрики.
 
 Сохранённая calibration считается рабочей только с
 `contractVersion=server-computed-v1`, server provenance, текущими profile

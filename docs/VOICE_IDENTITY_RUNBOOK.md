@@ -86,10 +86,12 @@ reuses stored diarization embeddings and does not rerun audio processing.
    not-Sky, plus borderline/mixed).
    - Use **Skip** for noise, clipped/ambiguous speech and overlapping speakers.
    - Use **Edit** to change any saved label or Skip.
-   - Use **Reviewed history** to reopen answers from older windows/sessions and
-     listen, correct the speaker, or replace the label with Skip.
-   - Assigning another speaker remembers that profile for the next segment and
-     moves recently used profiles to the top of profile selectors.
+   - **Latest saved label** is always visible; **Show all** opens the remaining
+     history newest-first. Select any row to listen, correct the speaker, or
+     replace the label with Skip.
+   - Assigning another speaker remembers it for the next segment. The three
+     recently used speakers appear as buttons and shortcuts `1`–`3`; every other
+     profile remains in the dropdown.
    - The waveform has one global active player and a visible playhead; changing
      the review segment stops and disposes the previous clip. The next three
      pending clips/groups are fetched into a bounded browser cache, so autoplay
@@ -124,7 +126,10 @@ reuses stored diarization embeddings and does not rerun audio processing.
    keeps labels saved but excludes that recording from the current calculation.
    Recording-role changes recalculate automatically. **Refresh result** repeats
    the same server calculation with the latest labels; it does not save a
-   calibration or classify history until the final Save action succeeds.
+   calibration or classify history until the final Save action succeeds. **Wrong
+   Sky results** opens the exact held-out clips behind the metric. A corrected
+   label triggers a fresh preview; a label that is already correct should stay
+   unchanged because it indicates a matcher/threshold error.
 4. Open `/jobs?type=speakerIdentity` and press play on the worker. The launcher
    resolves primary Sky, its current revision, the usable server calibration,
    and a compatible active run without raw IDs. Run the 24-hour pilot first and

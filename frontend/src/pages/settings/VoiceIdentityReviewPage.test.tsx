@@ -77,6 +77,13 @@ const emptyPreview = {
   blockers: ["100 more compatible labels needed in total"],
   canValidate: false,
 };
+const validationIssueSegment = {
+  _id: "66b000000000000000000099",
+  original_id: "66b000000000000000000012",
+  start: "2026-08-09T10:05:00.000Z",
+  end: "2026-08-09T10:05:04.000Z",
+  speaker: "SPEAKER_01",
+};
 const readyPreview = {
   ...emptyPreview,
   counts: {
@@ -122,6 +129,24 @@ const readyPreview = {
     positiveRecall: 0.8,
     negativePrecision: 1,
     negativeRecall: 0.65,
+    falsePositive: 1,
+  },
+  validationIssues: {
+    falsePositive: [{
+      kind: "false_positive",
+      segmentId: validationIssueSegment._id,
+      recordingId: validationIssueSegment.original_id,
+      decisionId: "66b000000000000000000098",
+      sessionId: "66b000000000000000000097",
+      assignedProfileId: null,
+      excludedProfileIds: [profile._id],
+      updatedAt: "2026-08-09T10:06:00.000Z",
+      label: "negative",
+      score: 0.81,
+      decision: "identified",
+      segment: validationIssueSegment,
+    }],
+    missedPositive: [],
   },
   blockers: [],
   canValidate: true,
@@ -604,6 +629,11 @@ describe("VoiceIdentityReviewPage", () => {
     expect(screen.getByText("How this check works")).toBeInTheDocument();
     expect(screen.getByText("Independent check")).toBeInTheDocument();
     expect(screen.getByText("0.720")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Review 1 problem clips",
+    }));
+    expect(screen.getByText(/Labeled Not Sky, matcher predicted Sky/i))
+      .toBeInTheDocument();
     expect(screen.queryByLabelText(/positive threshold/i)).not
       .toBeInTheDocument();
     expect(screen.getByRole("button", {

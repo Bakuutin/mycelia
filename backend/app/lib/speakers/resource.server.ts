@@ -21,6 +21,7 @@ import {
 import {
   applyPositiveThresholdOverride,
   chooseCalibrationThresholds,
+  classifyCalibrationScore,
   cosineSimilarity,
   evaluateCalibration,
   splitCalibrationRecordings,
@@ -1277,10 +1278,14 @@ async function computeCalibrationPreview(
       sort: { updatedAt: -1, createdAt: -1 },
       limit: 20_000,
       projection: {
+        decisionId: 1,
+        sessionId: 1,
         segmentId: 1,
         originalId: 1,
         profileId: 1,
         excludedProfileIds: 1,
+        updatedAt: 1,
+        createdAt: 1,
       },
     },
   }) as any[];
@@ -1302,6 +1307,8 @@ async function computeCalibrationPreview(
         embeddingSpaceId: 1,
         original_id: 1,
         original: 1,
+        runId: 1,
+        speaker: 1,
         start: 1,
         end: 1,
       },
@@ -1318,6 +1325,12 @@ async function computeCalibrationPreview(
     score: number;
     start: Date;
     end: Date;
+    decisionId: string | null;
+    sessionId: string | null;
+    assignedProfileId: string | null;
+    excludedProfileIds: string[];
+    updatedAt: Date | null;
+    segment: Record<string, unknown>;
   }> = [];
   let incompatible = 0;
   for (const [segmentId, annotation] of latestBySegment) {
@@ -1334,6 +1347,7 @@ async function computeCalibrationPreview(
       id: unknown,
     ) => String(id) === profileId);
     if (!isPositive && !isNegative) continue;
+    const { embedding: _embedding, ...publicSegment } = segment;
     examples.push({
       segmentId,
       recordingId: String(
@@ -1343,6 +1357,18 @@ async function computeCalibrationPreview(
       score: cosineSimilarity(profile.embedding, segment.embedding),
       start: new Date(segment.start),
       end: new Date(segment.end),
+      decisionId: ObjectId.isValid(String(annotation.decisionId ?? ""))
+        ? String(annotation.decisionId)
+        : null,
+      sessionId: ObjectId.isValid(String(annotation.sessionId ?? ""))
+        ? String(annotation.sessionId)
+        : null,
+      assignedProfileId: ObjectId.isValid(String(annotation.profileId ?? ""))
+        ? String(annotation.profileId)
+        : null,
+      excludedProfileIds: (annotation.excludedProfileIds ?? []).map(String),
+      updatedAt: annotation.updatedAt ?? annotation.createdAt ?? null,
+      segment: publicSegment,
     });
   }
   const recordingMap = new Map<string, any>();
@@ -1407,6 +1433,41 @@ async function computeCalibrationPreview(
       thresholds.negativeDecisionMode,
     )
     : null;
+  const validationIssues = thresholds
+    ? {
+      falsePositive: validationExamples.filter((example) =>
+        example.label === "negative" &&
+        classifyCalibrationScore(
+            example.score,
+            thresholds.positiveThreshold,
+            thresholds.negativeThreshold,
+            thresholds.negativeDecisionMode,
+          ) === "identified"
+      ).sort((a, b) => b.score - a.score).slice(0, 200).map((example) => ({
+        kind: "false_positive",
+        ...example,
+        decision: "identified",
+      })),
+      missedPositive: validationExamples.filter((example) =>
+        example.label === "positive" &&
+        classifyCalibrationScore(
+            example.score,
+            thresholds.positiveThreshold,
+            thresholds.negativeThreshold,
+            thresholds.negativeDecisionMode,
+          ) !== "identified"
+      ).sort((a, b) => b.score - a.score).slice(0, 200).map((example) => ({
+        kind: "missed_positive",
+        ...example,
+        decision: classifyCalibrationScore(
+          example.score,
+          thresholds.positiveThreshold,
+          thresholds.negativeThreshold,
+          thresholds.negativeDecisionMode,
+        ),
+      })),
+    }
+    : { falsePositive: [], missedPositive: [] };
   const positive = examples.filter((item) => item.label === "positive").length;
   const negative = examples.length - positive;
   const blockers: string[] = [];
@@ -1478,6 +1539,7 @@ async function computeCalibrationPreview(
     positiveThresholdSource: thresholdSelection.positiveThresholdSource,
     calibrationMetrics,
     validationMetrics,
+    validationIssues,
     scoreDistribution: {
       calibrationPositive: calibrationExamples.filter((item) =>
         item.label === "positive"
