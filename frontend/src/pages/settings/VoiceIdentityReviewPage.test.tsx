@@ -7,6 +7,7 @@ import VoiceIdentityReviewPage from "./VoiceIdentityReviewPage";
 
 vi.mock("@/lib/api", () => ({ callResource: vi.fn() }));
 vi.mock("./VoiceIdentityReviewPlayer", () => ({
+  buildVoiceReviewAudioUrl: () => "/api/audio/review",
   VoiceIdentityReviewPlayer: (props: any) => (
     <div data-testid="review-player">
       <span>active:{String(props.segment._id)}</span>
@@ -144,7 +145,7 @@ describe("VoiceIdentityReviewPage", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps session discovery stable and offers an explicit first session", async () => {
+  it("shows a continuous review stream instead of a required 10-item batch", async () => {
     let sessionListCalls = 0;
     mockCallResource.mockImplementation((resource, input: any) => {
       if (resource === "mongo") return Promise.resolve([profile]);
@@ -162,6 +163,44 @@ describe("VoiceIdentityReviewPage", () => {
       if (input.action === "list-review-sessions") {
         sessionListCalls += 1;
         return Promise.resolve([]);
+      }
+      if (input.action === "preview-review-session") {
+        return Promise.resolve({
+          sourceMode: "all_matching",
+          range: {
+            start: "2026-08-07T10:00:00.000Z",
+            end: "2026-08-21T10:00:00.000Z",
+          },
+          embeddingSpaceIds: ["space-v1"],
+          runIds: [],
+          recordingIds: [],
+          scope: {
+            sourceMode: "all_matching",
+            targetProfileIds: [profile._id],
+            embeddingSpaceIds: ["space-v1"],
+            runIds: [],
+            recordingIds: [],
+            candidateMode: "reviewable",
+            quality: { minDurationSeconds: 1, deduplicateOverlaps: true },
+            rangeMode: "fixed",
+            start: "2026-08-07T10:00:00.000Z",
+            end: "2026-08-21T10:00:00.000Z",
+          },
+          counts: {
+            eligibleSegments: 42,
+            recordings: 3,
+            scannedSegments: 42,
+            capped: false,
+          },
+          qualityStats: {
+            input: 42,
+            accepted: 42,
+            shortExcluded: 0,
+            duplicateExcluded: 0,
+          },
+          recordings: [],
+          sampleSegments: [],
+        });
       }
       if (input.action === "create-review-session") {
         return Promise.resolve({
@@ -196,26 +235,25 @@ describe("VoiceIdentityReviewPage", () => {
 
     renderPage();
 
-    await screen.findByRole("button", { name: "Start review" });
+    await screen.findByRole("button", {
+      name: "Check available audio",
+    });
     await waitFor(() => expect(sessionListCalls).toBe(1));
-    expect(screen.getByText(/Saved sessions resume on any device/i))
+    expect(screen.getByText(/One continuous stream/i))
       .toBeInTheDocument();
     expect(screen.getByRole("option", { name: "No saved sessions" }))
       .toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     await waitFor(() =>
-      expect(mockCallResource).toHaveBeenCalledWith(
-        "speaker-segments",
-        expect.objectContaining({
-          action: "create-review-session",
-          limit: 10,
-          preferences: expect.objectContaining({
-            autoAdvanceWindow: true,
-          }),
-        }),
-      )
+      expect(document.body.textContent).toContain("Clips then keep flowing")
     );
+    expect(document.body.textContent).toContain(
+      "The buffer size below is only a loading detail",
+    );
+    expect(screen.queryByText("Rolling window")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Advanced loading settings"));
+    expect(screen.getByRole("option", { name: "10 clips · recommended" }))
+      .toBeInTheDocument();
   });
 
   it("runs the global identity classification only from the manual button", async () => {
@@ -561,7 +599,10 @@ describe("VoiceIdentityReviewPage", () => {
     renderPage();
 
     await screen.findByText("Minimum reached");
+    await screen.findByText("Ready to save and classify");
     await screen.findByText("98.5%");
+    expect(screen.getByText("How this check works")).toBeInTheDocument();
+    expect(screen.getByText("Independent check")).toBeInTheDocument();
     expect(screen.getByText("0.720")).toBeInTheDocument();
     expect(screen.queryByLabelText(/positive threshold/i)).not
       .toBeInTheDocument();

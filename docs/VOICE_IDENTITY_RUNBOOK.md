@@ -10,13 +10,13 @@
 - Keep manual labels in `speaker_annotations`; do not rewrite transcript text.
 
 Live and retroactive convenience matching must receive exact embedding
-provenance. They compare a segment only with profiles whose
-`embeddingSpaceId` equals the admitted route/segment space, and skip automatic
-matching when that value is missing or legacy. New `matched_speaker` values
-record the profile revision and embedding space used. Older automatic matches
-without those fields remain unverified legacy candidates: do not backfill a
-current revision onto them, because that would not prove which profile revision
-made the original decision.
+provenance. They compare a segment only with profiles whose `embeddingSpaceId`
+equals the admitted route/segment space, and skip automatic matching when that
+value is missing or legacy. New `matched_speaker` values record the profile
+revision and embedding space used. Older automatic matches without those fields
+remain unverified legacy candidates: do not backfill a current revision onto
+them, because that would not prove which profile revision made the original
+decision.
 
 `matched_speaker` from generic live/retroactive matching is not a calibrated
 identity decision. Only a compatible `speakerIdentity` result produced from a
@@ -74,9 +74,13 @@ the displayed `label → fit → validate → save → classify` sequence; calib
 reuses stored diarization embeddings and does not rerun audio processing.
 
 1. `/settings/voice-identity`: re-enroll Sky from all saved samples.
-2. Create an **Uncertain + unclassified** review session. Its default 10-item
-   rolling windows (selectable as 5/10/20) are stratified across source
-   recordings and load continuously. Keep the default **Clear speech · ≥1s ·
+2. Start an **Uncertain + unclassified** continuous review stream. **Check
+   available audio** freezes the selected source, then **Start continuous
+   review** begins labeling. The default 10-item buffer (advanced options allow
+   5/10/20) is only for preloading: with **Continuous** enabled, the next buffer
+   arrives automatically and there is no batch-complete button. The stream
+   progress is separate from the calibration total, which includes usable labels
+   from every saved stream. Keep the default **Clear speech · ≥1s ·
    deduplicate** quality filter; use **All fragments** only to diagnose raw
    diarization. Label at least 100 compatible pilot segments (40 Sky, 40
    not-Sky, plus borderline/mixed).
@@ -92,9 +96,9 @@ reuses stored diarization embeddings and does not rerun audio processing.
      normally starts without another audio download wait.
    - Choose the source explicitly: all matching recordings, selected recordings,
      an exact Timeline selection, or one active compatible diarization
-     generation. Run **Preview source** before creation; it shows counts,
-     quality exclusions, recordings, and playable samples. The server freezes
-     that exact scope and reapplies it to every rolling window.
+     generation. **Check available audio** shows counts, quality exclusions,
+     recordings, and playable samples. The server freezes that exact scope and
+     reapplies it to every preload buffer.
 3. Choose the required independent Check precision and save the calculated
    thresholds. Use `98%` for production, a `95%`/`90%` preset for a provisional
    run, or a custom `90–100%` value in `0.5%` steps. This control is a precision
@@ -113,11 +117,14 @@ reuses stored diarization embeddings and does not rerun audio processing.
    usually reduces matches, coverage, and recall, but may improve precision. The
    preview marks this as `positiveThresholdSource=operator_stricter`; **Use
    server recommendation**, changing the precision target, or changing the
-   Fit/Check split clears the override. This tuning is disabled for production
+   Learn/Check split clears the override. This tuning is disabled for production
    because choosing a threshold after seeing Check metrics would contaminate
-   independent validation. **Recalculate preview** is a visible server
-   calculation; it does not save a calibration until the final Save action
-   succeeds.
+   independent validation. **Learn** recordings choose the threshold;
+   **Independent check** recordings measure it on unseen audio; **Not used**
+   keeps labels saved but excludes that recording from the current calculation.
+   Recording-role changes recalculate automatically. **Refresh result** repeats
+   the same server calculation with the latest labels; it does not save a
+   calibration or classify history until the final Save action succeeds.
 4. Open `/jobs?type=speakerIdentity` and press play on the worker. The launcher
    resolves primary Sky, its current revision, the usable server calibration,
    and a compatible active run without raw IDs. Run the 24-hour pilot first and
@@ -138,14 +145,14 @@ profile job finishes, deferred diarization is admitted automatically. Jobs and
 Job Details show the admission priority and waiting state.
 
 Admission is event-driven: completion, failure, cancellation, or creation of a
-deferred continuation immediately drains the shared pool in priority/FIFO
-order. The 60-second maintenance pass is only a recovery watchdog for missed
-events. Backend logs emit structured `[DIARIZATION_ADMISSION]` drain records
-with admission wait time and occupied/free slot counts; while backlog exists,
-all slots becoming idle for more than a few seconds is a fault signal.
-After the priority/FIFO drain, terminal events also trigger ordinary historical
-work for any still-free compatible route using BullMQ reservations rather than
-persisted waiting counts. The periodic maintenance drain is only a watchdog.
+deferred continuation immediately drains the shared pool in priority/FIFO order.
+The 60-second maintenance pass is only a recovery watchdog for missed events.
+Backend logs emit structured `[DIARIZATION_ADMISSION]` drain records with
+admission wait time and occupied/free slot counts; while backlog exists, all
+slots becoming idle for more than a few seconds is a fault signal. After the
+priority/FIFO drain, terminal events also trigger ordinary historical work for
+any still-free compatible route using BullMQ reservations rather than persisted
+waiting counts. The periodic maintenance drain is only a watchdog.
 
 Historical `missing` continuations prefer their previous diarizator but may use
 another free route only when `modelId`, `modelVersion`, and `embeddingSpaceId`
