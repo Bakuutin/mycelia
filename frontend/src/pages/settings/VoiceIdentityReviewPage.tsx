@@ -488,6 +488,8 @@ export default function VoiceIdentityReviewPage() {
   const [calibrationEditingItem, setCalibrationEditingItem] = useState<
     ReviewHistoryItem | null
   >(null);
+  const [calibrationEditingPlayOnMount, setCalibrationEditingPlayOnMount] =
+    useState(false);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [autoPlayNext, setAutoPlayNext] = useState(() => {
@@ -996,6 +998,7 @@ export default function VoiceIdentityReviewPage() {
       queryClient.setQueryData(reviewHistoryQueryKey, response);
       setHistoryEditingItem(null);
       setCalibrationEditingItem(null);
+      setCalibrationEditingPlayOnMount(false);
       void refetch();
       void refetchIdentityStatus();
       void queryClient.invalidateQueries({
@@ -1516,6 +1519,19 @@ export default function VoiceIdentityReviewPage() {
     counts.set(issue.recordingId, current);
     return counts;
   }, new Map<string, { falsePositive: number; missedPositive: number }>());
+  const calibrationEditingIndex = calibrationEditingItem
+    ? visibleCalibrationIssues.findIndex((issue) =>
+      issue.decisionId === calibrationEditingItem.decisionId &&
+      issue.segmentId === normalizeObjectId(calibrationEditingItem.segment._id)
+    )
+    : -1;
+  const openCalibrationIssueAt = (index: number) => {
+    const issue = visibleCalibrationIssues[index];
+    if (!issue?.decisionId) return;
+    useAudioPlaybackStore.getState().stopActive();
+    setCalibrationEditingPlayOnMount(true);
+    setCalibrationEditingItem(calibrationIssueToHistoryItem(issue));
+  };
   const activeId = normalizeObjectId(reviewSession?.activeSegmentId) ??
     normalizeObjectId(
       windowItems.find((item) => item.status === "pending")?.segmentId,
@@ -3668,6 +3684,7 @@ export default function VoiceIdentityReviewPage() {
                         setShowCalibrationProblems((value) => !value);
                         setCalibrationProblemRecordingId(null);
                         setCalibrationEditingItem(null);
+                        setCalibrationEditingPlayOnMount(false);
                         useAudioPlaybackStore.getState().stopActive();
                       }}
                     >
@@ -3676,6 +3693,28 @@ export default function VoiceIdentityReviewPage() {
                         : "Review problem clips"}
                     </Button>
                   </div>
+                  {labelGateReady && !canValidate && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/20 bg-background/70 px-3 py-2 text-xs">
+                      <p className="max-w-3xl text-muted-foreground">
+                        <strong className="text-foreground">
+                          {calibrationLabelCounts.total}{" "}
+                          labels are enough to diagnose this result.
+                        </strong>{" "}
+                        If the problem labels are correct, audit the{" "}
+                        {primary?.sample_count ?? 0}{" "}
+                        saved Sky samples for a second speaker, overlap, noise,
+                        or long silence. Sky is currently one averaged profile
+                        embedding, so one outlier can move every score. Replace
+                        only bad samples, rebuild Sky, then refresh this check;
+                        your labels stay saved.
+                      </p>
+                      <Button asChild type="button" size="sm" variant="outline">
+                        <Link to="/settings/voice-profiles">
+                          Audit Sky samples
+                        </Link>
+                      </Button>
+                    </div>
+                  )}
                   {showCalibrationProblems && (
                     <div className="mt-3 space-y-3 border-t border-amber-500/20 pt-3">
                       <div className="flex flex-wrap gap-2">
@@ -3689,6 +3728,7 @@ export default function VoiceIdentityReviewPage() {
                             setCalibrationProblemKind("falsePositive");
                             setCalibrationProblemRecordingId(null);
                             setCalibrationEditingItem(null);
+                            setCalibrationEditingPlayOnMount(false);
                           }}
                         >
                           Wrong “{primary?.name ?? "Me"}” ·{" "}
@@ -3704,6 +3744,7 @@ export default function VoiceIdentityReviewPage() {
                             setCalibrationProblemKind("missedPositive");
                             setCalibrationProblemRecordingId(null);
                             setCalibrationEditingItem(null);
+                            setCalibrationEditingPlayOnMount(false);
                           }}
                         >
                           Missed “{primary?.name ?? "Me"}” ·{" "}
@@ -3723,100 +3764,151 @@ export default function VoiceIdentityReviewPage() {
                       </div>
 
                       {calibrationEditingItem && (
-                        <VoiceIdentityReviewPlayer
-                          key={"calibration-" +
-                            calibrationEditingItem.decisionId}
-                          segment={calibrationEditingItem.segment}
-                          profileName={reviewProfile?.name ?? "target profile"}
-                          profileOptions={allProfileOptions}
-                          position={1}
-                          remaining={0}
-                          sessionAnswered={1}
-                          sessionTotal={1}
-                          pending={reviseHistory.isPending ||
-                            createReviewProfile.isPending}
-                          autoPlayNext={false}
-                          playOnMount={false}
-                          canPrevious={false}
-                          canNext={false}
-                          canUndo={false}
-                          canEdit={false}
-                          editingLabel={reviewHistoryLabel(
-                            calibrationEditingItem,
-                          )}
-                          alternateProfiles={alternateProfiles}
-                          creatingProfile={createReviewProfile.isPending}
-                          onDecision={(state) => {
-                            if (!reviewProfileId) return;
-                            if (state === "skip") {
-                              reviseHistory.mutate({
-                                item: calibrationEditingItem,
-                                outcome: "skipped",
-                              });
-                            } else if (state === "me") {
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-2">
+                            <span className="text-sm font-medium">
+                              Problem {calibrationEditingIndex + 1} of{" "}
+                              {visibleCalibrationIssues.length}
+                            </span>
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={calibrationEditingIndex <= 0 ||
+                                  reviseHistory.isPending}
+                                onClick={() =>
+                                  openCalibrationIssueAt(
+                                    calibrationEditingIndex - 1,
+                                  )}
+                              >
+                                Previous problem
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={calibrationEditingIndex < 0 ||
+                                  calibrationEditingIndex >=
+                                    visibleCalibrationIssues.length - 1 ||
+                                  reviseHistory.isPending}
+                                onClick={() =>
+                                  openCalibrationIssueAt(
+                                    calibrationEditingIndex + 1,
+                                  )}
+                              >
+                                Next problem · autoplay
+                              </Button>
+                            </div>
+                          </div>
+                          <VoiceIdentityReviewPlayer
+                            key={"calibration-" +
+                              calibrationEditingItem.decisionId}
+                            segment={calibrationEditingItem.segment}
+                            profileName={reviewProfile?.name ??
+                              "target profile"}
+                            profileOptions={allProfileOptions}
+                            position={calibrationEditingIndex + 1}
+                            remaining={Math.max(
+                              0,
+                              visibleCalibrationIssues.length -
+                                calibrationEditingIndex - 1,
+                            )}
+                            sessionAnswered={calibrationEditingIndex + 1}
+                            sessionTotal={visibleCalibrationIssues.length}
+                            pending={reviseHistory.isPending ||
+                              createReviewProfile.isPending}
+                            autoPlayNext={false}
+                            playOnMount={calibrationEditingPlayOnMount}
+                            canPrevious={calibrationEditingIndex > 0}
+                            canNext={calibrationEditingIndex >= 0 &&
+                              calibrationEditingIndex <
+                                visibleCalibrationIssues.length - 1}
+                            canUndo={false}
+                            canEdit={false}
+                            editingLabel={reviewHistoryLabel(
+                              calibrationEditingItem,
+                            )}
+                            alternateProfiles={alternateProfiles}
+                            creatingProfile={createReviewProfile.isPending}
+                            onDecision={(state) => {
+                              if (!reviewProfileId) return;
+                              if (state === "skip") {
+                                reviseHistory.mutate({
+                                  item: calibrationEditingItem,
+                                  outcome: "skipped",
+                                });
+                              } else if (state === "me") {
+                                reviseHistory.mutate({
+                                  item: calibrationEditingItem,
+                                  outcome: "assigned",
+                                  assignedProfileId: reviewProfileId,
+                                });
+                              } else {
+                                reviseHistory.mutate({
+                                  item: calibrationEditingItem,
+                                  outcome: "assigned",
+                                  excludedProfileIds: [reviewProfileId],
+                                });
+                              }
+                            }}
+                            onAssignProfile={(assignedProfileId) => {
+                              if (!reviewProfileId) return;
+                              rememberAssignedProfile(assignedProfileId);
                               reviseHistory.mutate({
                                 item: calibrationEditingItem,
                                 outcome: "assigned",
-                                assignedProfileId: reviewProfileId,
-                              });
-                            } else {
-                              reviseHistory.mutate({
-                                item: calibrationEditingItem,
-                                outcome: "assigned",
+                                assignedProfileId,
                                 excludedProfileIds: [reviewProfileId],
                               });
-                            }
-                          }}
-                          onAssignProfile={(assignedProfileId) => {
-                            if (!reviewProfileId) return;
-                            rememberAssignedProfile(assignedProfileId);
-                            reviseHistory.mutate({
-                              item: calibrationEditingItem,
-                              outcome: "assigned",
-                              assignedProfileId,
-                              excludedProfileIds: [reviewProfileId],
-                            });
-                          }}
-                          onCreateProfile={async (name) => {
-                            if (!reviewProfileId) return;
-                            const segmentId = normalizeObjectId(
-                              calibrationEditingItem.segment._id,
-                            );
-                            if (!segmentId) {
-                              throw new Error("Segment is unavailable");
-                            }
-                            const created = await createReviewProfile
-                              .mutateAsync({ name, segmentIds: [segmentId] });
-                            const assignedProfileId = normalizeObjectId(
-                              created._id,
-                            );
-                            if (!assignedProfileId) {
-                              throw new Error(
-                                "New speaker profile has no valid ID",
+                            }}
+                            onCreateProfile={async (name) => {
+                              if (!reviewProfileId) return;
+                              const segmentId = normalizeObjectId(
+                                calibrationEditingItem.segment._id,
                               );
-                            }
-                            rememberAssignedProfile(assignedProfileId);
-                            await reviseHistory.mutateAsync({
-                              item: calibrationEditingItem,
-                              outcome: "assigned",
-                              assignedProfileId,
-                              excludedProfileIds: [reviewProfileId],
-                            });
-                          }}
-                          onPrevious={() => {}}
-                          onNext={() => {}}
-                          onUndo={() => {}}
-                          onEdit={() => {}}
-                          onCancelEdit={() => {
-                            useAudioPlaybackStore.getState().stopActive();
-                            setCalibrationEditingItem(null);
-                          }}
-                          onAutoPlayChange={() => {}}
-                        />
+                              if (!segmentId) {
+                                throw new Error("Segment is unavailable");
+                              }
+                              const created = await createReviewProfile
+                                .mutateAsync({ name, segmentIds: [segmentId] });
+                              const assignedProfileId = normalizeObjectId(
+                                created._id,
+                              );
+                              if (!assignedProfileId) {
+                                throw new Error(
+                                  "New speaker profile has no valid ID",
+                                );
+                              }
+                              rememberAssignedProfile(assignedProfileId);
+                              await reviseHistory.mutateAsync({
+                                item: calibrationEditingItem,
+                                outcome: "assigned",
+                                assignedProfileId,
+                                excludedProfileIds: [reviewProfileId],
+                              });
+                            }}
+                            onPrevious={() =>
+                              openCalibrationIssueAt(
+                                calibrationEditingIndex - 1,
+                              )}
+                            onNext={() =>
+                              openCalibrationIssueAt(
+                                calibrationEditingIndex + 1,
+                              )}
+                            onUndo={() => {}}
+                            onEdit={() => {}}
+                            onCancelEdit={() => {
+                              useAudioPlaybackStore.getState().stopActive();
+                              setCalibrationEditingItem(null);
+                              setCalibrationEditingPlayOnMount(false);
+                            }}
+                            onAutoPlayChange={() => {}}
+                          />
+                        </div>
                       )}
 
                       <div className="max-h-[24rem] overflow-y-auto rounded-md border bg-background">
-                        {visibleCalibrationIssues.map((issue) => {
+                        {visibleCalibrationIssues.map((issue, issueIndex) => {
                           const duration = Math.max(
                             0,
                             (new Date(issue.segment.end).getTime() -
@@ -3839,12 +3931,8 @@ export default function VoiceIdentityReviewPage() {
                                 type="button"
                                 className="min-w-0 text-left"
                                 disabled={!issue.decisionId}
-                                onClick={() => {
-                                  useAudioPlaybackStore.getState().stopActive();
-                                  setCalibrationEditingItem(
-                                    calibrationIssueToHistoryItem(issue),
-                                  );
-                                }}
+                                onClick={() =>
+                                  openCalibrationIssueAt(issueIndex)}
                               >
                                 <span className="block truncate font-medium">
                                   {new Date(issue.segment.start)
@@ -3878,12 +3966,8 @@ export default function VoiceIdentityReviewPage() {
                                 size="sm"
                                 variant="ghost"
                                 disabled={!issue.decisionId}
-                                onClick={() => {
-                                  useAudioPlaybackStore.getState().stopActive();
-                                  setCalibrationEditingItem(
-                                    calibrationIssueToHistoryItem(issue),
-                                  );
-                                }}
+                                onClick={() =>
+                                  openCalibrationIssueAt(issueIndex)}
                               >
                                 Listen / fix
                               </Button>
@@ -4215,6 +4299,7 @@ export default function VoiceIdentityReviewPage() {
                                   );
                                   setShowCalibrationProblems(true);
                                   setCalibrationEditingItem(null);
+                                  setCalibrationEditingPlayOnMount(false);
                                 }}
                               >
                                 {recordingIssueTotal}{" "}

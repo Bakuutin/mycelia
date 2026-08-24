@@ -129,7 +129,12 @@ reuses stored diarization embeddings and does not rerun audio processing.
    calibration or classify history until the final Save action succeeds. **Wrong
    Sky results** opens the exact held-out clips behind the metric. A corrected
    label triggers a fresh preview; a label that is already correct should stay
-   unchanged because it indicates a matcher/threshold error.
+   unchanged because it indicates a matcher/threshold error. Inside that list,
+   **Previous problem** and **Next problem · autoplay** move through the
+   held-out clips without closing the editor; the next clip starts playing
+   immediately. The recent-speaker shortcuts `1`–`3` remain active after
+   clicking the player or an action button, but are intentionally disabled while
+   typing in an input.
 4. Open `/jobs?type=speakerIdentity` and press play on the worker. The launcher
    resolves primary Sky, its current revision, the usable server calibration,
    and a compatible active run without raw IDs. Run the 24-hour pilot first and

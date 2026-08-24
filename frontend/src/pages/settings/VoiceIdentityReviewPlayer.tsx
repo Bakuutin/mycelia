@@ -157,6 +157,12 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   );
 }
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(
+    target.closest("input, textarea, select, [contenteditable='true']"),
+  );
+}
+
 function durationSeconds(segment: VoiceIdentityReviewSegment): number {
   const start = new Date(segment.start).getTime();
   const end = new Date(segment.end).getTime();
@@ -264,14 +270,13 @@ export function VoiceIdentityReviewPlayer({
   useEffect(() => {
     if (!shortcutsEnabled) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        isInteractiveTarget(event.target) ||
-        isInteractiveTarget(document.activeElement)
-      ) return;
       const command = getReviewShortcut(event.key);
       if (!command) return;
       if (typeof command === "object") {
-        if (pending) return;
+        if (
+          pending || isTypingTarget(event.target) ||
+          isTypingTarget(document.activeElement)
+        ) return;
         const profile = alternateProfiles[command.index];
         if (profile) {
           event.preventDefault();
@@ -279,6 +284,10 @@ export function VoiceIdentityReviewPlayer({
         }
         return;
       }
+      if (
+        isInteractiveTarget(event.target) ||
+        isInteractiveTarget(document.activeElement)
+      ) return;
       if (command === "play") {
         event.preventDefault();
         playerRef.current?.togglePlayback();

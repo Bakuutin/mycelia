@@ -522,7 +522,8 @@ Review queue содержит активные unclassified/uncertain segments:
   training/calibration;
 - autoplay и shortcuts двигают очередь; три недавно выбранных других спикера
   доступны отдельными кнопками и клавишами `1`–`3`, остальные остаются в
-  dropdown;
+  dropdown; цифровые shortcuts работают и после клика по плееру/кнопке, но не
+  перехватываются во время ввода текста;
 - playback всегда координируется как один активный clip; видимый playhead и
   elapsed time сбрасываются при переходе к следующему segment;
 - review session, небольшое окно из 5/10/20 segments и текущая позиция
@@ -606,6 +607,18 @@ recordings, run или embedding space требуют нового preview. Эт
 явно сохранить provisional calibration с целью 95% или 90%, но она разрешает
 только bounded pilot длительностью не более 24 часов и не открывает full
 historical backfill.
+
+Если Check precision остаётся низкой после 100+ labels, сначала откройте **Wrong
+Sky results** и прослушайте каждую ошибку кнопками **Previous problem** / **Next
+problem · autoplay**. Исправляйте только действительно неверные manual labels.
+Если label верна, это уже ошибка профиля или matcher, а не повод менять
+разметку. Затем проверьте сохранённые voice samples: каждый должен содержать
+только одного спикера, без overlap, музыки и длинной тишины, и нормально
+проигрываться. Общей длительности самой по себе недостаточно; полезнее 2–4
+чистых sample по 10–20 секунд из реально разных микрофонов/комнат. Удалите или
+замените загрязнённый sample, выполните **Rebuild profile**, затем заново
+пересчитайте и сохраните calibration. Manual labels при rebuild сохраняются, но
+calibration старой revision закономерно становится stale.
 
 ### Calibration wizard
 
