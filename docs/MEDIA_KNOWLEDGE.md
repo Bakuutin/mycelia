@@ -1,22 +1,27 @@
 # Photo and PDF Knowledge
 
-Mycelia imports photos and PDFs in two explicit stages:
+Mycelia imports and recognizes photos or PDFs in separate explicit stages:
 
-1. Choose files (managed storage) or `Analyze mounted path` (read-only
-   reference). Mycelia validates magic bytes and limits, calculates SHA-256,
-   extracts local metadata with ExifTool/ffprobe, and creates temporary WebP
-   previews with metadata stripped. It does not call a recognition provider.
-2. `Confirm import` creates canonical media assets. Recognition is a separate
-   opt-in switch, so an import can remain `staged` until Google Cloud or a
-   self-hosted provider is ready.
+1. Drop files into the managed upload area or choose a directory in the mounted
+   folder browser for a read-only folder sync. Mycelia validates magic bytes and
+   limits, calculates SHA-256, extracts local metadata with ExifTool/ffprobe,
+   and creates temporary WebP previews with metadata stripped. It does not call
+   a recognition provider.
+2. **Confirm local import** creates canonical media assets. Recognition is a
+   separate opt-in action on `/media/analysis`, so an import can remain `staged`
+   until Google Cloud or a self-hosted provider is ready.
 
-The Media screen separates **where** a job runs from **what** it does. Choose
-Google Cloud or a self-hosted Open Media API profile. The primary task is
-`visual-understanding`: a Russian caption and description, scene, objects,
-activities, people count without identity inference, keywords, possible event,
-confidence, warnings, and an embedding for semantic search. OCR, Vision labels,
-and Vision object localization are independent optional tasks. Local metadata
-extraction is always local and precedes that choice.
+The Photo Analysis screen separates **where** a job runs from **what** it does.
+Choose Google Cloud or a self-hosted Open Media API profile. The bulk action has
+one fixed package: `visual-understanding` plus `ocr`. Visual understanding
+produces a Russian caption and description, scene, objects, activities, people
+count without identity inference, keywords, possible event, confidence,
+warnings, and an embedding for semantic search. A Google profile runs Vertex
+visual understanding/embedding and strict-EU Cloud Vision OCR. A self-hosted
+profile receives the same two requested features at its configured endpoint and
+does not call Google. Global Vision labels and object localization are not part
+of this batch action. Local metadata extraction is always local and precedes
+the provider choice.
 
 Local ingestion is independent of recognition. When `mediaKnowledge.enabled` is
 false, managed uploads and mounted-source imports still extract metadata,
@@ -82,9 +87,9 @@ docker compose \
 Open `http://127.0.0.1:3211`. HTTPS is also published on port `4443`, but uses
 the development self-signed certificate. Complete first-time setup, then open
 Media. A recognition profile is not required for local-only import, and the
-upload controls remain available when recognition is disabled. Keep
-`Queue recognition after import` off, either upload files or analyze the
-relative path `.`, review the storage-mode badge and preview, and confirm.
+upload controls remain available when recognition is disabled. Either upload
+files or select the mounted root `.`, review the local storage-mode preview, and
+confirm. Configure and start recognition later on `/media/analysis`.
 
 The mounted-folder browser exposes only directories below
 `MEDIA_SOURCE_HOST_PATH`, not arbitrary macOS paths. The root (`.`) is selected
@@ -140,8 +145,8 @@ docker compose \
   restart nginx
 ```
 
-Alternatively, drag files directly onto **Option 1 — upload managed originals**
-or press **Choose files**. This path does not require the mounted folder. It
+Alternatively, drag files directly onto **Upload from this computer** or press
+**Choose files**. This path does not require the mounted folder. It
 accepts up to 50 JPEG, PNG, WebP, or PDF files per preview, with a 48 MB total
 request limit (20 MB per image, 32 MB and 15 pages per PDF). It keeps staged
 originals for one hour while the preview is untouched; confirmation marks those
@@ -154,10 +159,11 @@ cannot be selected. Enable the profile and the Media Knowledge master switch in
 Settings → Google Cloud, then Save. For a Google profile, Labels and Objects
 have an additional `Allow global labels and objects` switch because those two
 Vision features do not use the strict-EU OCR endpoint. Visual understanding and
-OCR do not depend on that global opt-in. The master switch and current profile
-toggle are checked again at enqueue and immediately before a worker reads or
-sends content; turning either off stops already queued recognition before a
-provider call.
+OCR do not depend on that global opt-in, and the Photo Analysis bulk action
+never requests Labels or Objects. The master switch and current profile toggle
+are checked again at enqueue and immediately before a worker reads or sends
+content; turning either off stops already queued recognition before a provider
+call.
 
 If setup reports that API keys already exist, create browser credentials in the
 running isolated backend (this command does not require a checkout `.env`):
@@ -198,7 +204,9 @@ docker compose \
 
 Add the self-hosted preset in Settings → Google Cloud, set its URL to
 `http://media-provider:8090`, enable it, select it under **Active provider**, and
-Save. A staged test image can then be queued from its Media details card. This
+Save. On `/media/analysis`, select a staged or failed test image (or use
+**all matching**) and choose **Review analysis batch**. The resulting fixed
+visual-understanding + OCR request goes only to the self-hosted endpoint. This
 proves the actual BullMQ worker,
 normalized projections, Russian structured visual description, vector search,
 provenance, and usage without a cloud request; it is not a substitute for the
@@ -211,8 +219,9 @@ browser or MongoDB. Prepare:
 
 1. A dedicated GCP project with billing attached to the promotional-credit
    billing account.
-2. Enabled `aiplatform.googleapis.com`. Enable `vision.googleapis.com` and
-   `documentai.googleapis.com` only when the optional OCR/labels tasks are used.
+2. Enabled `aiplatform.googleapis.com` and `vision.googleapis.com` for the fixed
+   Google photo package. Enable `documentai.googleapis.com` only for optional
+   PDF OCR.
 3. For optional PDF OCR, an EU Document AI Enterprise OCR processor pinned to
    `pretrained-ocr-v2.1-2024-08-07`.
 4. A least-privilege runtime identity with
@@ -309,15 +318,18 @@ A self-hosted provider implements:
   WebP previews for group understanding;
 - `POST /v1/media/embed` with `{text, purpose:"query"}`.
 
-The multipart `features` field is the exact selected task array
-(`visual-understanding`, `ocr`, `labels`, `objects`). Visual providers return
-`visualUnderstanding`, `searchText`, and `embedding`; optional tasks add
-normalized `pages` and `annotations`. Switching providers creates a new
-versioned analysis run; it does not rewrite the canonical asset or previews.
-Existing vectors are never mixed across different embedding model/dimension
-spaces. After switching, use explicit Retry on older assets to reprocess them
-for the new provider's semantic index; OCR and label search continues to use
-the stored local projections meanwhile.
+The multipart `features` field is the requested task array. The current Photo
+Analysis workspace always sends `visual-understanding` and `ocr`; the provider
+contract may advertise `labels` and `objects`, but the bulk action does not
+request them. Visual providers return `visualUnderstanding`, `searchText`, and
+`embedding`; OCR adds normalized `pages` and annotations. Switching providers
+creates a new versioned analysis run; it does not rewrite the canonical asset or
+previews. Existing vectors are never mixed across different embedding
+model/dimension spaces. Existing `ready` assets are intentionally excluded from
+normal batch eligibility, and there is currently no bulk re-index command for
+them. A provider switch therefore applies to eligible `staged`, `failed`,
+`budget_blocked`, or `recognition_disabled` assets; stored OCR and label
+projections remain available meanwhile.
 
 ## Photo event aggregation
 
@@ -365,33 +377,38 @@ links remain local deterministic evidence and cannot be changed by the model.
 
 ## Media inventory and batches
 
-The `/media` page uses cursor pagination and server-side filters, so an archive
-of 900 or more photos is not truncated to the first 500. It separates
-**Unprocessed**, **Queued / processing**, **Ready**,
-and **Needs attention** states, while keeping local capture time, timezone,
-camera, dimensions, GPS availability, current provider/model, OCR page count,
-annotation count, short description, and estimated list-price usage visible.
-The detail view presents the useful local metadata as structured fields; raw
-EXIF/ffprobe JSON remains available only under the advanced disclosure.
+The `/media` page is the local library and import workspace. It uses cursor
+pagination, a responsive thumbnail gallery, background refresh, and a focused
+detail viewer, so an archive of 900 or more photos is not truncated to the
+first page. Useful capture time, timezone, camera, dimensions, GPS, provider,
+OCR, annotations, description, and usage remain available in the detail view;
+raw EXIF/ffprobe JSON stays under the advanced disclosure. Gallery checkboxes
+select photos only for explicit local event grouping and never start cloud
+recognition.
 
-Select inventory rows and use **Process selected** to queue individual,
-auditable recognition jobs with the provider and tasks chosen in the import
-section. This is deliberately not one large provider request: partial failures
-are reported per file and do not discard the rest of the batch. The action asks
-for confirmation before queueing. A selection of two or more images can also be
-used as the explicit candidate set for local event clustering; no provider is
-called by that step.
+`/media/analysis` is the recognition workspace. Status, placement, filename,
+and capture-date filters run on the server. A batch can contain the explicit
+loaded selection or **all eligible assets matching the current server-side
+filters**, so selection is not capped by the 100-card page. Preparing a preview
+sends nothing to a provider; the exact cutoff, asset IDs/SHA-256 values, tasks,
+provider snapshot, and gross ceiling are fixed before one confirmation. Existing
+batches keep updating in the background without blocking library browsing,
+local import, filter changes, or preparation of another batch from
+still-eligible photos.
 
-**Process all with Google Cloud EU Photo Knowledge** first creates a local
-preview receipt with a cutoff, exact asset IDs/SHA-256 values, the pinned Google
-profile, tasks, per-photo estimate, and total gross ceiling. Confirmation
-returns immediately. A durable coordinator keeps a bounded queue window and
-creates one ordinary `mediaRecognition` job per photo. It skips `ready`,
-`queued`, and `processing`; missing references become `source_missing` under
-Needs attention. Stop prevents new jobs while already-started provider calls
-finish and remain accounted. Retry resets only failed or budget-blocked batch
-items. The fixed tasks are Vertex visual understanding/embedding and strict-EU
-Vision OCR; global Vision labels/objects are never part of this bulk action.
+The batch action first creates a local preview receipt with a cutoff, exact
+asset IDs/SHA-256 values, the pinned provider profile, tasks, per-photo estimate,
+and total gross ceiling. Confirmation returns immediately. A durable coordinator
+keeps a bounded queue window and creates one ordinary `mediaRecognition` job per
+photo. It skips `ready`, `queued`, and `processing`; missing references become
+`source_missing` under Needs attention. Stop prevents new jobs while
+already-started provider calls finish and remain accounted. Failed Google items
+must be reviewed as a new exact batch with a new cost ceiling; the original
+confirmation never authorizes extra paid attempts. With a Google profile, the fixed tasks are
+Vertex visual understanding/embedding and strict-EU Vision OCR. With a
+self-hosted profile, the same visual-understanding + OCR feature request goes
+only to that endpoint. Global Vision labels/objects are never part of this bulk
+action.
 
 Every individual photo with a reliable local capture time appears on the
 adaptive **Photos** Timeline track, regardless of recognition status. Narrow

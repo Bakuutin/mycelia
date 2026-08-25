@@ -3,6 +3,7 @@ import {
   zMediaBatchCounts,
   zMediaFolderCampaign,
   zMediaRecognitionBatch,
+  zMediaRecognitionSelection,
   zMediaSourceFolderListing,
 } from "./media-library.ts";
 
@@ -61,5 +62,39 @@ Deno.test("folder and recognition campaign schemas reject unbounded invalid stat
       folders: [{ name: "Trips", relativePath: "Trips" }],
     }).folders[0]?.relativePath,
     "Trips",
+  );
+});
+
+Deno.test("recognition selections normalize filters and require unique explicit IDs", () => {
+  assertEquals(
+    zMediaRecognitionSelection.parse({ mode: "all_matching" }),
+    {
+      mode: "all_matching",
+      inventoryFilter: "unprocessed",
+      placement: "all",
+    },
+  );
+  const assetId = "68a000000000000000000001";
+  assertEquals(
+    zMediaRecognitionSelection.parse({
+      mode: "explicit",
+      assetIds: [assetId],
+      query: "  garden  ",
+    }).query,
+    "garden",
+  );
+  assertThrows(() => zMediaRecognitionSelection.parse({ mode: "explicit" }));
+  assertThrows(() =>
+    zMediaRecognitionSelection.parse({
+      mode: "explicit",
+      assetIds: [assetId, assetId.toUpperCase()],
+    })
+  );
+  assertThrows(() =>
+    zMediaRecognitionSelection.parse({
+      mode: "all_matching",
+      capturedFrom: "2026-08-26T12:00:00.000Z",
+      capturedTo: "2026-08-25T12:00:00.000Z",
+    })
   );
 });

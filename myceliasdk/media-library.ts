@@ -22,6 +22,69 @@ export const zMediaRecognitionBatchStatus = z.enum([
   "cancelled",
 ]);
 
+export const zMediaInventoryFilter = z.enum([
+  "all",
+  "unprocessed",
+  "processing",
+  "ready",
+  "needs_attention",
+]);
+
+export const zMediaPlacementFilter = z.enum([
+  "all",
+  "missing_time",
+  "missing_location",
+]);
+
+const zMediaAssetIdString = z.string().regex(
+  /^[a-f\d]{24}$/i,
+  "Invalid media asset ID",
+);
+
+export const zMediaRecognitionSelection = z.object({
+  mode: z.enum(["all_matching", "explicit"]),
+  inventoryFilter: zMediaInventoryFilter.default("unprocessed"),
+  placement: zMediaPlacementFilter.default("all"),
+  query: z.string().trim().min(1).max(200).optional(),
+  capturedFrom: z.string().datetime().optional(),
+  capturedTo: z.string().datetime().optional(),
+  assetIds: z.array(zMediaAssetIdString).max(20_000).optional(),
+}).superRefine((selection, context) => {
+  const assetIds = selection.assetIds ?? [];
+  const uniqueIds = new Set(assetIds.map((id) => id.toLowerCase()));
+  if (uniqueIds.size !== assetIds.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["assetIds"],
+      message: "Media asset IDs must be unique",
+    });
+  }
+  if (selection.mode === "explicit" && assetIds.length === 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["assetIds"],
+      message: "Explicit selection requires at least one media asset ID",
+    });
+  }
+  if (selection.mode === "all_matching" && assetIds.length > 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["assetIds"],
+      message: "All-matching selection does not accept explicit asset IDs",
+    });
+  }
+  if (
+    selection.capturedFrom && selection.capturedTo &&
+    new Date(selection.capturedFrom) > new Date(selection.capturedTo)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["capturedTo"],
+      message: "Capture range end must not be before its start",
+    });
+  }
+});
+
 export const zMediaBatchCounts = z.object({
   total: z.number().int().nonnegative().default(0),
   pending: z.number().int().nonnegative().default(0),
@@ -90,6 +153,7 @@ export const zMediaRecognitionBatch = z.object({
   profileId: z.string().min(1),
   profileName: z.string().min(1),
   requestedTasks: z.array(zMediaRecognitionTask).min(1),
+  selection: zMediaRecognitionSelection.optional(),
   authorizedGrossUsd: z.number().nonnegative(),
   counts: zMediaBatchCounts,
   cancelRequestedAt: zDateOrString().optional(),
@@ -130,5 +194,10 @@ export type MediaSourceFolderListing = z.infer<
   typeof zMediaSourceFolderListing
 >;
 export type MediaRecognitionBatch = z.infer<typeof zMediaRecognitionBatch>;
+export type MediaInventoryFilter = z.infer<typeof zMediaInventoryFilter>;
+export type MediaPlacementFilter = z.infer<typeof zMediaPlacementFilter>;
+export type MediaRecognitionSelection = z.infer<
+  typeof zMediaRecognitionSelection
+>;
 export type MediaTimelineItem = z.infer<typeof zMediaTimelineItem>;
 export type MediaMapItem = z.infer<typeof zMediaMapItem>;

@@ -1,66 +1,36 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Eye,
   FileImage,
   Loader2,
-  Play,
   RefreshCw,
   Search,
   ShieldCheck,
   Trash2,
   Upload,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { apiClient, callResource } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { AuthenticatedMediaImage } from "@/components/media/AuthenticatedMediaImage";
+import { LazyAuthenticatedMediaImage } from "@/components/media/LazyAuthenticatedMediaImage";
 import { MediaEventsPanel } from "@/components/media/MediaEventsPanel";
 import { MediaBatchPanel } from "@/components/media/MediaBatchPanel";
-
-type RecognitionTask =
-  | "visual-understanding"
-  | "ocr"
-  | "labels"
-  | "objects";
-
-const taskCopy: Record<RecognitionTask, { title: string; detail: string }> = {
-  "visual-understanding": {
-    title: "Visual understanding (primary)",
-    detail:
-      "Russian caption, description, scene, objects, activities, tags, and a semantic-search vector.",
-  },
-  ocr: {
-    title: "Extract text (OCR)",
-    detail:
-      "Google uses strict-EU Vision for images and EU Document AI for PDFs.",
-  },
-  labels: {
-    title: "Image labels",
-    detail:
-      "Google runs this at its global Vision endpoint; self-hosted stays local.",
-  },
-  objects: {
-    title: "Locate objects",
-    detail:
-      "Returns object names, confidence, and boxes; Google execution is global.",
-  },
-};
+import { MediaSectionNav } from "@/components/media/MediaSectionNav";
 
 const MAX_MANAGED_UPLOAD_FILES = 50;
 const MAX_MANAGED_UPLOAD_TOTAL_BYTES = 48_000_000;
@@ -105,18 +75,6 @@ function mediaMetadataSummary(asset: any) {
       }`
       : "—",
   };
-}
-
-function mountedPathError(value: string): string | undefined {
-  const path = value.trim();
-  if (!path) return "Enter a path relative to the mounted media folder";
-  if (
-    path.startsWith("/") ||
-    /^[A-Za-z]:[\\/]/.test(path) ||
-    path.split(/[\\/]+/).includes("..")
-  ) {
-    return 'Use "." or a relative path such as "2026/photos"; host paths are configured outside the browser';
-  }
 }
 
 function MediaPlacementEditor({
@@ -239,92 +197,134 @@ export default function MediaPage() {
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>(
     "all",
   );
-  const [selectedInventoryIds, setSelectedInventoryIds] = useState<string[]>(
+  const [selectedEventAssetIds, setSelectedEventAssetIds] = useState<string[]>(
     [],
   );
-  const [path, setPath] = useState(".");
-  const [profileId, setProfileId] = useState("");
-  const [selectedTasks, setSelectedTasks] = useState<RecognitionTask[]>([
-    "visual-understanding",
-  ]);
-  const [queueRecognition, setQueueRecognition] = useState(false);
   const [preview, setPreview] = useState<any>();
   const [busy, setBusy] = useState(false);
+  const [inventoryLoading, setInventoryLoading] = useState(true);
+  const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date>();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const [detail, setDetail] = useState<any>();
   const [deletionPreview, setDeletionPreview] = useState<any>();
+  const inventoryRequestGeneration = useRef(0);
+  const inventoryRequestActive = useRef(false);
+  const nextCursorRef = useRef<string | undefined>(undefined);
+  const loadedAssetCountRef = useRef(0);
 
-  const load = async (options: { append?: boolean } = {}) => {
+  const load = useCallback(async (
+    options: { append?: boolean; silent?: boolean } = {},
+  ) => {
+    if (options.silent && inventoryRequestActive.current) return;
+    const generation = ++inventoryRequestGeneration.current;
+    const cursor = options.append ? nextCursorRef.current : undefined;
+    if (options.append && !cursor) return;
+    inventoryRequestActive.current = true;
+    if (!options.silent) setInventoryLoading(true);
+    setInventoryRefreshing(true);
     try {
       const backendFilter = inventoryFilter === "errors"
         ? "needs_attention"
         : inventoryFilter;
-      const [nextStatus, nextAssets] = await Promise.all([
-        callResource("media", { action: "status" }),
+      const loadAssetPage = (pageCursor?: string, limit = 100) =>
         callResource("media", {
           action: "listAssets",
-          limit: 100,
+          limit,
           inventoryFilter: backendFilter,
           placement: placementFilter,
-          ...(options.append && nextCursor ? { cursor: nextCursor } : {}),
-        }),
+          ...(pageCursor ? { cursor: pageCursor } : {}),
+        });
+      const loadRefreshedPrefix = async () => {
+        const target = loadedAssetCountRef.current > 0
+          ? loadedAssetCountRef.current
+          : 100;
+        const refreshed: any[] = [];
+        let refreshCursor: string | undefined;
+        let total = 0;
+        do {
+          const page = await loadAssetPage(
+            refreshCursor,
+            Math.min(500, Math.max(1, target - refreshed.length)),
+          );
+          refreshed.push(...(page.assets ?? []));
+          total = Number(page.total ?? total);
+          refreshCursor = page.nextCursor ? String(page.nextCursor) : undefined;
+        } while (refreshCursor && refreshed.length < target);
+        return { assets: refreshed, total, nextCursor: refreshCursor };
+      };
+      const [nextStatus, nextAssets] = await Promise.all([
+        callResource("media", { action: "status" }),
+        options.silent ? loadRefreshedPrefix() : loadAssetPage(cursor),
       ]);
+      if (generation !== inventoryRequestGeneration.current) return;
       setStatus(nextStatus);
+      if (options.append) {
+        loadedAssetCountRef.current += (nextAssets.assets ?? []).length;
+      } else {
+        loadedAssetCountRef.current = (nextAssets.assets ?? []).length;
+      }
       setAssets((current) => {
-        if (!options.append) return nextAssets.assets ?? [];
+        if (!options.append) {
+          return nextAssets.assets ?? [];
+        }
         const byId = new Map(
           [...current, ...(nextAssets.assets ?? [])].map((asset: any) => [
             String(asset._id),
             asset,
           ]),
         );
-        return [...byId.values()];
+        const merged = [...byId.values()];
+        return merged;
       });
+      nextCursorRef.current = nextAssets.nextCursor;
       setNextCursor(nextAssets.nextCursor);
       setAssetTotal(Number(nextAssets.total ?? nextAssets.assets?.length ?? 0));
-      setSelectedInventoryIds((current) => {
-        const available = new Set(
-          (nextAssets.assets ?? []).map((asset: any) => String(asset._id)),
-        );
-        return current.filter((id) => available.has(id));
-      });
-      setProfileId((current) => {
-        if (!nextStatus.enabled) return "";
-        const enabledIds = new Set(
-          (nextStatus.profiles ?? []).filter((entry: any) => entry.enabled).map(
-            (entry: any) => entry.id,
-          ),
-        );
-        if (current && enabledIds.has(current)) return current;
-        return enabledIds.has(nextStatus.activeProfileId)
-          ? nextStatus.activeProfileId
-          : "";
-      });
+      setLastUpdatedAt(new Date());
     } catch (error) {
+      if (generation !== inventoryRequestGeneration.current) return;
       toast.error(
         error instanceof Error ? error.message : "Failed to load Media Library",
       );
+    } finally {
+      if (generation === inventoryRequestGeneration.current) {
+        inventoryRequestActive.current = false;
+        setInventoryLoading(false);
+        setInventoryRefreshing(false);
+      }
     }
-  };
-
-  useEffect(() => {
-    void load();
   }, [inventoryFilter, placementFilter]);
 
   useEffect(() => {
-    if (
-      !assets.some((asset) => ["queued", "processing"].includes(asset.status))
-    ) return;
-    const timer = setInterval(load, 3000);
-    return () => clearInterval(timer);
-  }, [assets]);
+    nextCursorRef.current = undefined;
+    loadedAssetCountRef.current = 0;
+    setNextCursor(undefined);
+    setSelectedEventAssetIds([]);
+    void load();
+  }, [load]);
 
-  const profile = useMemo(
-    () => status?.profiles?.find((entry: any) => entry.id === profileId),
-    [status, profileId],
-  );
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (globalThis.document?.visibilityState === "visible") {
+        void load({ silent: true });
+      }
+    };
+    const timer = globalThis.setInterval(refreshWhenVisible, 5_000);
+    globalThis.document?.addEventListener(
+      "visibilitychange",
+      refreshWhenVisible,
+    );
+    return () => {
+      globalThis.clearInterval(timer);
+      globalThis.document?.removeEventListener(
+        "visibilitychange",
+        refreshWhenVisible,
+      );
+    };
+  }, [load]);
+
   const searchProfile = useMemo(
     () =>
       status?.enabled
@@ -335,42 +335,9 @@ export default function MediaPage() {
     [status],
   );
   const filteredAssets = assets;
-  const analyze = async () => {
-    if (preview) return;
-    const relativePath = path.trim();
-    const validationError = mountedPathError(relativePath);
-    if (validationError) {
-      toast.error(validationError);
-      return;
-    }
-    setBusy(true);
-    try {
-      const result = await callResource("media", {
-        action: "analyzeSource",
-        relativePath,
-        ...(profileId ? { profileId } : {}),
-        ...(profileId ? { requestedTasks: selectedTasks } : {}),
-      });
-      setQueueRecognition(false);
-      setPreview(result);
-      toast.success(
-        `Analyzed ${result.items.length} local item(s); nothing sent to Google yet`,
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Import analysis failed",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const analyzeUploads = async (files: File[]) => {
-    if (
-      files.length === 0 || busy ||
-      Boolean(preview) ||
-      Boolean(profileId && selectedTasks.length === 0)
-    ) return;
+    if (files.length === 0 || busy || Boolean(preview)) return;
     if (files.length > MAX_MANAGED_UPLOAD_FILES) {
       toast.error(`Choose at most ${MAX_MANAGED_UPLOAD_FILES} files at once`);
       return;
@@ -384,15 +351,10 @@ export default function MediaPage() {
     try {
       const form = new FormData();
       for (const file of files) form.append("files", file);
-      if (profileId) {
-        form.append("profileId", profileId);
-        form.append("requestedTasks", selectedTasks.join(","));
-      }
       const result = await apiClient.postForm<any>(
         "/api/media/imports/analyze",
         form,
       );
-      setQueueRecognition(false);
       setPreview(result);
       toast.success(
         `Prepared ${result.items.length} upload(s); originals are staged until confirmation`,
@@ -410,36 +372,21 @@ export default function MediaPage() {
     if (!preview) return;
     setBusy(true);
     try {
-      const shouldQueue = Boolean(
-        queueRecognition && preview.provider?.id &&
-          preview.requestedTasks?.length > 0,
-      );
       const result = await callResource("media", {
         action: "confirmImport",
         importId: String(preview.importId),
         consent: true,
-        queueRecognition: shouldQueue,
+        queueRecognition: false,
       });
       const createdCount = result.created?.length ?? 0;
       const recoveredCount = result.recovered?.length ?? 0;
       const confirmedCount = createdCount + recoveredCount;
-      const queuedCount =
-        [...(result.created ?? []), ...(result.recovered ?? [])]
-          .filter((entry: any) => Boolean(entry.jobId)).length;
       const recoveryCopy = recoveredCount
         ? `; restored ${recoveredCount} original(s)`
         : "";
-      if (shouldQueue && queuedCount < confirmedCount) {
-        toast.warning(
-          `Confirmed ${confirmedCount} media item(s), but queued ${queuedCount}; failed queue attempts remain available for Retry${recoveryCopy}`,
-        );
-      } else {
-        toast.success(
-          shouldQueue
-            ? `Confirmed and queued ${queuedCount} media item(s)${recoveryCopy}`
-            : `Confirmed ${confirmedCount} media item(s) without cloud processing${recoveryCopy}`,
-        );
-      }
+      toast.success(
+        `Imported ${confirmedCount} media item(s) locally${recoveryCopy}`,
+      );
       setPreview(undefined);
       await load();
     } catch (error) {
@@ -500,90 +447,16 @@ export default function MediaPage() {
     if (assetId && assetId !== selectedAssetId) void openAsset(assetId);
   }, [searchParams, selectedAssetId]);
 
-  const processSelected = async () => {
-    if (!selectedAssetId || !profileId) return;
-    setBusy(true);
-    try {
-      const result = await callResource("media", {
-        action: "retry",
-        assetId: selectedAssetId,
-        profileId,
-        requestedTasks: selectedTasks,
-      });
-      if (result.queued === false) {
-        toast.error(
-          "Recognition could not be queued; the asset remains available for Retry",
-        );
-      } else {
-        toast.success(`Queued with ${profile?.name ?? profileId}`);
-      }
-      await Promise.all([load(), openAsset(selectedAssetId)]);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to queue recognition",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const processInventoryBatch = async () => {
-    if (!profileId || selectedTasks.length === 0) return;
-    const selected = assets.filter((asset) =>
-      selectedInventoryIds.includes(String(asset._id)) &&
-      (asset.source || asset.managedOriginal) &&
-      !["queued", "processing"].includes(asset.status)
-    );
-    if (selected.length === 0) {
-      toast.error("Select at least one processable photo or PDF");
-      return;
-    }
-    if (
-      !globalThis.confirm(
-        `Queue ${selected.length} selected item(s) with ${
-          profile?.name ?? profileId
-        } for: ${
-          selectedTasks.join(", ")
-        }? Each item is submitted as its own auditable job.`,
-      )
-    ) return;
-    setBusy(true);
-    let queued = 0;
-    const errors: string[] = [];
-    try {
-      for (const asset of selected) {
-        try {
-          const result = await callResource("media", {
-            action: "retry",
-            assetId: String(asset._id),
-            profileId,
-            requestedTasks: selectedTasks,
-          });
-          if (result.queued) queued += 1;
-          else errors.push(`${asset.fileName}: queue unavailable`);
-        } catch (error) {
-          errors.push(
-            `${asset.fileName}: ${
-              error instanceof Error ? error.message : "request failed"
-            }`,
-          );
-        }
-      }
-      if (errors.length > 0) {
-        toast.warning(
-          `Queued ${queued}/${selected.length}. ${
-            errors.slice(0, 3).join("; ")
-          }`,
-        );
-      } else {
-        toast.success(`Queued ${queued} selected item(s)`);
-      }
-      setSelectedInventoryIds([]);
-      await load();
-    } finally {
-      setBusy(false);
-    }
-  };
+  const closeAsset = useCallback(() => {
+    setSelectedAssetId("");
+    setDetail(undefined);
+    setDeletionPreview(undefined);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("assetId");
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   const deleteDerived = async (
     target: "previews" | "analysis" | "source_reference",
@@ -668,25 +541,9 @@ export default function MediaPage() {
     }
   };
 
-  const toggleTask = (task: RecognitionTask, enabled: boolean) => {
-    setSelectedTasks((current) => {
-      const next = enabled
-        ? [...new Set([...current, task])]
-        : current.filter((entry) => entry !== task);
-      return ([
-        "visual-understanding",
-        "ocr",
-        "labels",
-        "objects",
-      ] as RecognitionTask[]).filter(
-        (entry) => next.includes(entry),
-      );
-    });
-  };
-
   return (
     <div className="container mx-auto space-y-6 p-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-3xl font-bold">
             <FileImage /> Media Library
@@ -696,10 +553,16 @@ export default function MediaPage() {
             semantic search, metadata, and provider provenance in Mycelia.
           </p>
         </div>
-        <Button variant="outline" onClick={() => void load()}>
+        <Button
+          className="self-start sm:self-auto"
+          variant="outline"
+          onClick={() => void load()}
+        >
           <RefreshCw className="mr-2 h-4 w-4" />Refresh
         </Button>
       </div>
+
+      <MediaSectionNav />
 
       {!status?.enabled && (
         <Card className="border-amber-500/50">
@@ -711,167 +574,36 @@ export default function MediaPage() {
         </Card>
       )}
 
-      <MediaBatchPanel status={status} onInventoryChanged={() => load()} />
+      <MediaBatchPanel
+        status={status}
+        onInventoryChanged={() => load({ silent: true })}
+      />
 
       <Card>
         <CardHeader>
-          <CardTitle>Import photos and PDFs</CardTitle>
+          <div>
+            <CardTitle>Upload from this computer</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Import locally first, then choose what to process on the Analysis
+              page.
+            </p>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="mounted-media-relative-path">
-                Relative folder or file path
-              </Label>
-              <Input
-                id="mounted-media-relative-path"
-                value={path}
-                onChange={(event) => setPath(event.target.value)}
-                placeholder="2026/photos"
-                disabled={busy || Boolean(preview)}
-              />
-              <p className="text-xs text-muted-foreground">
-                On this Mac, place files in the folder configured as
-                <code className="mx-1">MEDIA_SOURCE_HOST_PATH</code> in
-                <code className="mx-1">.env.media.local</code>. Mycelia sees it
-                read-only at <code>/media-source</code>. Use
-                <code className="mx-1">.</code>{" "}
-                for the whole mounted folder; do not paste a{" "}
-                <code>/Users/…</code> host path here.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="media-recognition-provider">
-                Recognition provider
-              </Label>
-              <select
-                id="media-recognition-provider"
-                className="w-full rounded-md border bg-background p-2"
-                value={profileId}
-                disabled={busy || Boolean(preview)}
-                onChange={(event) => {
-                  const nextId = event.target.value;
-                  const nextProfile = status?.profiles?.find((entry: any) =>
-                    entry.id === nextId
-                  );
-                  setProfileId(nextId);
-                  if (
-                    nextProfile?.providerType === "google-cloud" &&
-                    !nextProfile.allowGlobalPhotoAnalysis
-                  ) {
-                    setSelectedTasks((current) =>
-                      current.filter((task) =>
-                        task !== "labels" && task !== "objects"
-                      )
-                    );
-                  }
-                }}
-              >
-                <option value="">Metadata only (no cloud processing)</option>
-                {status?.profiles?.map((entry: any) => (
-                  <option
-                    key={entry.id}
-                    value={entry.id}
-                    disabled={!entry.enabled}
-                  >
-                    {entry.name}
-                    {entry.enabled ? "" : " (disabled in Settings)"}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          {profile && (
-            <div className="space-y-3 rounded-md border p-4">
-              <div>
-                <Label>Tasks to run</Label>
-                <p className="text-xs text-muted-foreground">
-                  Local metadata is always extracted before confirmation. The
-                  tasks below are sent only after you explicitly queue them.
-                </p>
-              </div>
-              <div className="grid gap-3 lg:grid-cols-3">
-                {(Object.keys(taskCopy) as RecognitionTask[]).map((task) => {
-                  const globalGoogleTask =
-                    (task === "labels" || task === "objects") &&
-                    profile.providerType === "google-cloud";
-                  const disabled = globalGoogleTask &&
-                    !profile.allowGlobalPhotoAnalysis;
-                  return (
-                    <div
-                      key={task}
-                      className="flex items-start justify-between gap-3 rounded-md border p-3"
-                    >
-                      <div>
-                        <Label>{taskCopy[task].title}</Label>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {taskCopy[task].detail}
-                        </p>
-                        {globalGoogleTask && (
-                          <div className="mt-2 space-y-1">
-                            <Badge
-                              variant={disabled ? "secondary" : "destructive"}
-                            >
-                              {disabled
-                                ? "Disabled in Google profile"
-                                : "Global Google"}
-                            </Badge>
-                            {disabled && (
-                              <p className="text-xs text-muted-foreground">
-                                Enable “Allow global labels and objects” in{" "}
-                                <Link
-                                  className="underline"
-                                  to="/settings/google-cloud"
-                                >
-                                  Settings → Google Cloud
-                                </Link>
-                                , then Save.
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <Switch
-                        aria-label={taskCopy[task].title}
-                        checked={selectedTasks.includes(task)}
-                        disabled={disabled || busy || Boolean(preview)}
-                        onCheckedChange={(enabled) => toggleTask(task, enabled)}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-              {selectedTasks.length === 0 && (
-                <p className="text-sm text-destructive">
-                  Select at least one recognition task or choose Metadata only.
-                </p>
-              )}
-            </div>
-          )}
           <div
-            aria-disabled={busy ||
-              Boolean(preview) ||
-              Boolean(profileId && selectedTasks.length === 0)}
+            aria-disabled={busy || Boolean(preview)}
             className={`rounded-md border-2 border-dashed p-6 text-center ${
-              busy || Boolean(preview) ||
-                Boolean(profileId && selectedTasks.length === 0)
-                ? "cursor-not-allowed opacity-60"
-                : ""
+              busy || Boolean(preview) ? "cursor-not-allowed opacity-60" : ""
             }`}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
               event.preventDefault();
-              if (
-                busy || Boolean(preview) ||
-                Boolean(profileId && selectedTasks.length === 0)
-              ) return;
+              if (busy || Boolean(preview)) return;
               void analyzeUploads(Array.from(event.dataTransfer.files));
             }}
           >
             <Upload className="mx-auto mb-2 h-6 w-6" />
-            <div className="font-medium">
-              Option 1 — upload managed originals from this computer
-            </div>
+            <div className="font-medium">Drop photos or PDFs here</div>
             <p className="mb-3 text-sm text-muted-foreground">
               JPEG, PNG, WebP, or PDF. Mycelia checks the real file type,
               deduplicates by SHA-256, and creates metadata-free WebP previews.
@@ -887,8 +619,7 @@ export default function MediaPage() {
                 type="file"
                 multiple
                 accept="image/jpeg,image/png,image/webp,application/pdf"
-                disabled={busy || Boolean(preview) ||
-                  Boolean(profileId && selectedTasks.length === 0)}
+                disabled={busy || Boolean(preview)}
                 onChange={(event) => {
                   void analyzeUploads(Array.from(event.target.files ?? []));
                   event.currentTarget.value = "";
@@ -896,77 +627,22 @@ export default function MediaPage() {
               />
             </label>
           </div>
-          <div className="flex flex-wrap items-center gap-3 rounded-md border p-3">
-            <div className="min-w-0 flex-1">
-              <div className="font-medium">
-                Option 2 — mounted read-only source
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Stores only a checked reference to the original; the source file
-                is never copied or deleted. Put it under your configured host
-                folder, then enter <code>.</code> above to scan everything.
-              </p>
-            </div>
-            <Button
-              onClick={analyze}
-              variant="outline"
-              disabled={busy ||
-                Boolean(preview) ||
-                !status?.sourceConfigured ||
-                Boolean(profileId && selectedTasks.length === 0)}
-            >
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Analyze mounted path
-            </Button>
-          </div>
         </CardContent>
       </Card>
 
       {preview && (
         <Card className="border-primary">
           <CardHeader>
-            <CardTitle>Preview before transmission</CardTitle>
+            <CardTitle>Review local import</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Badge>{preview.provider.name}</Badge>
+              <Badge>Local only</Badge>
               <Badge variant="outline">
                 {preview.storageMode === "managed_original"
                   ? "Managed original"
                   : "External reference"}
               </Badge>
-              <Badge variant="outline">
-                Maximum list price ${Number(preview.grossEstimateUsd).toFixed(
-                  4,
-                )}
-              </Badge>
-              {preview.requestedTasks?.map((task: RecognitionTask) => (
-                <Badge
-                  key={task}
-                  variant={task === "labels" || task === "objects"
-                    ? "destructive"
-                    : "outline"}
-                >
-                  {taskCopy[task]?.title ?? task}
-                </Badge>
-              ))}
-            </div>
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <div>
-                <Label>Queue recognition after import</Label>
-                <p className="text-xs text-muted-foreground">
-                  Keep this off for the first local-only import test. You can
-                  process staged assets later with Google or a self-hosted
-                  provider.
-                </p>
-              </div>
-              <Switch
-                aria-label="Queue recognition after import"
-                checked={queueRecognition}
-                disabled={!preview.provider?.id ||
-                  preview.requestedTasks?.length === 0}
-                onCheckedChange={setQueueRecognition}
-              />
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {preview.items.map((item: any) => (
@@ -1014,15 +690,12 @@ export default function MediaPage() {
                 ? "Upload analysis writes originals into staging in the separate media_originals store. An untouched preview expires after one hour; confirmation makes files canonical, and an interrupted confirmation has a bounded seven-day recovery lease. You can later delete each original through a second preview-and-confirm step while retaining WebP previews, metadata, analysis, and search data."
                 : "Confirmation stores checked external references and compact previews. The referenced source files are never copied or deleted."}
               {" "}
-              During import, a provider receives image content only when
-              recognition is explicitly queued; paths and EXIF are not included
-              in image requests.
+              No recognition provider is called by this import. Use Photo
+              Analysis after the files appear in the library.
             </div>
             <Button onClick={confirm} disabled={busy}>
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {queueRecognition && profileId
-                ? "Confirm import and queue recognition"
-                : "Confirm local import"}
+              Confirm local import
             </Button>
           </CardContent>
         </Card>
@@ -1056,9 +729,12 @@ export default function MediaPage() {
           {results.length > 0 && (
             <div className="grid gap-3 md:grid-cols-2">
               {results.map((result, index) => (
-                <div
+                <button
+                  type="button"
                   key={`${result.assetId}-${index}`}
-                  className="flex gap-3 rounded-md border p-3"
+                  className="flex w-full gap-3 rounded-md border p-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => openAsset(String(result.assetId))}
+                  aria-label={`Open ${result.fileName}`}
                 >
                   <AuthenticatedMediaImage
                     path={result.thumbnailUrl}
@@ -1081,7 +757,7 @@ export default function MediaPage() {
                       <Badge variant="outline">Page {result.pageNumber}</Badge>
                     )}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -1089,18 +765,30 @@ export default function MediaPage() {
       </Card>
 
       <Card id="media-inventory">
-        <CardHeader>
-          <CardTitle>Media inventory and processing</CardTitle>
+        <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle>Photo library</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Showing {assets.length} of {assetTotal} imported item(s).
+            </p>
+          </div>
+          <div
+            className="flex items-center gap-2 text-xs text-muted-foreground"
+            aria-live="polite"
+          >
+            {inventoryRefreshing && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            )}
+            {inventoryLoading
+              ? "Updating library…"
+              : lastUpdatedAt
+              ? `Updated ${lastUpdatedAt.toLocaleTimeString()}`
+              : "Ready"}
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-sm text-muted-foreground">
-                Showing {assets.length} of {assetTotal}{" "}
-                imported item(s). Ready means provider results were accepted;
-                staged means local metadata and previews exist but recognition
-                has not completed.
-              </p>
               <p className="text-xs text-muted-foreground">
                 Individual photos also appear on the Photos track and Photos map
                 layer when they have reliable EXIF time/GPS. Photo events remain
@@ -1123,6 +811,7 @@ export default function MediaPage() {
                   type="button"
                   size="sm"
                   variant={inventoryFilter === value ? "default" : "outline"}
+                  aria-pressed={inventoryFilter === value}
                   onClick={() => setInventoryFilter(value)}
                 >
                   {label}
@@ -1142,6 +831,7 @@ export default function MediaPage() {
                 type="button"
                 size="sm"
                 variant={placementFilter === value ? "default" : "outline"}
+                aria-pressed={placementFilter === value}
                 onClick={() => {
                   setPlacementFilter(value);
                   setSearchParams((current) => {
@@ -1157,197 +847,148 @@ export default function MediaPage() {
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 rounded-md border p-3">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                setSelectedInventoryIds(
-                  filteredAssets.map((asset) => String(asset._id)),
-                )}
-              disabled={filteredAssets.length === 0}
-            >
-              Select visible
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setSelectedInventoryIds([])}
-              disabled={selectedInventoryIds.length === 0}
-            >
-              Clear selection
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={processInventoryBatch}
-              disabled={busy || !profileId || selectedTasks.length === 0 ||
-                selectedInventoryIds.length === 0}
-            >
-              {busy
-                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                : <Play className="mr-2 h-4 w-4" />}
-              Process selected ({selectedInventoryIds.length})
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              Uses the provider and tasks selected in the import section; every
-              photo is queued as a separate bounded job.
-            </span>
-          </div>
+          {selectedEventAssetIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+              <span className="text-sm font-medium">
+                {selectedEventAssetIds.length}{" "}
+                photo(s) selected for event grouping
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setSelectedEventAssetIds([])}
+              >
+                Clear selection
+              </Button>
+            </div>
+          )}
 
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10">Select</TableHead>
-                <TableHead>Photo / file</TableHead>
-                <TableHead>Captured</TableHead>
-                <TableHead>Local metadata</TableHead>
-                <TableHead>Processing</TableHead>
-                <TableHead>Results</TableHead>
-                <TableHead className="text-right">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredAssets.length === 0
-                ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={7}
-                      className="py-8 text-center text-muted-foreground"
+          {inventoryLoading && filteredAssets.length === 0
+            ? (
+              <div
+                className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                aria-label="Loading media"
+              >
+                {Array.from(
+                  { length: 8 },
+                  (_, index) => (
+                    <div
+                      key={index}
+                      className="overflow-hidden rounded-xl border"
                     >
-                      No media matches this filter.
-                    </TableCell>
-                  </TableRow>
-                )
-                : filteredAssets.map((asset) => {
+                      <Skeleton className="aspect-[4/3] w-full rounded-none" />
+                      <div className="space-y-2 p-4">
+                        <Skeleton className="h-4 w-3/4" />
+                        <Skeleton className="h-3 w-1/2" />
+                      </div>
+                    </div>
+                  ),
+                )}
+              </div>
+            )
+            : filteredAssets.length === 0
+            ? (
+              <div className="rounded-xl border border-dashed py-14 text-center text-sm text-muted-foreground">
+                No media matches these filters.
+              </div>
+            )
+            : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {filteredAssets.map((asset) => {
                   const id = String(asset._id);
                   const metadata = mediaMetadataSummary(asset);
-                  const run = asset.inventory?.run;
+                  const selectedForEvent = selectedEventAssetIds.includes(id);
                   return (
-                    <TableRow
+                    <article
                       key={id}
-                      data-state={selectedInventoryIds.includes(id)
-                        ? "selected"
-                        : undefined}
+                      className={`group relative overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                        selectedForEvent ? "ring-2 ring-primary" : ""
+                      }`}
                     >
-                      <TableCell>
-                        <Checkbox
-                          aria-label={`Select ${asset.fileName}`}
-                          checked={selectedInventoryIds.includes(id)}
-                          onCheckedChange={(checked) =>
-                            setSelectedInventoryIds((current) =>
-                              checked
-                                ? [...new Set([...current, id])]
-                                : current.filter((entry) => entry !== id)
-                            )}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-[220px] items-center gap-3">
-                          <AuthenticatedMediaImage
-                            path={asset.thumbnailUrl}
-                            alt={asset.fileName}
-                            className="h-12 w-12 rounded border object-cover"
-                          />
-                          <div className="min-w-0">
-                            <div className="max-w-[260px] truncate font-medium">
-                              {asset.fileName}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              {asset.kind} ·{" "}
-                              {(Number(asset.byteLength ?? 0) / 1_000_000)
-                                .toFixed(2)} MB
-                            </div>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="min-w-[170px] text-xs">
-                        <div>{metadata.captured}</div>
-                        {asset.capturedAtTimeZone && (
-                          <div className="text-muted-foreground">
-                            {asset.capturedAtTimeZone} ·{" "}
-                            {asset.capturedAtTimeZoneSource}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="min-w-[180px] text-xs">
-                        <div>{metadata.camera}</div>
-                        <div className="text-muted-foreground">
-                          {metadata.dimensions} · GPS{" "}
-                          {metadata.location === "—" ? "no" : "yes"}
-                        </div>
-                      </TableCell>
-                      <TableCell className="min-w-[180px]">
-                        <div className="flex flex-wrap gap-1">
-                          <Badge
-                            variant={asset.status === "ready"
-                              ? "default"
-                              : asset.safeError
-                              ? "destructive"
-                              : "secondary"}
-                          >
-                            {asset.status}
-                          </Badge>
-                          {asset.inventory?.eventId && (
-                            <Badge variant="outline">In photo event</Badge>
-                          )}
-                        </div>
-                        {run && (
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {run.providerName ?? run.providerType ?? "provider"}
-                            {run.modelVersion ? ` · ${run.modelVersion}` : ""}
-                          </div>
-                        )}
-                        {asset.safeError && (
-                          <div className="mt-1 max-w-[260px] text-xs text-destructive">
-                            {asset.safeError}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="min-w-[200px] text-xs">
-                        <div>
-                          {asset.inventory?.shortCaption ??
-                            "No visual description"}
-                        </div>
-                        <div className="text-muted-foreground">
-                          OCR {asset.inventory?.ocrPageCount ?? 0}{" "}
-                          page(s) · labels/objects{" "}
-                          {asset.inventory?.annotationCount ?? 0}
-                        </div>
-                        {Number.isFinite(Number(run?.grossListPriceUsd)) && (
-                          <div className="text-muted-foreground">
-                            estimated ${Number(run.grossListPriceUsd).toFixed(
-                              4,
-                            )}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            openAsset(id)}
+                      {asset.kind === "image" && (
+                        <label
+                          htmlFor={`event-select-${id}`}
+                          className="absolute left-2 top-2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-background/90 shadow-sm backdrop-blur"
+                          onClick={(event) => event.stopPropagation()}
                         >
-                          <Eye className="mr-2 h-4 w-4" />Details
-                        </Button>
-                      </TableCell>
-                    </TableRow>
+                          <Checkbox
+                            id={`event-select-${id}`}
+                            aria-label={`Select ${asset.fileName} for photo event`}
+                            checked={selectedForEvent}
+                            onCheckedChange={(checked) =>
+                              setSelectedEventAssetIds((current) =>
+                                checked
+                                  ? [...new Set([...current, id])]
+                                  : current.filter((entry) => entry !== id)
+                              )}
+                          />
+                        </label>
+                      )}
+                      <button
+                        type="button"
+                        className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        onClick={() => openAsset(id)}
+                        aria-label={`Open ${asset.fileName}`}
+                      >
+                        <LazyAuthenticatedMediaImage
+                          path={asset.thumbnailUrl}
+                          alt={asset.fileName}
+                          containerClassName="aspect-[4/3] overflow-hidden bg-muted"
+                          className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                        />
+                        <div className="space-y-3 p-4">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">
+                                {asset.fileName}
+                              </div>
+                              <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                                {metadata.captured}
+                              </div>
+                            </div>
+                            <Badge
+                              variant={asset.status === "ready"
+                                ? "default"
+                                : asset.safeError
+                                ? "destructive"
+                                : "secondary"}
+                              className="shrink-0"
+                            >
+                              {asset.status}
+                            </Badge>
+                          </div>
+                          <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
+                            {asset.inventory?.shortCaption ??
+                              (asset.safeError
+                                ? asset.safeError
+                                : "No visual description yet")}
+                          </p>
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>{asset.kind} · {metadata.dimensions}</span>
+                            <span className="inline-flex items-center font-medium text-foreground">
+                              <Eye className="mr-1 h-3.5 w-3.5" />Details
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                    </article>
                   );
                 })}
-            </TableBody>
-          </Table>
+              </div>
+            )}
+
           {nextCursor && (
             <div className="flex justify-center">
               <Button
                 variant="outline"
                 onClick={() => void load({ append: true })}
-                disabled={busy}
+                disabled={inventoryRefreshing}
               >
-                Load next 100
+                {inventoryRefreshing && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                Load more
               </Button>
             </div>
           )}
@@ -1356,7 +997,7 @@ export default function MediaPage() {
 
       <MediaEventsPanel
         status={status}
-        candidateAssetIds={selectedInventoryIds.filter((id) =>
+        candidateAssetIds={selectedEventAssetIds.filter((id) =>
           assets.some((asset) =>
             String(asset._id) === id && asset.kind === "image"
           )
@@ -1364,365 +1005,353 @@ export default function MediaPage() {
         onOpenAsset={openAsset}
       />
 
-      {detail?.asset && (
-        <Card className="border-primary/50">
-          <CardHeader className="flex-row items-start justify-between space-y-0">
-            <div>
-              <CardTitle>{detail.asset.fileName}</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
+      <Dialog
+        open={Boolean(detail?.asset)}
+        onOpenChange={(open) => {
+          if (!open) closeAsset();
+        }}
+      >
+        {detail?.asset && (
+          <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
+            <DialogHeader className="pr-8">
+              <DialogTitle>{detail.asset.fileName}</DialogTitle>
+              <DialogDescription>
                 {detail.asset.storageMode} ·{" "}
-                {detail.asset.source?.relativePath ??
-                  "managed copy"}
-              </p>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Close media details"
-              onClick={() => {
-                setSelectedAssetId("");
-                setDetail(undefined);
-                setDeletionPreview(undefined);
-                setSearchParams((current) => {
-                  const next = new URLSearchParams(current);
-                  next.delete("assetId");
-                  return next;
-                }, { replace: true });
-              }}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="grid gap-5 lg:grid-cols-[minmax(240px,360px)_1fr]">
-              <AuthenticatedMediaImage
-                path={detail.asset.previewUrl ?? detail.asset.thumbnailUrl}
-                alt={detail.asset.fileName}
-                className="max-h-80 w-full rounded-md border object-contain"
-              />
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <Badge>{detail.asset.status}</Badge>
-                  <Badge variant="outline">{detail.asset.kind}</Badge>
-                  <Badge variant="outline">
-                    {(Number(detail.asset.byteLength) / 1_000_000).toFixed(2)}
-                    {" "}
-                    MB
-                  </Badge>
-                  {detail.asset.pageCount && (
+                {detail.asset.source?.relativePath ?? "managed copy"}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-5">
+              <div className="grid gap-5 lg:grid-cols-[minmax(240px,360px)_1fr]">
+                <AuthenticatedMediaImage
+                  path={detail.asset.previewUrl ?? detail.asset.thumbnailUrl}
+                  alt={detail.asset.fileName}
+                  className="max-h-80 w-full rounded-md border object-contain"
+                />
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge>{detail.asset.status}</Badge>
+                    <Badge variant="outline">{detail.asset.kind}</Badge>
                     <Badge variant="outline">
-                      {detail.asset.pageCount} unit(s)
-                    </Badge>
-                  )}
-                </div>
-                {detail.asset.safeError && (
-                  <div className="rounded border border-destructive/40 p-3 text-sm text-destructive">
-                    {detail.asset.safeError}
-                  </div>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    onClick={processSelected}
-                    disabled={busy || !profileId ||
-                      selectedTasks.length === 0 ||
-                      !(detail.asset.source || detail.asset.managedOriginal) ||
-                      ["queued", "processing"].includes(detail.asset.status)}
-                  >
-                    {busy
-                      ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      : <Play className="mr-2 h-4 w-4" />}
-                    Process with {profile?.name ?? "selected provider"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => deleteDerived("analysis")}
-                    disabled={busy || !(detail.runs?.length > 0)}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />Delete derived analysis
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => deleteDerived("previews")}
-                    disabled={busy ||
-                      !(detail.asset.previewUrl || detail.asset.thumbnailUrl)}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />Delete previews
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => deleteDerived("source_reference")}
-                    disabled={busy || !detail.asset.source}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />Forget original reference
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    onClick={prepareOriginalDeletion}
-                    disabled={busy ||
-                      detail.asset.storageMode !== "managed_original"}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />Review original deletion
-                  </Button>
-                </div>
-                {detail.asset.storageMode === "preview_only" && (
-                  <div className="rounded border border-amber-500/40 p-3 text-sm">
-                    The managed original was deleted. Compact previews,
-                    metadata, analysis, and search data remain available.
-                  </div>
-                )}
-                {deletionPreview && (
-                  <div className="space-y-3 rounded border border-destructive/50 p-3 text-sm">
-                    <div className="font-medium">Original deletion preview</div>
-                    <div>
-                      Original size: {(
-                        Number(deletionPreview.byteLength ?? 0) / 1_000_000
-                      ).toFixed(2)} MB · preview{" "}
-                      {deletionPreview.previewReady ? "ready" : "missing"}{" "}
-                      · analysis{" "}
-                      {deletionPreview.analysisReady ? "ready" : "missing"}
-                    </div>
-                    {deletionPreview.blockers?.length > 0 && (
-                      <ul className="list-disc pl-5 text-destructive">
-                        {deletionPreview.blockers.map((blocker: string) => (
-                          <li key={blocker}>{blocker}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {deletionPreview.canDelete && (
-                      <>
-                        <div>
-                          This permanently deletes only the managed original.
-                          WebP previews, local metadata, provider results, and
-                          search indexes are retained.
-                        </div>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="destructive"
-                            onClick={confirmOriginalDeletion}
-                            disabled={busy}
-                          >
-                            Permanently delete managed original
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => setDeletionPreview(undefined)}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-                {!profileId && (
-                  <p className="text-sm text-amber-700 dark:text-amber-300">
-                    Select an enabled recognition provider above to process this
-                    staged asset.
-                  </p>
-                )}
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {Object.entries(mediaMetadataSummary(detail.asset)).map(
-                    ([key, value]) => (
-                      <div key={key} className="rounded bg-muted p-3 text-sm">
-                        <div className="text-xs font-medium uppercase text-muted-foreground">
-                          {key}
-                        </div>
-                        <div className="mt-1 break-words">{value}</div>
-                      </div>
-                    ),
-                  )}
-                </div>
-                <details className="rounded border p-3">
-                  <summary className="cursor-pointer text-sm font-medium">
-                    Raw local metadata (advanced)
-                  </summary>
-                  <pre className="mt-3 max-h-56 overflow-auto rounded bg-muted p-3 text-xs">
-                    {JSON.stringify(detail.asset.metadata ?? {}, null, 2)}
-                  </pre>
-                </details>
-              </div>
-            </div>
-
-            <MediaPlacementEditor
-              key={`${detail.asset._id}:${detail.asset.placementRevision ?? 0}`}
-              asset={detail.asset}
-              onSaved={async () => {
-                await Promise.all([
-                  load(),
-                  openAsset(String(detail.asset._id)),
-                ]);
-              }}
-            />
-
-            {detail.visual?.visualUnderstanding && (
-              <div className="space-y-4 rounded-md border border-primary/30 p-4">
-                <div>
-                  <div className="text-lg font-semibold">
-                    {detail.visual.visualUnderstanding.shortCaption}
-                  </div>
-                  <p className="mt-2 whitespace-pre-wrap text-sm">
-                    {detail.visual.visualUnderstanding.description}
-                  </p>
-                </div>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="rounded bg-muted p-3 text-sm">
-                    <div className="font-medium">Scene</div>
-                    <div>{detail.visual.visualUnderstanding.scene.summary}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {detail.visual.visualUnderstanding.scene.environment} ·
+                      {(Number(detail.asset.byteLength) / 1_000_000).toFixed(2)}
                       {" "}
-                      {detail.visual.visualUnderstanding.scene.placeType} ·{" "}
-                      {detail.visual.visualUnderstanding.scene.timeOfDay}
-                    </div>
-                  </div>
-                  <div className="rounded bg-muted p-3 text-sm">
-                    <div className="font-medium">People</div>
-                    <div>
-                      Visible count:{" "}
-                      {detail.visual.visualUnderstanding.peopleCount}
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      No identity inference
-                    </div>
-                  </div>
-                  <div className="rounded bg-muted p-3 text-sm">
-                    <div className="font-medium">Possible event</div>
-                    <div>
-                      {detail.visual.visualUnderstanding.possibleEvent ??
-                        "Not confidently identified"}
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Overall confidence {Math.round(
-                        Number(detail.visual.visualUnderstanding.confidence) *
-                          100,
-                      )}%
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-2 font-medium">Objects</div>
-                  <div className="flex flex-wrap gap-2">
-                    {detail.visual.visualUnderstanding.objects.map(
-                      (item: any, index: number) => (
-                        <Badge
-                          key={`${item.name}-${index}`}
-                          variant="secondary"
-                        >
-                          {item.name}
-                          {item.count ? ` ×${item.count}` : ""}
-                        </Badge>
-                      ),
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-2 font-medium">Activities</div>
-                  <div className="flex flex-wrap gap-2">
-                    {detail.visual.visualUnderstanding.activities.map(
-                      (item: any, index: number) => (
-                        <Badge
-                          key={`${item.description}-${index}`}
-                          variant="outline"
-                        >
-                          {item.description}
-                        </Badge>
-                      ),
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-2 font-medium">Keywords</div>
-                  <div className="flex flex-wrap gap-2">
-                    {detail.visual.visualUnderstanding.keywords.map(
-                      (keyword: string) => (
-                        <Badge key={keyword}>{keyword}</Badge>
-                      ),
-                    )}
-                  </div>
-                </div>
-                {detail.visual.visualUnderstanding.warnings?.length > 0 && (
-                  <div className="rounded border border-amber-500/40 p-3 text-sm">
-                    {detail.visual.visualUnderstanding.warnings.join(" · ")}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {detail.pages?.length > 0 && (
-              <div className="space-y-3">
-                <div className="font-medium">OCR text</div>
-                {detail.pages.map((page: any) => (
-                  <div key={page._id} className="rounded-md border p-3">
-                    <Badge variant="outline">Page {page.pageNumber}</Badge>
-                    <pre className="mt-2 max-h-72 whitespace-pre-wrap overflow-auto text-sm">
-                      {page.text || "No text detected"}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {detail.annotations?.length > 0 && (
-              <div className="space-y-2">
-                <div className="font-medium">Annotations</div>
-                <div className="flex flex-wrap gap-2">
-                  {detail.annotations.map((annotation: any) => (
-                    <Badge key={annotation._id} variant="secondary">
-                      {annotation.type}: {annotation.label}
-                      {Number.isFinite(annotation.confidence)
-                        ? ` ${Math.round(annotation.confidence * 100)}%`
-                        : ""}
+                      MB
                     </Badge>
+                    {detail.asset.pageCount && (
+                      <Badge variant="outline">
+                        {detail.asset.pageCount} unit(s)
+                      </Badge>
+                    )}
+                  </div>
+                  {detail.asset.safeError && (
+                    <div className="rounded border border-destructive/40 p-3 text-sm text-destructive">
+                      {detail.asset.safeError}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button asChild>
+                      <Link to={`/media/analysis?assetId=${detail.asset._id}`}>
+                        Open in Photo analysis
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => deleteDerived("analysis")}
+                      disabled={busy || !(detail.runs?.length > 0)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />Delete derived analysis
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => deleteDerived("previews")}
+                      disabled={busy ||
+                        !(detail.asset.previewUrl || detail.asset.thumbnailUrl)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />Delete previews
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => deleteDerived("source_reference")}
+                      disabled={busy || !detail.asset.source}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />Forget original
+                      reference
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={prepareOriginalDeletion}
+                      disabled={busy ||
+                        detail.asset.storageMode !== "managed_original"}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />Review original
+                      deletion
+                    </Button>
+                  </div>
+                  {detail.asset.storageMode === "preview_only" && (
+                    <div className="rounded border border-amber-500/40 p-3 text-sm">
+                      The managed original was deleted. Compact previews,
+                      metadata, analysis, and search data remain available.
+                    </div>
+                  )}
+                  {deletionPreview && (
+                    <div className="space-y-3 rounded border border-destructive/50 p-3 text-sm">
+                      <div className="font-medium">
+                        Original deletion preview
+                      </div>
+                      <div>
+                        Original size: {(
+                          Number(deletionPreview.byteLength ?? 0) / 1_000_000
+                        ).toFixed(2)} MB · preview{" "}
+                        {deletionPreview.previewReady ? "ready" : "missing"}
+                        {" "}
+                        · analysis{" "}
+                        {deletionPreview.analysisReady ? "ready" : "missing"}
+                      </div>
+                      {deletionPreview.blockers?.length > 0 && (
+                        <ul className="list-disc pl-5 text-destructive">
+                          {deletionPreview.blockers.map((blocker: string) => (
+                            <li key={blocker}>{blocker}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {deletionPreview.canDelete && (
+                        <>
+                          <div>
+                            This permanently deletes only the managed original.
+                            WebP previews, local metadata, provider results, and
+                            search indexes are retained.
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="destructive"
+                              onClick={confirmOriginalDeletion}
+                              disabled={busy}
+                            >
+                              Permanently delete managed original
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => setDeletionPreview(undefined)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {Object.entries(mediaMetadataSummary(detail.asset)).map(
+                      ([key, value]) => (
+                        <div key={key} className="rounded bg-muted p-3 text-sm">
+                          <div className="text-xs font-medium uppercase text-muted-foreground">
+                            {key}
+                          </div>
+                          <div className="mt-1 break-words">{value}</div>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                  <details className="rounded border p-3">
+                    <summary className="cursor-pointer text-sm font-medium">
+                      Raw local metadata (advanced)
+                    </summary>
+                    <pre className="mt-3 max-h-56 overflow-auto rounded bg-muted p-3 text-xs">
+                    {JSON.stringify(detail.asset.metadata ?? {}, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              </div>
+
+              <MediaPlacementEditor
+                key={`${detail.asset._id}:${
+                  detail.asset.placementRevision ?? 0
+                }`}
+                asset={detail.asset}
+                onSaved={async () => {
+                  await Promise.all([
+                    load(),
+                    openAsset(String(detail.asset._id)),
+                  ]);
+                }}
+              />
+
+              {detail.visual?.visualUnderstanding && (
+                <div className="space-y-4 rounded-md border border-primary/30 p-4">
+                  <div>
+                    <div className="text-lg font-semibold">
+                      {detail.visual.visualUnderstanding.shortCaption}
+                    </div>
+                    <p className="mt-2 whitespace-pre-wrap text-sm">
+                      {detail.visual.visualUnderstanding.description}
+                    </p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded bg-muted p-3 text-sm">
+                      <div className="font-medium">Scene</div>
+                      <div>
+                        {detail.visual.visualUnderstanding.scene.summary}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {detail.visual.visualUnderstanding.scene.environment} ·
+                        {" "}
+                        {detail.visual.visualUnderstanding.scene.placeType} ·
+                        {" "}
+                        {detail.visual.visualUnderstanding.scene.timeOfDay}
+                      </div>
+                    </div>
+                    <div className="rounded bg-muted p-3 text-sm">
+                      <div className="font-medium">People</div>
+                      <div>
+                        Visible count:{" "}
+                        {detail.visual.visualUnderstanding.peopleCount}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        No identity inference
+                      </div>
+                    </div>
+                    <div className="rounded bg-muted p-3 text-sm">
+                      <div className="font-medium">Possible event</div>
+                      <div>
+                        {detail.visual.visualUnderstanding.possibleEvent ??
+                          "Not confidently identified"}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Overall confidence {Math.round(
+                          Number(detail.visual.visualUnderstanding.confidence) *
+                            100,
+                        )}%
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 font-medium">Objects</div>
+                    <div className="flex flex-wrap gap-2">
+                      {detail.visual.visualUnderstanding.objects.map(
+                        (item: any, index: number) => (
+                          <Badge
+                            key={`${item.name}-${index}`}
+                            variant="secondary"
+                          >
+                            {item.name}
+                            {item.count ? ` ×${item.count}` : ""}
+                          </Badge>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 font-medium">Activities</div>
+                    <div className="flex flex-wrap gap-2">
+                      {detail.visual.visualUnderstanding.activities.map(
+                        (item: any, index: number) => (
+                          <Badge
+                            key={`${item.description}-${index}`}
+                            variant="outline"
+                          >
+                            {item.description}
+                          </Badge>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 font-medium">Keywords</div>
+                    <div className="flex flex-wrap gap-2">
+                      {detail.visual.visualUnderstanding.keywords.map(
+                        (keyword: string) => (
+                          <Badge key={keyword}>{keyword}</Badge>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                  {detail.visual.visualUnderstanding.warnings?.length > 0 && (
+                    <div className="rounded border border-amber-500/40 p-3 text-sm">
+                      {detail.visual.visualUnderstanding.warnings.join(" · ")}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {detail.pages?.length > 0 && (
+                <div className="space-y-3">
+                  <div className="font-medium">OCR text</div>
+                  {detail.pages.map((page: any) => (
+                    <div key={page._id} className="rounded-md border p-3">
+                      <Badge variant="outline">Page {page.pageNumber}</Badge>
+                      <pre className="mt-2 max-h-72 whitespace-pre-wrap overflow-auto text-sm">
+                      {page.text || "No text detected"}
+                      </pre>
+                    </div>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
 
-            {detail.runs?.length > 0 && (
-              <div className="space-y-2">
-                <div className="font-medium">Recognition provenance</div>
-                {detail.runs.map((run: any) => (
-                  <div key={run._id} className="rounded-md border p-3 text-sm">
-                    <div className="flex flex-wrap gap-2">
-                      <Badge
-                        variant={run.state === "ready"
-                          ? "default"
-                          : "secondary"}
-                      >
-                        {run.state}
+              {detail.annotations?.length > 0 && (
+                <div className="space-y-2">
+                  <div className="font-medium">Annotations</div>
+                  <div className="flex flex-wrap gap-2">
+                    {detail.annotations.map((annotation: any) => (
+                      <Badge key={annotation._id} variant="secondary">
+                        {annotation.type}: {annotation.label}
+                        {Number.isFinite(annotation.confidence)
+                          ? ` ${Math.round(annotation.confidence * 100)}%`
+                          : ""}
                       </Badge>
-                      <span>
-                        {run.providerSnapshot?.name ?? "Unknown provider"}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-muted-foreground">
-                      {run.provenance?.service ?? "pending"} ·{" "}
-                      {run.provenance?.location ??
-                        "pending"}
-                      {run.provenance?.modelVersion
-                        ? ` · ${run.provenance.modelVersion}`
-                        : ""}
-                    </div>
-                    {run.usage && (
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        input/output/reasoning/embedding tokens:{" "}
-                        {run.usage.inputTokens ?? 0}/{run.usage.outputTokens ??
-                          0}/
-                        {run.usage.reasoningTokens ?? 0}/
-                        {run.usage.embeddingTokens ?? 0} · OCR units:{" "}
-                        {run.usage.ocrUnits ?? 0}{" "}
-                        · estimated list price: ${Number(
-                          run.usage.grossListPriceUsd ?? 0,
-                        ).toFixed(4)}
-                      </div>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+                </div>
+              )}
+
+              {detail.runs?.length > 0 && (
+                <div className="space-y-2">
+                  <div className="font-medium">Recognition provenance</div>
+                  {detail.runs.map((run: any) => (
+                    <div
+                      key={run._id}
+                      className="rounded-md border p-3 text-sm"
+                    >
+                      <div className="flex flex-wrap gap-2">
+                        <Badge
+                          variant={run.state === "ready"
+                            ? "default"
+                            : "secondary"}
+                        >
+                          {run.state}
+                        </Badge>
+                        <span>
+                          {run.providerSnapshot?.name ?? "Unknown provider"}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-muted-foreground">
+                        {run.provenance?.service ?? "pending"} ·{" "}
+                        {run.provenance?.location ??
+                          "pending"}
+                        {run.provenance?.modelVersion
+                          ? ` · ${run.provenance.modelVersion}`
+                          : ""}
+                      </div>
+                      {run.usage && (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          input/output/reasoning/embedding tokens:{" "}
+                          {run.usage.inputTokens ??
+                            0}/{run.usage.outputTokens ??
+                            0}/
+                          {run.usage.reasoningTokens ?? 0}/
+                          {run.usage.embeddingTokens ?? 0} · OCR units:{" "}
+                          {run.usage.ocrUnits ?? 0}{" "}
+                          · estimated list price: ${Number(
+                            run.usage.grossListPriceUsd ?? 0,
+                          ).toFixed(4)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
   );
 }

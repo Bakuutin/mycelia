@@ -89,6 +89,10 @@ const listAssetsSchema = z.object({
   limit: z.number().int().min(1).max(500).default(100),
   before: z.string().datetime().optional(),
   cursor: z.string().max(200).optional(),
+  kind: z.enum(["all", "image", "pdf"]).default("all"),
+  query: z.string().trim().min(1).max(200).optional(),
+  capturedFrom: z.string().datetime().optional(),
+  capturedTo: z.string().datetime().optional(),
   inventoryFilter: z.enum([
     "all",
     "unprocessed",
@@ -381,6 +385,47 @@ export function mediaPlacementFilterQuery(
     return { $nor: [{ "geo.type": "Point" }] };
   }
   return {};
+}
+
+function escapeMongoRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function mediaAssetListFilterQuery(
+  owner: string,
+  input: Pick<
+    z.infer<typeof listAssetsSchema>,
+    | "inventoryFilter"
+    | "placement"
+    | "kind"
+    | "query"
+    | "capturedFrom"
+    | "capturedTo"
+  >,
+): Record<string, unknown> {
+  const query: Record<string, unknown> = {
+    owner,
+    ...mediaInventoryFilterQuery(input.inventoryFilter),
+    ...mediaPlacementFilterQuery(input.placement),
+  };
+  if (input.kind !== "all") query.kind = input.kind;
+  if (input.query) {
+    const pattern = escapeMongoRegex(input.query);
+    query.$or = [
+      { fileName: { $regex: pattern, $options: "i" } },
+      { "source.relativePath": { $regex: pattern, $options: "i" } },
+    ];
+  }
+  if (input.capturedFrom || input.capturedTo) {
+    const range: Record<string, Date> = {};
+    if (input.capturedFrom) range.$gte = new Date(input.capturedFrom);
+    if (input.capturedTo) range.$lte = new Date(input.capturedTo);
+    if (range.$gte && range.$lte && range.$gte > range.$lte) {
+      throw new Error("Capture date start must not be after the end");
+    }
+    query.capturedAt = range;
+  }
+  return query;
 }
 
 const STAGED_ORIGINAL_TTL_MS = 60 * 60 * 1000;
@@ -2590,11 +2635,10 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
       }
 
       case "listAssets": {
-        const baseQuery: any = {
-          owner: auth.principal,
-          ...mediaInventoryFilterQuery(input.inventoryFilter),
-          ...mediaPlacementFilterQuery(input.placement),
-        };
+        const baseQuery: any = mediaAssetListFilterQuery(
+          auth.principal,
+          input,
+        );
         if (input.status) baseQuery.status = input.status;
         const pageConditions: Record<string, unknown>[] = [];
         if (input.before) {

@@ -30,11 +30,17 @@ import {
   zMediaKnowledgeConfig,
   zMediaRecognitionTask,
 } from "@myceliasdk/media.ts";
+import {
+  type MediaRecognitionSelection,
+  zMediaRecognitionSelection,
+} from "@myceliasdk/media-library.ts";
 
 export const FOLDER_CHUNK_SIZE = 25;
 const MAX_FOLDER_FILES = 20_000;
 export const RECOGNITION_WINDOW = 16;
 const PREVIEW_TTL_MS = 60 * 60 * 1000;
+const RESERVATION_PREPARE_TTL_MS = 15 * 60 * 1000;
+const RETRY_RESERVATION_TTL_MS = 5 * 60 * 1000;
 const STALE_ITEM_MS = 20 * 60 * 1000;
 const FOLDER_STALE_ITEM_MS = 5 * 60 * 1000;
 
@@ -70,6 +76,7 @@ const previewRecognitionBatchSchema = z.object({
   action: z.literal("previewRecognitionBatch"),
   profileId: z.string().min(1),
   requestedTasks: recognitionTasksSchema,
+  selection: zMediaRecognitionSelection.optional(),
 });
 const confirmRecognitionBatchSchema = z.object({
   action: z.literal("confirmRecognitionBatch"),
@@ -79,6 +86,10 @@ const confirmRecognitionBatchSchema = z.object({
 const getRecognitionBatchSchema = z.object({
   action: z.literal("getRecognitionBatch"),
   batchId: z.string().refine(ObjectId.isValid),
+});
+const listRecognitionBatchesSchema = z.object({
+  action: z.literal("listRecognitionBatches"),
+  limit: z.number().int().min(1).max(20).default(10),
 });
 const cancelRecognitionBatchSchema = z.object({
   action: z.literal("cancelRecognitionBatch"),
@@ -136,6 +147,7 @@ export const mediaLibraryRequestSchema = z.discriminatedUnion("action", [
   previewRecognitionBatchSchema,
   confirmRecognitionBatchSchema,
   getRecognitionBatchSchema,
+  listRecognitionBatchesSchema,
   cancelRecognitionBatchSchema,
   retryRecognitionBatchFailuresSchema,
   processRecognitionBatchSchema,
@@ -197,11 +209,18 @@ export function assertRecognitionTasks(
   }
   if (tasks.includes("labels") || tasks.includes("objects")) {
     throw new Error(
-      "Bulk EU Photo Knowledge intentionally supports visual understanding and OCR only",
+      "Bulk photo recognition intentionally supports visual understanding and OCR only",
     );
   }
-  if (profile.providerType !== "google-cloud") {
-    throw new Error("This batch action requires a Google Cloud media profile");
+}
+
+export function assertRecognitionBatchRetryAllowed(
+  profile: MediaRecognitionProfile,
+): void {
+  if (profile.providerType === "google-cloud") {
+    throw new Error(
+      "Google retries require a new exact batch preview and cost confirmation",
+    );
   }
 }
 
@@ -1080,7 +1099,288 @@ export function recognitionEligibilityQuery(owner: string) {
   };
 }
 
-async function reconcileRecognitionBatch(db: Db, batch: any): Promise<any> {
+export function normalizeRecognitionSelection(
+  selection?: MediaRecognitionSelection,
+): MediaRecognitionSelection {
+  const parsed = zMediaRecognitionSelection.parse(
+    selection ?? { mode: "all_matching" },
+  );
+  return {
+    ...parsed,
+    ...(parsed.assetIds
+      ? { assetIds: [...parsed.assetIds].map((id) => id.toLowerCase()).sort() }
+      : {}),
+  };
+}
+
+function inventorySelectionQuery(
+  filter: MediaRecognitionSelection["inventoryFilter"],
+): Record<string, unknown> {
+  if (filter === "ready") return { status: "ready" };
+  if (filter === "processing") {
+    return { status: { $in: ["queued", "processing"] } };
+  }
+  if (filter === "needs_attention") {
+    return {
+      status: {
+        $in: [
+          "failed",
+          "budget_blocked",
+          "recognition_disabled",
+          "source_missing",
+          "source_changed",
+        ],
+      },
+    };
+  }
+  if (filter === "unprocessed") {
+    return { status: { $nin: ["ready", "queued", "processing"] } };
+  }
+  return {};
+}
+
+function placementSelectionQuery(
+  placement: MediaRecognitionSelection["placement"],
+): Record<string, unknown> {
+  if (placement === "missing_time") {
+    return { $nor: [{ capturedAt: { $type: "date" } }] };
+  }
+  if (placement === "missing_location") {
+    return { $nor: [{ "geo.type": "Point" }] };
+  }
+  return {};
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function recognitionSelectionScopeQuery(
+  owner: string,
+  cutoff: Date,
+  selection: MediaRecognitionSelection,
+): Record<string, unknown> {
+  const conditions: Record<string, unknown>[] = [
+    { owner, kind: "image" },
+    { createdAt: { $lte: cutoff } },
+  ];
+  const inventory = inventorySelectionQuery(selection.inventoryFilter);
+  if (Object.keys(inventory).length > 0) conditions.push(inventory);
+  const placement = placementSelectionQuery(selection.placement);
+  if (Object.keys(placement).length > 0) conditions.push(placement);
+  if (selection.query) {
+    conditions.push({
+      $or: [
+        {
+          fileName: { $regex: escapeRegex(selection.query), $options: "i" },
+        },
+        {
+          "source.relativePath": {
+            $regex: escapeRegex(selection.query),
+            $options: "i",
+          },
+        },
+      ],
+    });
+  }
+  if (selection.capturedFrom || selection.capturedTo) {
+    conditions.push({
+      capturedAt: {
+        ...(selection.capturedFrom
+          ? { $gte: new Date(selection.capturedFrom) }
+          : {}),
+        ...(selection.capturedTo
+          ? { $lte: new Date(selection.capturedTo) }
+          : {}),
+      },
+    });
+  }
+  if (selection.mode === "explicit") {
+    conditions.push({
+      _id: {
+        $in: (selection.assetIds ?? []).map((id) => new ObjectId(id)),
+      },
+    });
+  }
+  return { $and: conditions };
+}
+
+export function recognitionSelectionQuery(
+  owner: string,
+  cutoff: Date,
+  selection: MediaRecognitionSelection,
+): Record<string, unknown> {
+  return {
+    $and: [
+      recognitionEligibilityQuery(owner),
+      recognitionSelectionScopeQuery(owner, cutoff, selection),
+    ],
+  };
+}
+
+type RecognitionReservationRef = {
+  assetId: ObjectId;
+  sha256: string;
+};
+
+function recognitionReservationId(owner: string, assetId: ObjectId): ObjectId {
+  return deterministicObjectId([
+    "media-recognition-asset-reservation-v1",
+    owner,
+    assetId,
+  ]);
+}
+
+async function cleanupExpiredRecognitionReservations(db: Db, now: Date) {
+  await db.collection("media_recognition_asset_reservations").deleteMany({
+    state: "preparing",
+    expiresAt: { $lte: now },
+  });
+}
+
+export async function activeRecognitionReservationAssetIds(
+  db: Db,
+  owner: string,
+  now = new Date(),
+): Promise<ObjectId[]> {
+  await cleanupExpiredRecognitionReservations(db, now);
+  return await db.collection<any>("media_recognition_asset_reservations")
+    .find({ owner }, { projection: { assetId: 1 } })
+    .limit(MAX_FOLDER_FILES).map((entry) => entry.assetId as ObjectId)
+    .toArray();
+}
+
+export async function reserveRecognitionAssets(
+  db: Db,
+  owner: string,
+  batchId: ObjectId,
+  assetRefs: RecognitionReservationRef[],
+  now = new Date(),
+  allowPartial = false,
+): Promise<{ reservedAssetIds: ObjectId[]; conflictAssetIds: ObjectId[] }> {
+  if (assetRefs.length === 0) {
+    return { reservedAssetIds: [], conflictAssetIds: [] };
+  }
+  await cleanupExpiredRecognitionReservations(db, now);
+  const reservations = db.collection<any>(
+    "media_recognition_asset_reservations",
+  );
+  for (let offset = 0; offset < assetRefs.length; offset += 500) {
+    const page = assetRefs.slice(offset, offset + 500);
+    try {
+      await reservations.bulkWrite(
+        page.map((entry) => ({
+          updateOne: {
+            filter: {
+              _id: recognitionReservationId(owner, entry.assetId),
+              state: "preparing",
+              expiresAt: { $lte: now },
+            },
+            update: {
+              $set: {
+                owner,
+                assetId: entry.assetId,
+                sha256: entry.sha256,
+                batchId,
+                state: "preparing",
+                expiresAt: new Date(
+                  now.getTime() + RESERVATION_PREPARE_TTL_MS,
+                ),
+                updatedAt: now,
+              },
+              $setOnInsert: { createdAt: now },
+            },
+            upsert: true,
+          },
+        })),
+        { ordered: false },
+      );
+    } catch (error) {
+      const code = (error as { code?: number })?.code;
+      if (code !== 11000) throw error;
+      // Unordered writes still reserve every free asset. Exact ownership is
+      // verified below; duplicate-key rows belong to this or another batch.
+    }
+  }
+  const ids = assetRefs.map((entry) =>
+    recognitionReservationId(owner, entry.assetId)
+  );
+  const current = await reservations.find(
+    { _id: { $in: ids } },
+    { projection: { assetId: 1, batchId: 1 } },
+  ).toArray();
+  const byAsset = new Map(
+    current.map((entry) => [String(entry.assetId), String(entry.batchId)]),
+  );
+  const reservedAssetIds: ObjectId[] = [];
+  const conflictAssetIds: ObjectId[] = [];
+  for (const entry of assetRefs) {
+    if (byAsset.get(String(entry.assetId)) === String(batchId)) {
+      reservedAssetIds.push(entry.assetId);
+    } else {
+      conflictAssetIds.push(entry.assetId);
+    }
+  }
+  if (!allowPartial && conflictAssetIds.length > 0) {
+    await reservations.deleteMany({ batchId, state: "preparing" });
+    return { reservedAssetIds: [], conflictAssetIds };
+  }
+  return { reservedAssetIds, conflictAssetIds };
+}
+
+export async function activateRecognitionReservations(
+  db: Db,
+  batchId: ObjectId,
+) {
+  await db.collection("media_recognition_asset_reservations").updateMany(
+    { batchId },
+    {
+      $set: { state: "active", updatedAt: new Date() },
+      $unset: { expiresAt: "" },
+    },
+  );
+}
+
+export async function releaseRecognitionReservations(
+  db: Db,
+  batchId: ObjectId,
+) {
+  await db.collection("media_recognition_asset_reservations").deleteMany({
+    batchId,
+  });
+}
+
+export async function reconcileRecognitionBatch(
+  db: Db,
+  batch: any,
+): Promise<any> {
+  if (batch.materializationPending && !batch.materializedAt) {
+    return batch;
+  }
+  if (batch.retryReservationClaim) {
+    const expiresAt = new Date(batch.retryReservationClaim.expiresAt);
+    if (expiresAt > new Date()) return batch;
+    await db.collection("media_recognition_batches").updateOne(
+      {
+        _id: batch._id,
+        "retryReservationClaim.id": batch.retryReservationClaim.id,
+      },
+      { $unset: { retryReservationClaim: "" } },
+    );
+    delete batch.retryReservationClaim;
+  }
+  if (batch.reservationReleaseClaim) {
+    const expiresAt = new Date(batch.reservationReleaseClaim.expiresAt);
+    if (expiresAt > new Date()) return batch;
+    await db.collection("media_recognition_batches").updateOne(
+      {
+        _id: batch._id,
+        "reservationReleaseClaim.id": batch.reservationReleaseClaim.id,
+      },
+      { $unset: { reservationReleaseClaim: "" } },
+    );
+    delete batch.reservationReleaseClaim;
+  }
   const items = db.collection<any>("media_recognition_batch_items");
   const activeItems = await items.find({
     batchId: batch._id,
@@ -1167,12 +1467,64 @@ async function reconcileRecognitionBatch(db: Db, batch: any): Promise<any> {
     status = open > 0 ? "running" : "cancelled";
   } else if (open === 0) {
     status = counts.failed > 0 ? "completed_with_errors" : "completed";
-  } else if (counts.queued + counts.processing > 0) status = "running";
+  } else if (open > 0) {
+    status = counts.queued + counts.processing > 0 ? "running" : "queued";
+  }
   const terminal = ["completed", "completed_with_errors", "cancelled"].includes(
     status,
   );
+  let releaseClaimId: string | undefined;
+  if (terminal) {
+    releaseClaimId = randomUUID();
+    const claimNow = new Date();
+    const claimed = await db.collection<any>("media_recognition_batches")
+      .findOneAndUpdate(
+        {
+          _id: batch._id,
+          $and: [
+            {
+              $or: [
+                { retryReservationClaim: { $exists: false } },
+                { "retryReservationClaim.expiresAt": { $lte: claimNow } },
+              ],
+            },
+            {
+              $or: [
+                { reservationReleaseClaim: { $exists: false } },
+                {
+                  "reservationReleaseClaim.expiresAt": { $lte: claimNow },
+                },
+              ],
+            },
+          ],
+        },
+        {
+          $set: {
+            reservationReleaseClaim: {
+              id: releaseClaimId,
+              expiresAt: new Date(
+                claimNow.getTime() + RETRY_RESERVATION_TTL_MS,
+              ),
+            },
+          },
+          $unset: { retryReservationClaim: "" },
+        },
+        { returnDocument: "after" },
+      );
+    if (!claimed) {
+      return await db.collection<any>("media_recognition_batches").findOne({
+        _id: batch._id,
+      }) ?? batch;
+    }
+    batch = claimed;
+  }
   await db.collection("media_recognition_batches").updateOne(
-    { _id: batch._id },
+    {
+      _id: batch._id,
+      ...(releaseClaimId
+        ? { "reservationReleaseClaim.id": releaseClaimId }
+        : {}),
+    },
     {
       $set: {
         status,
@@ -1182,12 +1534,52 @@ async function reconcileRecognitionBatch(db: Db, batch: any): Promise<any> {
       },
     },
   );
+  if (terminal && releaseClaimId) {
+    await releaseRecognitionReservations(db, batch._id);
+    await db.collection("media_recognition_batches").updateOne(
+      { _id: batch._id, "reservationReleaseClaim.id": releaseClaimId },
+      { $unset: { reservationReleaseClaim: "" } },
+    );
+  }
   return {
     ...batch,
     status,
     counts,
     ...(terminal ? { completedAt: batch.completedAt ?? new Date() } : {}),
   };
+}
+
+export function recognitionBatchOwnerQuery(owner: string) {
+  return { owner };
+}
+
+async function recentRecognitionFailures(
+  db: Db,
+  batchId: ObjectId,
+  limit = 20,
+) {
+  return await db.collection<any>("media_recognition_batch_items").find({
+    batchId,
+    state: { $in: ["failed", "budget_blocked"] },
+  }, { projection: { assetId: 1, state: 1, safeError: 1 } })
+    .sort({ updatedAt: -1 }).limit(limit).toArray();
+}
+
+export async function listRecognitionBatches(
+  db: Db,
+  owner: string,
+  limit: number,
+) {
+  const recent = await db.collection<any>("media_recognition_batches")
+    .find(recognitionBatchOwnerQuery(owner))
+    .sort({ createdAt: -1, _id: -1 }).limit(limit).toArray();
+  return await Promise.all(recent.map(async (batch) => {
+    const reconciled = await reconcileRecognitionBatch(db, batch);
+    return {
+      ...reconciled,
+      recentFailures: await recentRecognitionFailures(db, batch._id),
+    };
+  }));
 }
 
 async function originalAvailable(db: Db, asset: any): Promise<boolean> {
@@ -1221,13 +1613,19 @@ export function selectionDigest(
   profile: MediaRecognitionProfile,
   tasks: MediaRecognitionTask[],
   assets: Array<{ _id: ObjectId; sha256: string }>,
+  selection?: MediaRecognitionSelection,
 ): string {
   return stableHash([
-    "media-recognition-batch-selection-v1",
+    selection
+      ? "media-recognition-batch-selection-v2"
+      : "media-recognition-batch-selection-v1",
     owner,
     cutoff.toISOString(),
     JSON.stringify(profile),
     [...tasks].sort().join(","),
+    ...(selection
+      ? [JSON.stringify(normalizeRecognitionSelection(selection))]
+      : []),
     ...assets.map((asset) => `${asset._id}:${asset.sha256}`),
   ]);
 }
@@ -1242,6 +1640,7 @@ async function prepareRecognitionBatch(
   const requestedTasks = [
     ...new Set(input.requestedTasks),
   ] as MediaRecognitionTask[];
+  const selection = normalizeRecognitionSelection(input.selection);
   assertRecognitionTasks(profile, requestedTasks);
   const perAssetGrossUsd = estimateMediaGrossUsd(
     "image",
@@ -1251,19 +1650,39 @@ async function prepareRecognitionBatch(
   );
   assertMediaPerImportBudget(config, perAssetGrossUsd);
   const cutoff = new Date();
-  const candidates = await db.collection<any>("media_assets").find({
-    ...recognitionEligibilityQuery(auth.principal),
-    createdAt: { $lte: cutoff },
-  }, {
-    projection: {
-      _id: 1,
-      owner: 1,
-      sha256: 1,
-      storageMode: 1,
-      managedOriginal: 1,
-      source: 1,
+  const reservedAssetIds = await activeRecognitionReservationAssetIds(
+    db,
+    auth.principal,
+    cutoff,
+  );
+  const selectionQuery = recognitionSelectionQuery(
+    auth.principal,
+    cutoff,
+    selection,
+  );
+  const reservedByActiveBatchCount = reservedAssetIds.length > 0
+    ? await db.collection("media_assets").countDocuments({
+      $and: [
+        recognitionSelectionScopeQuery(auth.principal, cutoff, selection),
+        { _id: { $in: reservedAssetIds } },
+      ],
+    })
+    : 0;
+  const candidates = await db.collection<any>("media_assets").find(
+    reservedAssetIds.length > 0
+      ? { $and: [selectionQuery, { _id: { $nin: reservedAssetIds } }] }
+      : selectionQuery,
+    {
+      projection: {
+        _id: 1,
+        owner: 1,
+        sha256: 1,
+        storageMode: 1,
+        managedOriginal: 1,
+        source: 1,
+      },
     },
-  }).sort({ createdAt: 1, _id: 1 }).limit(MAX_FOLDER_FILES).toArray();
+  ).sort({ createdAt: 1, _id: 1 }).limit(MAX_FOLDER_FILES).toArray();
 
   const eligible: Array<{ _id: ObjectId; sha256: string }> = [];
   const missingIds: ObjectId[] = [];
@@ -1295,11 +1714,11 @@ async function prepareRecognitionBatch(
   }
   const skippedRows = await db.collection("media_assets").aggregate([
     {
-      $match: {
-        owner: auth.principal,
-        kind: "image",
-        createdAt: { $lte: cutoff },
-      },
+      $match: recognitionSelectionScopeQuery(
+        auth.principal,
+        cutoff,
+        selection,
+      ),
     },
     { $group: { _id: "$status", count: { $sum: 1 } } },
   ]).toArray();
@@ -1312,6 +1731,7 @@ async function prepareRecognitionBatch(
     profile,
     requestedTasks,
     eligible,
+    selection,
   );
   const previewId = new ObjectId();
   const now = new Date();
@@ -1324,6 +1744,7 @@ async function prepareRecognitionBatch(
     cutoff,
     profileSnapshot: profile,
     requestedTasks,
+    selection,
     assetRefs: eligible.map((asset) => ({
       assetId: asset._id,
       sha256: asset.sha256,
@@ -1332,6 +1753,7 @@ async function prepareRecognitionBatch(
     perAssetGrossUsd,
     authorizedGrossUsd,
     missingOriginalCount: missingIds.length,
+    reservedByActiveBatchCount,
     skippedByStatus,
     createdAt: now,
     expiresAt: new Date(now.getTime() + PREVIEW_TTL_MS),
@@ -1345,11 +1767,13 @@ async function prepareRecognitionBatch(
       providerType: profile.providerType,
     },
     requestedTasks,
+    selection,
     eligibleCount: eligible.length,
     missingOriginalCount: missingIds.length,
     skippedByStatus,
     perAssetGrossUsd,
     authorizedGrossUsd,
+    reservedByActiveBatchCount,
     selectionDigest: digest,
     expiresAt: new Date(now.getTime() + PREVIEW_TTL_MS),
   };
@@ -1394,12 +1818,112 @@ async function ensureRecognitionBatchItems(
   }
 }
 
+export async function materializeRecognitionBatch(
+  db: Db,
+  batch: any,
+  assetRefs: RecognitionReservationRef[],
+  now: Date,
+): Promise<any> {
+  const reservation = await reserveRecognitionAssets(
+    db,
+    batch.owner,
+    batch._id,
+    assetRefs,
+    now,
+  );
+  if (reservation.conflictAssetIds.length > 0) {
+    const safeError =
+      `${reservation.conflictAssetIds.length} photo(s) are already reserved by another active recognition batch`;
+    await db.collection("media_recognition_batches").updateOne(
+      { _id: batch._id, materializedAt: { $exists: false } },
+      { $set: { status: "paused", safeError, updatedAt: new Date() } },
+    );
+    throw new Error(
+      `${safeError}. Build a new preview to process only the remaining photos.`,
+    );
+  }
+  await ensureRecognitionBatchItems(
+    db,
+    batch._id,
+    batch.owner,
+    assetRefs,
+    now,
+  );
+  await activateRecognitionReservations(db, batch._id);
+  const finalized = await db.collection("media_recognition_batches").updateOne(
+    {
+      _id: batch._id,
+      materializationPending: true,
+      materializedAt: { $exists: false },
+      cancelRequestedAt: { $exists: false },
+    },
+    {
+      $set: {
+        status: "queued",
+        materializedAt: new Date(),
+        updatedAt: new Date(),
+      },
+      $unset: {
+        materializationPending: "",
+        materializationAssetRefs: "",
+        safeError: "",
+      },
+    },
+  );
+  const current = await db.collection<any>("media_recognition_batches").findOne(
+    {
+      _id: batch._id,
+    },
+  );
+  if (finalized.modifiedCount === 1 || current?.materializedAt) return current;
+  if (current?.cancelRequestedAt || current?.status === "cancelled") {
+    await db.collection("media_recognition_batch_items").updateMany(
+      { batchId: batch._id, state: "pending" },
+      { $set: { state: "cancelled", updatedAt: new Date() } },
+    );
+    await releaseRecognitionReservations(db, batch._id);
+    return current;
+  }
+  throw new Error("Recognition batch materialization lost its durable claim");
+}
+
 async function confirmRecognitionBatch(
   db: Db,
   auth: AuthType,
   input: z.infer<typeof confirmRecognitionBatchSchema>,
 ): Promise<Record<string, unknown>> {
   const previewId = new ObjectId(input.previewId);
+  const existing = await db.collection<any>("media_recognition_batches")
+    .findOne({ previewId, owner: auth.principal });
+  if (existing) {
+    const durableRefs = Array.isArray(existing.materializationAssetRefs)
+      ? existing.materializationAssetRefs
+      : [];
+    if (!existing.materializedAt && durableRefs.length === 0) {
+      throw new Error(
+        "Recognition batch materialization data is missing; build a new preview",
+      );
+    }
+    const resumed = existing.materializedAt
+      ? existing
+      : await materializeRecognitionBatch(
+        db,
+        existing,
+        durableRefs,
+        existing.createdAt ?? new Date(),
+      );
+    if (["queued", "running"].includes(resumed.status)) {
+      try {
+        await enqueueRecognitionWorker(resumed._id, auth);
+      } catch {
+        // The periodic coordinator is the durable recovery path.
+      }
+    }
+    return {
+      batch: await reconcileRecognitionBatch(db, resumed),
+      reused: true,
+    };
+  }
   const preview = await db.collection<any>("media_recognition_batch_previews")
     .findOne({
       _id: previewId,
@@ -1409,28 +1933,6 @@ async function confirmRecognitionBatch(
   if (!preview) {
     throw new Error("Recognition batch preview expired or was not found");
   }
-  const existing = await db.collection<any>("media_recognition_batches")
-    .findOne({ previewId, owner: auth.principal });
-  if (existing) {
-    await ensureRecognitionBatchItems(
-      db,
-      existing._id,
-      auth.principal,
-      preview.assetRefs,
-      existing.createdAt ?? new Date(),
-    );
-    if (["queued", "running"].includes(existing.status)) {
-      try {
-        await enqueueRecognitionWorker(existing._id, auth);
-      } catch {
-        // The periodic coordinator is the durable recovery path.
-      }
-    }
-    return {
-      batch: await reconcileRecognitionBatch(db, existing),
-      reused: true,
-    };
-  }
   const config = await loadConfig();
   const profile = selectProfile(config, preview.profileSnapshot.id);
   if (JSON.stringify(profile) !== JSON.stringify(preview.profileSnapshot)) {
@@ -1439,6 +1941,9 @@ async function confirmRecognitionBatch(
     );
   }
   const requestedTasks = preview.requestedTasks as MediaRecognitionTask[];
+  const selection = preview.selection
+    ? normalizeRecognitionSelection(preview.selection)
+    : undefined;
   assertRecognitionTasks(profile, requestedTasks);
   const assetIds = preview.assetRefs.map((entry: any) => entry.assetId);
   const currentAssets = await db.collection<any>("media_assets").find({
@@ -1462,6 +1967,7 @@ async function confirmRecognitionBatch(
     profile,
     requestedTasks,
     exactAssets,
+    selection,
   );
   if (
     digest !== preview.selectionDigest ||
@@ -1475,6 +1981,18 @@ async function confirmRecognitionBatch(
     auth.principal,
     preview.selectionDigest,
   ]);
+  const reservation = await reserveRecognitionAssets(
+    db,
+    auth.principal,
+    batchId,
+    exactRefs,
+    now,
+  );
+  if (reservation.conflictAssetIds.length > 0) {
+    throw new Error(
+      `${reservation.conflictAssetIds.length} photo(s) were reserved by another active recognition batch after this preview. Build a new preview to select only the remaining photos.`,
+    );
+  }
   const receipt = {
     id: randomUUID(),
     principal: auth.principal,
@@ -1484,6 +2002,7 @@ async function confirmRecognitionBatch(
     assetCount: exactRefs.length,
     profileFingerprint: stableHash([JSON.stringify(profile)]),
     requestedTasks,
+    selection: selection ?? normalizeRecognitionSelection(),
     authorizedGrossUsd: preview.authorizedGrossUsd,
     confirmedAt: now,
   };
@@ -1493,11 +2012,14 @@ async function confirmRecognitionBatch(
       previewId,
       owner: auth.principal,
       status: "queued",
+      materializationPending: true,
+      materializationAssetRefs: exactRefs,
       cutoff: preview.cutoff,
       profileId: profile.id,
       profileName: profile.name,
       profileSnapshot: profile,
       requestedTasks,
+      selection: selection ?? normalizeRecognitionSelection(),
       selectionDigest: preview.selectionDigest,
       perAssetGrossUsd: preview.perAssetGrossUsd,
       authorizedGrossUsd: preview.authorizedGrossUsd,
@@ -1507,20 +2029,22 @@ async function confirmRecognitionBatch(
       updatedAt: now,
     });
   } catch (error) {
-    if ((error as { code?: number })?.code !== 11000) throw error;
+    if ((error as { code?: number })?.code !== 11000) {
+      await db.collection("media_recognition_asset_reservations").deleteMany({
+        batchId,
+        state: "preparing",
+      });
+      throw error;
+    }
   }
-  await ensureRecognitionBatchItems(
-    db,
-    batchId,
-    auth.principal,
-    exactRefs,
-    now,
-  );
-  const batch = await db.collection<any>("media_recognition_batches").findOne({
+  let batch = await db.collection<any>("media_recognition_batches").findOne({
     _id: batchId,
     owner: auth.principal,
   });
   if (!batch) throw new Error("Recognition batch could not be created");
+  batch = batch.materializedAt
+    ? batch
+    : await materializeRecognitionBatch(db, batch, exactRefs, now);
   let coordinatorJobId: string | undefined;
   if (exactRefs.length > 0) {
     try {
@@ -1580,6 +2104,36 @@ async function processRecognitionBatch(
     );
   if (!batch) {
     return { success: true, idle: true, processed: 0, hasMore: false };
+  }
+  if (batch.materializationPending && !batch.materializedAt) {
+    const durableRefs = Array.isArray(batch.materializationAssetRefs)
+      ? batch.materializationAssetRefs
+      : [];
+    if (durableRefs.length === 0) {
+      await batches.updateOne(
+        { _id: batch._id, materializationPending: true },
+        {
+          $set: {
+            status: "paused",
+            safeError:
+              "Recognition batch materialization data is missing; build a new preview",
+            updatedAt: new Date(),
+          },
+        },
+      );
+      return {
+        success: true,
+        batchId: String(batch._id),
+        processed: 0,
+        hasMore: false,
+      };
+    }
+    batch = await materializeRecognitionBatch(
+      db,
+      batch,
+      durableRefs,
+      batch.createdAt ?? new Date(),
+    );
   }
   batch = await reconcileRecognitionBatch(db, batch);
   if (
@@ -2136,6 +2690,42 @@ async function updatePlacement(
   return { success: true, asset: result };
 }
 
+export function mediaLibrarySummaryQueries(owner: string) {
+  const images = { owner, kind: "image" };
+  return {
+    all: images,
+    unprocessed: {
+      ...images,
+      status: { $nin: ["ready", "queued", "processing"] },
+    },
+    processing: {
+      ...images,
+      status: { $in: ["queued", "processing"] },
+    },
+    missingTime: {
+      ...images,
+      $nor: [{ capturedAt: { $type: "date" } }],
+    },
+    missingLocation: {
+      ...images,
+      $nor: [{ "geo.type": "Point" }],
+    },
+    ready: { ...images, status: "ready" },
+    needsAttention: {
+      ...images,
+      status: {
+        $in: [
+          "failed",
+          "budget_blocked",
+          "recognition_disabled",
+          "source_missing",
+          "source_changed",
+        ],
+      },
+    },
+  };
+}
+
 export class MediaLibraryResource
   implements Resource<MediaLibraryRequest, unknown> {
   code = "media-library";
@@ -2214,15 +2804,17 @@ export class MediaLibraryResource
           .findOne({ _id: new ObjectId(input.batchId), owner: auth.principal });
         if (!batch) throw new Error("Recognition batch was not found");
         const reconciled = await reconcileRecognitionBatch(db, batch);
-        const recentFailures = await db.collection<any>(
-          "media_recognition_batch_items",
-        ).find({
-          batchId: batch._id,
-          state: { $in: ["failed", "budget_blocked"] },
-        }, { projection: { assetId: 1, state: 1, safeError: 1 } })
-          .sort({ updatedAt: -1 }).limit(20).toArray();
+        const recentFailures = await recentRecognitionFailures(db, batch._id);
         return { batch: reconciled, recentFailures };
       }
+      case "listRecognitionBatches":
+        return {
+          batches: await listRecognitionBatches(
+            db,
+            auth.principal,
+            input.limit,
+          ),
+        };
       case "cancelRecognitionBatch": {
         const now = new Date();
         const batch = await db.collection<any>("media_recognition_batches")
@@ -2236,6 +2828,32 @@ export class MediaLibraryResource
             { returnDocument: "after" },
           );
         if (!batch) throw new Error("Active recognition batch was not found");
+        if (batch.materializationPending && !batch.materializedAt) {
+          await db.collection("media_recognition_batch_items").updateMany(
+            { batchId: batch._id, state: "pending" },
+            { $set: { state: "cancelled", updatedAt: now } },
+          );
+          await releaseRecognitionReservations(db, batch._id);
+          const cancelled = await db.collection<any>(
+            "media_recognition_batches",
+          ).findOneAndUpdate(
+            { _id: batch._id, materializationPending: true },
+            {
+              $set: {
+                status: "cancelled",
+                counts: {
+                  total: Number(batch.counts?.total ?? 0),
+                  cancelled: Number(batch.counts?.total ?? 0),
+                },
+                completedAt: now,
+                updatedAt: now,
+              },
+              $unset: { materializationPending: "" },
+            },
+            { returnDocument: "after" },
+          );
+          return { batch: cancelled ?? batch };
+        }
         await db.collection("media_recognition_batch_items").updateMany(
           { batchId: batch._id, state: "pending" },
           { $set: { state: "cancelled", updatedAt: now } },
@@ -2253,32 +2871,117 @@ export class MediaLibraryResource
             "The recognition profile changed; create a new batch",
           );
         }
+        assertRecognitionBatchRetryAllowed(current);
         const now = new Date();
-        const result = await db.collection("media_recognition_batch_items")
-          .updateMany(
+        const retryClaimId = randomUUID();
+        const claimedBatch = await db.collection<any>(
+          "media_recognition_batches",
+        ).findOneAndUpdate(
+          {
+            _id: batch._id,
+            owner: auth.principal,
+            $and: [
+              {
+                $or: [
+                  { reservationReleaseClaim: { $exists: false } },
+                  { "reservationReleaseClaim.expiresAt": { $lte: now } },
+                ],
+              },
+              {
+                $or: [
+                  { retryReservationClaim: { $exists: false } },
+                  { "retryReservationClaim.expiresAt": { $lte: now } },
+                ],
+              },
+            ],
+          },
+          {
+            $set: {
+              status: "queued",
+              retryReservationClaim: {
+                id: retryClaimId,
+                expiresAt: new Date(now.getTime() + RETRY_RESERVATION_TTL_MS),
+              },
+              updatedAt: now,
+            },
+            $unset: { reservationReleaseClaim: "" },
+          },
+          { returnDocument: "after" },
+        );
+        if (!claimedBatch) {
+          throw new Error("A retry is already reserving these batch items");
+        }
+        const failedItems = await db.collection<any>(
+          "media_recognition_batch_items",
+        ).find({
+          batchId: batch._id,
+          state: { $in: ["failed", "budget_blocked"] },
+        }, { projection: { _id: 1, assetId: 1, sha256: 1 } }).toArray();
+        const reservation = await reserveRecognitionAssets(
+          db,
+          batch.owner,
+          batch._id,
+          failedItems,
+          now,
+          true,
+        );
+        const reservedIds = new Set(
+          reservation.reservedAssetIds.map(String),
+        );
+        const retryItemIds = failedItems.filter((item) =>
+          reservedIds.has(String(item.assetId))
+        ).map((item) => item._id);
+        let reset = 0;
+        if (retryItemIds.length > 0) {
+          await activateRecognitionReservations(db, batch._id);
+          const result = await db.collection("media_recognition_batch_items")
+            .updateMany(
+              {
+                _id: { $in: retryItemIds },
+                batchId: batch._id,
+                state: { $in: ["failed", "budget_blocked"] },
+              },
+              {
+                $set: { state: "pending", updatedAt: now },
+                $inc: { retryGeneration: 1 },
+                $unset: { safeError: "", jobId: "" },
+              },
+            );
+          reset = result.modifiedCount;
+          await db.collection("media_recognition_batches").updateOne(
             {
-              batchId: batch._id,
-              state: { $in: ["failed", "budget_blocked"] },
+              _id: batch._id,
+              "retryReservationClaim.id": retryClaimId,
             },
             {
-              $set: { state: "pending", updatedAt: now },
-              $inc: { retryGeneration: 1 },
-              $unset: { safeError: "", jobId: "" },
+              $set: { status: "queued", updatedAt: now },
+              $unset: {
+                cancelRequestedAt: "",
+                completedAt: "",
+                safeError: "",
+                retryReservationClaim: "",
+              },
             },
           );
-        await db.collection("media_recognition_batches").updateOne(
-          { _id: batch._id },
-          {
-            $set: { status: "queued", updatedAt: now },
-            $unset: { cancelRequestedAt: "", completedAt: "", safeError: "" },
-          },
-        );
-        try {
-          await enqueueRecognitionWorker(batch._id, auth);
-        } catch {
-          // The periodic coordinator resumes this durable batch.
+          try {
+            await enqueueRecognitionWorker(batch._id, auth);
+          } catch {
+            // The periodic coordinator resumes this durable batch.
+          }
+        } else {
+          await db.collection("media_recognition_batches").updateOne(
+            {
+              _id: batch._id,
+              "retryReservationClaim.id": retryClaimId,
+            },
+            { $unset: { retryReservationClaim: "" } },
+          );
         }
-        return { success: true, reset: result.modifiedCount };
+        return {
+          success: true,
+          reset,
+          skippedReserved: reservation.conflictAssetIds.length,
+        };
       }
       case "processRecognitionBatch": {
         const job = await assertTrustedCoordinatorJob(
@@ -2312,41 +3015,37 @@ export class MediaLibraryResource
           input.limit,
         );
       case "summary": {
-        const [all, missingTime, missingLocation, ready, needsAttention] =
-          await Promise.all([
-            db.collection("media_assets").countDocuments({
-              owner: auth.principal,
-              kind: "image",
-            }),
-            db.collection("media_assets").countDocuments({
-              owner: auth.principal,
-              kind: "image",
-              $nor: [{ capturedAt: { $type: "date" } }],
-            }),
-            db.collection("media_assets").countDocuments({
-              owner: auth.principal,
-              kind: "image",
-              $nor: [{ "geo.type": "Point" }],
-            }),
-            db.collection("media_assets").countDocuments({
-              owner: auth.principal,
-              kind: "image",
-              status: "ready",
-            }),
-            db.collection("media_assets").countDocuments({
-              owner: auth.principal,
-              kind: "image",
-              status: {
-                $in: [
-                  "failed",
-                  "budget_blocked",
-                  "source_missing",
-                  "source_changed",
-                ],
-              },
-            }),
-          ]);
-        return { all, missingTime, missingLocation, ready, needsAttention };
+        const queries = mediaLibrarySummaryQueries(auth.principal);
+        const [
+          all,
+          unprocessed,
+          processing,
+          missingTime,
+          missingLocation,
+          ready,
+          needsAttention,
+        ] = await Promise.all([
+          db.collection("media_assets").countDocuments(queries.all),
+          db.collection("media_assets").countDocuments(queries.unprocessed),
+          db.collection("media_assets").countDocuments(queries.processing),
+          db.collection("media_assets").countDocuments(queries.missingTime),
+          db.collection("media_assets").countDocuments(
+            queries.missingLocation,
+          ),
+          db.collection("media_assets").countDocuments(queries.ready),
+          db.collection("media_assets").countDocuments(
+            queries.needsAttention,
+          ),
+        ]);
+        return {
+          all,
+          unprocessed,
+          processing,
+          missingTime,
+          missingLocation,
+          ready,
+          needsAttention,
+        };
       }
       case "updatePlacement":
         return await updatePlacement(db, auth.principal, input);
