@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@^1.0.15";
 import { ObjectId } from "mongodb";
 import { withFixtures } from "@/tests/fixtures.server.ts";
-import { up as ensureMediaEvents } from "../../../migrations/0072_media_events.ts";
+import { up as ensureMediaEvents } from "../../../migrations/0076_media_events.ts";
 
 Deno.test(
   "media event migration stales overlapping historical losers",

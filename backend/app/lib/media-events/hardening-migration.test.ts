@@ -5,7 +5,7 @@ import {
   MEDIA_EVENT_HARDENING_COLLECTIONS,
   MEDIA_EVENT_HARDENING_INDEXES,
   up as hardenMediaEvents,
-} from "../../../migrations/0073_media_event_hardening.ts";
+} from "../../../migrations/0077_media_event_hardening.ts";
 
 async function ensureTestCollection(db: Db, name: string) {
   if ((await db.listCollections({ name }).toArray()).length === 0) {
@@ -14,9 +14,9 @@ async function ensureTestCollection(db: Db, name: string) {
 }
 
 Deno.test(
-  "0073 repairs an early-0072 partial schema idempotently",
+  "0077 repairs an early-0076 partial schema idempotently",
   withFixtures(["Mongo"], async ({ db }) => {
-    // This is the observed live drift: 0072 was recorded after only these
+    // This is the observed live drift: 0076 was recorded after only these
     // event collections existed. Objects predate the media-event feature.
     for (
       const name of [
