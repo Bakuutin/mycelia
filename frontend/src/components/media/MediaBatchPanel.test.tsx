@@ -82,26 +82,107 @@ describe("MediaBatchPanel", () => {
     expect(await screen.findByText(/pending 928/)).toBeTruthy();
   });
 
-  it("starts the mounted folder campaign with the relative 900-photo path", async () => {
+  it("scans the mounted root by default and shows durable progress", async () => {
     const user = userEvent.setup();
-    mockCallResource.mockResolvedValue({
-      campaign: {
-        _id: "68a000000000000000000003",
-        relativePath: "900-photos",
-        status: "scanning",
-        counts: { total: 900, pending: 900 },
-      },
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listMountedFolders") {
+        return Promise.resolve({
+          listing: {
+            currentPath: ".",
+            folders: [{ name: "900-photos", relativePath: "900-photos" }],
+          },
+        });
+      }
+      if (input.action === "getActiveFolderCampaign") {
+        return Promise.resolve({ campaign: null });
+      }
+      return Promise.resolve({
+        campaign: {
+          _id: "68a000000000000000000003",
+          relativePath: ".",
+          status: "scanning",
+          counts: {
+            total: 904,
+            pending: 775,
+            processing: 1,
+            ready: 24,
+            unsupported: 103,
+          },
+          progress: {
+            stage: "metadata_scan",
+            processed: 25,
+            total: 801,
+            remaining: 776,
+            percent: 3.1,
+            filesPerSecond: 1.6,
+            etaSeconds: 485,
+            chunkSize: 25,
+            message: "Reading metadata and hashes locally; Google is not used",
+            nextStep: "Review the report and confirm the local import",
+            lastProgressAt: new Date().toISOString(),
+          },
+        },
+      });
     });
     render(
       <MemoryRouter>
         <MediaBatchPanel status={status} onInventoryChanged={vi.fn()} />
       </MemoryRouter>,
     );
-    await user.click(screen.getByRole("button", { name: "Scan" }));
+    await user.click(screen.getByRole("button", {
+      name: "Scan selected folder recursively",
+    }));
     expect(mockCallResource).toHaveBeenCalledWith("media-library", {
       action: "startFolderScan",
-      relativePath: "900-photos",
+      relativePath: ".",
     });
-    expect(await screen.findByText(/total 900/)).toBeTruthy();
+    expect(await screen.findByText(/25 of 801 supported files checked/))
+      .toBeTruthy();
+    expect(screen.getByText(/about 9 min remaining/)).toBeTruthy();
+    expect(screen.getByText(/pending 775/)).toBeTruthy();
+    expect(screen.getByText(/ready 24/)).toBeTruthy();
+  });
+
+  it("chooses a visible mounted subfolder without typing a path", async () => {
+    const user = userEvent.setup();
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listMountedFolders") {
+        return Promise.resolve({
+          listing: input.relativePath === "."
+            ? {
+              currentPath: ".",
+              folders: [{ name: "Trips", relativePath: "Trips" }],
+            }
+            : { currentPath: "Trips", parentPath: ".", folders: [] },
+        });
+      }
+      if (input.action === "getActiveFolderCampaign") {
+        return Promise.resolve({ campaign: null });
+      }
+      return Promise.resolve({
+        campaign: {
+          _id: "68a000000000000000000004",
+          relativePath: "Trips",
+          status: "queued",
+          counts: {},
+        },
+      });
+    });
+    render(
+      <MemoryRouter>
+        <MediaBatchPanel status={status} onInventoryChanged={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByRole("button", { name: "Trips" }));
+    expect((await screen.findByText(/Selected:/)).textContent).toContain(
+      "Trips",
+    );
+    await user.click(screen.getByRole("button", {
+      name: "Scan selected folder recursively",
+    }));
+    expect(mockCallResource).toHaveBeenCalledWith("media-library", {
+      action: "startFolderScan",
+      relativePath: "Trips",
+    });
   });
 });

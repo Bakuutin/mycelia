@@ -1,5 +1,12 @@
 import { walk } from "@std/fs/walk";
-import { basename, extname, relative, resolve, SEPARATOR } from "@std/path";
+import {
+  basename,
+  dirname,
+  extname,
+  relative,
+  resolve,
+  SEPARATOR,
+} from "@std/path";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
@@ -53,6 +60,12 @@ export function mediaSourceConfigured(): boolean {
   return Boolean(env.MEDIA_SOURCE_ROOT);
 }
 
+export type MediaSourceFolderListing = {
+  currentPath: string;
+  parentPath?: string;
+  folders: Array<{ name: string; relativePath: string }>;
+};
+
 export function assertSafeMediaRelativePath(relativePath: string): void {
   if (!relativePath || relativePath.includes("\0")) {
     throw new Error("A relative media path is required");
@@ -84,6 +97,54 @@ export async function resolveMediaSourcePath(relativePath: string): Promise<{
     throw new Error("Media path escapes the configured source root");
   }
   return { root, realPath, relativePath: relative(root, realPath) || "." };
+}
+
+export async function listMediaSourceFolders(
+  relativePath: string,
+  sourceRoot = env.MEDIA_SOURCE_ROOT,
+): Promise<MediaSourceFolderListing> {
+  if (!sourceRoot) throw new Error("MEDIA_SOURCE_ROOT is not configured");
+  assertSafeMediaRelativePath(relativePath);
+  const root = await Deno.realPath(sourceRoot);
+  const candidate = resolve(root, relativePath);
+  const realPath = await Deno.realPath(candidate);
+  if (realPath !== root && !realPath.startsWith(`${root}${SEPARATOR}`)) {
+    throw new Error("Media path escapes the configured source root");
+  }
+  const stat = await Deno.stat(realPath);
+  if (!stat.isDirectory) throw new Error("Selected media path is not a folder");
+
+  const folders: MediaSourceFolderListing["folders"] = [];
+  for await (const entry of Deno.readDir(realPath)) {
+    // Deno reports symlinks separately, so isDirectory excludes them. Resolve
+    // again as a defense in depth check before exposing a selectable path.
+    if (!entry.isDirectory || entry.isSymlink) continue;
+    const childRealPath = await Deno.realPath(resolve(realPath, entry.name));
+    if (
+      childRealPath !== root &&
+      !childRealPath.startsWith(`${root}${SEPARATOR}`)
+    ) continue;
+    folders.push({
+      name: entry.name,
+      relativePath: relative(root, childRealPath) || ".",
+    });
+  }
+  folders.sort((left, right) =>
+    left.name.localeCompare(right.name, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    })
+  );
+
+  const currentPath = relative(root, realPath) || ".";
+  const parentRealPath = dirname(realPath);
+  return {
+    currentPath,
+    ...(currentPath === "."
+      ? {}
+      : { parentPath: relative(root, parentRealPath) || "." }),
+    folders,
+  };
 }
 
 export async function scanMediaSource(

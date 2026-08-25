@@ -4,6 +4,7 @@ import {
   assertSafeMediaRelativePath,
   detectMediaMime,
   inspectCapturedAt,
+  listMediaSourceFolders,
   mediaLocationFromMetadata,
   prepareUploadedMedia,
 } from "./local.server.ts";
@@ -21,6 +22,36 @@ Deno.test("mounted media paths must stay relative to the configured root", () =>
     Error,
     '".." are not allowed',
   );
+});
+
+Deno.test("mounted media folder browser lists directories without following symlinks", async () => {
+  const root = await Deno.makeTempDir();
+  const outside = await Deno.makeTempDir();
+  try {
+    await Deno.mkdir(`${root}/Trips/Day 2`, { recursive: true });
+    await Deno.mkdir(`${root}/archive-10`);
+    await Deno.mkdir(`${root}/archive-2`);
+    await Deno.writeTextFile(`${root}/photo.jpg`, "not inspected here");
+    await Deno.symlink(outside, `${root}/outside-link`);
+
+    const rootListing = await listMediaSourceFolders(".", root);
+    assertEquals(rootListing, {
+      currentPath: ".",
+      folders: [
+        { name: "archive-2", relativePath: "archive-2" },
+        { name: "archive-10", relativePath: "archive-10" },
+        { name: "Trips", relativePath: "Trips" },
+      ],
+    });
+    assertEquals(await listMediaSourceFolders("Trips", root), {
+      currentPath: "Trips",
+      parentPath: ".",
+      folders: [{ name: "Day 2", relativePath: "Trips/Day 2" }],
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+    await Deno.remove(outside, { recursive: true });
+  }
 });
 
 Deno.test("detectMediaMime trusts magic bytes rather than the filename", () => {

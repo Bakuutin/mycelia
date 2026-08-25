@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderSearch, Loader2, Play, RotateCcw, Square } from "lucide-react";
+import {
+  ArrowUp,
+  ChevronRight,
+  Folder,
+  FolderSearch,
+  Loader2,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Square,
+} from "lucide-react";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 
 const FOLDER_CAMPAIGN_KEY = "mycelia.media.folder-campaign";
 const RECOGNITION_BATCH_KEY = "mycelia.media.recognition-batch";
@@ -70,6 +79,39 @@ function countLine(counts: Record<string, number> | undefined) {
   ).join(" · ") || "No items";
 }
 
+function durationLabel(seconds: number | undefined) {
+  if (!Number.isFinite(seconds) || Number(seconds) < 0) return undefined;
+  const rounded = Math.ceil(Number(seconds));
+  if (rounded < 60) return `${rounded}s`;
+  if (rounded < 3_600) return `${Math.ceil(rounded / 60)} min`;
+  const hours = Math.floor(rounded / 3_600);
+  const minutes = Math.ceil((rounded % 3_600) / 60);
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+function timeAgo(value: unknown) {
+  if (!value) return undefined;
+  const elapsed = Math.max(0, Date.now() - new Date(String(value)).getTime());
+  if (!Number.isFinite(elapsed)) return undefined;
+  if (elapsed < 5_000) return "just now";
+  if (elapsed < 60_000) return `${Math.floor(elapsed / 1_000)}s ago`;
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} min ago`;
+  return `${Math.floor(elapsed / 3_600_000)}h ago`;
+}
+
+function campaignStageLabel(stage: string | undefined, status: string) {
+  const labels: Record<string, string> = {
+    inventory: "Building inventory",
+    metadata_scan: "Scanning metadata",
+    awaiting_confirmation: "Ready to review",
+    creating_previews: "Importing locally",
+    completed: "Finished",
+    failed: "Failed",
+    cancelled: "Cancelled",
+  };
+  return labels[stage ?? ""] ?? status.replaceAll("_", " ");
+}
+
 export function MediaBatchPanel({
   status,
   onInventoryChanged,
@@ -77,7 +119,13 @@ export function MediaBatchPanel({
   status: any;
   onInventoryChanged: () => void | Promise<void>;
 }) {
-  const [relativePath, setRelativePath] = useState("900-photos");
+  const [relativePath, setRelativePath] = useState(".");
+  const [folderListing, setFolderListing] = useState<any>({
+    currentPath: ".",
+    folders: [],
+  });
+  const [folderBrowserLoading, setFolderBrowserLoading] = useState(false);
+  const [folderBrowserError, setFolderBrowserError] = useState<string>();
   const [folderCampaign, setFolderCampaign] = useState<any>();
   const [recognitionPreview, setRecognitionPreview] = useState<any>();
   const [recognitionBatch, setRecognitionBatch] = useState<any>();
@@ -102,6 +150,18 @@ export function MediaBatchPanel({
     return result.campaign;
   }, []);
 
+  const loadActiveFolderCampaign = useCallback(async () => {
+    const result = await callResource("media-library", {
+      action: "getActiveFolderCampaign",
+    });
+    if (result.campaign) {
+      const campaignId = idOf(result.campaign._id);
+      storageSet(FOLDER_CAMPAIGN_KEY, campaignId);
+      setFolderCampaign(result.campaign);
+    }
+    return result.campaign;
+  }, []);
+
   const loadRecognitionBatch = useCallback(async (batchId: string) => {
     const result = await callResource("media-library", {
       action: "getRecognitionBatch",
@@ -114,20 +174,63 @@ export function MediaBatchPanel({
     return result.batch;
   }, []);
 
+  const browseMountedFolder = useCallback(async (path: string) => {
+    setFolderBrowserLoading(true);
+    setFolderBrowserError(undefined);
+    try {
+      const result = await callResource("media-library", {
+        action: "listMountedFolders",
+        relativePath: path,
+      });
+      if (result?.listing?.currentPath) {
+        setFolderListing(result.listing);
+        setRelativePath(result.listing.currentPath);
+      }
+    } catch (error) {
+      setFolderBrowserError(
+        error instanceof Error
+          ? error.message
+          : "Mounted folders could not be listed",
+      );
+    } finally {
+      setFolderBrowserLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void browseMountedFolder(".");
+  }, [browseMountedFolder]);
+
   useEffect(() => {
     const folderId = storageGet(FOLDER_CAMPAIGN_KEY);
     const batchId = storageGet(RECOGNITION_BATCH_KEY);
-    if (folderId) {
-      void loadFolderCampaign(folderId).catch(() =>
-        storageRemove(FOLDER_CAMPAIGN_KEY)
-      );
-    }
+    void (async () => {
+      if (folderId) {
+        try {
+          await loadFolderCampaign(folderId);
+          return;
+        } catch {
+          // A backend reload can make one request fail transiently. Recover the
+          // durable campaign by owner instead of hiding its progress forever.
+        }
+      }
+      try {
+        const active = await loadActiveFolderCampaign();
+        if (!active) storageRemove(FOLDER_CAMPAIGN_KEY);
+      } catch {
+        // Keep the existing shortcut and retry on the next page load.
+      }
+    })();
     if (batchId) {
       void loadRecognitionBatch(batchId).catch(() =>
         storageRemove(RECOGNITION_BATCH_KEY)
       );
     }
-  }, [loadFolderCampaign, loadRecognitionBatch]);
+  }, [
+    loadActiveFolderCampaign,
+    loadFolderCampaign,
+    loadRecognitionBatch,
+  ]);
 
   useEffect(() => {
     const activeFolder = folderCampaign && [
@@ -301,37 +404,205 @@ export function MediaBatchPanel({
           <div>
             <h3 className="font-semibold">1. Sync mounted folder locally</h3>
             <p className="text-sm text-muted-foreground">
-              Put originals under the configured host folder. For this import
-              use
-              <code className="mx-1">900-photos</code>. Mycelia walks
-              subfolders, ignores symlinks, hashes files, and processes 25
-              entries at a time.
+              Choose the mounted root or any visible subfolder below. The root
+              is selected by default. Mycelia walks subfolders, ignores
+              symlinks, hashes files, and commits progress every 25 entries.
             </p>
           </div>
-          <Label htmlFor="media-folder-campaign-path">
-            Mounted relative path
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              id="media-folder-campaign-path"
-              value={relativePath}
-              onChange={(event) => setRelativePath(event.target.value)}
-              disabled={busy}
-            />
-            <Button onClick={startFolderScan} disabled={busy} variant="outline">
+          <div className="space-y-3 rounded-md border bg-background p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium">
+                  Mounted folder browser
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Root is{" "}
+                  <code>/media-source</code>. Scans are recursive; symlinks are
+                  ignored.
+                </div>
+              </div>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Refresh mounted folders"
+                onClick={() =>
+                  browseMountedFolder(folderListing.currentPath ?? ".")}
+                disabled={folderBrowserLoading}
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${
+                    folderBrowserLoading ? "animate-spin" : ""
+                  }`}
+                />
+              </Button>
+            </div>
+            <div
+              className="flex flex-wrap items-center gap-1 text-sm"
+              aria-label="Selected mounted folder"
+            >
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2"
+                onClick={() => browseMountedFolder(".")}
+                disabled={folderBrowserLoading}
+              >
+                <Folder className="mr-1 h-4 w-4" /> Root
+              </Button>
+              {(folderListing.currentPath === "."
+                ? []
+                : String(folderListing.currentPath).split("/"))
+                .map((part: string, index: number, parts: string[]) => {
+                  const path = parts.slice(0, index + 1).join("/");
+                  return (
+                    <span className="flex items-center" key={path}>
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2"
+                        onClick={() => browseMountedFolder(path)}
+                        disabled={folderBrowserLoading}
+                      >
+                        {part}
+                      </Button>
+                    </span>
+                  );
+                })}
+            </div>
+            {folderListing.parentPath && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => browseMountedFolder(folderListing.parentPath)}
+                disabled={folderBrowserLoading}
+              >
+                <ArrowUp className="mr-2 h-4 w-4" /> Parent folder
+              </Button>
+            )}
+            <div
+              className="max-h-44 space-y-1 overflow-y-auto"
+              aria-label="Mounted subfolders"
+            >
+              {(folderListing.folders ?? []).map((folder: any) => (
+                <Button
+                  key={folder.relativePath}
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => browseMountedFolder(folder.relativePath)}
+                  disabled={folderBrowserLoading}
+                >
+                  <Folder className="mr-2 h-4 w-4 text-primary" />
+                  {folder.name}
+                </Button>
+              ))}
+              {!folderBrowserLoading &&
+                (folderListing.folders ?? []).length === 0 && (
+                <div className="rounded bg-muted px-3 py-2 text-xs text-muted-foreground">
+                  No child folders. You can scan this folder itself.
+                </div>
+              )}
+            </div>
+            {folderBrowserError && (
+              <div className="text-sm text-destructive">
+                {folderBrowserError}
+              </div>
+            )}
+            <div className="rounded bg-muted px-3 py-2 text-xs">
+              Selected: <code>{relativePath}</code>
+              {relativePath === "." && " — all folders under the mounted root"}
+            </div>
+            <Button
+              onClick={startFolderScan}
+              disabled={busy || folderBrowserLoading}
+              className="w-full"
+              variant="outline"
+            >
               {busy
                 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 : <FolderSearch className="mr-2 h-4 w-4" />}
-              Scan
+              Scan selected folder recursively
             </Button>
           </div>
           {folderCampaign && (
-            <div className="space-y-2 rounded bg-muted p-3 text-sm">
-              <div className="flex items-center gap-2">
-                <Badge>{folderCampaign.status}</Badge>
-                <span>{folderCampaign.relativePath}</span>
+            <div className="space-y-3 rounded bg-muted p-3 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge>
+                  {folderCampaign.progress?.waitingForRecovery
+                    ? "Waiting for recovery"
+                    : campaignStageLabel(
+                      folderCampaign.progress?.stage,
+                      folderCampaign.status,
+                    )}
+                </Badge>
+                <code>{folderCampaign.relativePath}</code>
               </div>
-              <div>{countLine(folderCampaign.counts)}</div>
+              {folderCampaign.progress
+                ? (
+                  <>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between gap-3 text-xs">
+                        <span>{folderCampaign.progress.message}</span>
+                        <strong>
+                          {folderCampaign.progress.percent.toFixed(1)}%
+                        </strong>
+                      </div>
+                      <Progress
+                        value={folderCampaign.progress.percent}
+                        className="h-2"
+                      />
+                      <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        <span>
+                          {folderCampaign.progress.processed} of{" "}
+                          {folderCampaign.progress.total}{" "}
+                          {folderCampaign.progress.stage === "creating_previews"
+                            ? "photos imported"
+                            : "supported files checked"}
+                        </span>
+                        {folderCampaign.progress.remaining > 0 && (
+                          <span>
+                            {folderCampaign.progress.remaining} remaining
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      {folderCampaign.progress.filesPerSecond != null && (
+                        <span>
+                          {Number(folderCampaign.progress.filesPerSecond)
+                            .toFixed(2)} files/sec
+                        </span>
+                      )}
+                      {folderCampaign.progress.etaSeconds != null && (
+                        <span>
+                          about{" "}
+                          {durationLabel(folderCampaign.progress.etaSeconds)}
+                          {" "}
+                          remaining
+                        </span>
+                      )}
+                      {folderCampaign.progress.lastProgressAt && (
+                        <span>
+                          last progress{" "}
+                          {timeAgo(folderCampaign.progress.lastProgressAt)}
+                        </span>
+                      )}
+                      <span>
+                        {folderCampaign.progress.chunkSize}{" "}
+                        files per durable step
+                      </span>
+                    </div>
+                    <div className="rounded border bg-background/70 px-3 py-2 text-xs">
+                      <strong>Next:</strong> {folderCampaign.progress.nextStep}
+                    </div>
+                  </>
+                )
+                : <div>{countLine(folderCampaign.counts)}</div>}
+              <div className="text-xs text-muted-foreground">
+                {countLine(folderCampaign.counts)}
+              </div>
               {folderCampaign.safeError && (
                 <div className="text-destructive">
                   {folderCampaign.safeError}

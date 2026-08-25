@@ -15,6 +15,8 @@ const output = z.object({
   campaignId: z.string().optional(),
   processed: z.number().int().nonnegative().optional(),
   hasMore: z.boolean().optional(),
+  waitingForRecovery: z.boolean().optional(),
+  progress: z.record(z.string(), z.unknown()).optional(),
 });
 
 const capability: JobCapability = {
@@ -49,13 +51,49 @@ const capability: JobCapability = {
     if (!jwt || !myceliaUrl) {
       throw new Error("Media folder worker resource context is missing");
     }
-    return await callResource("media-library", {
-      action: "processFolderCampaign",
-      ...(typeof job.data.campaignId === "string"
-        ? { campaignId: job.data.campaignId }
-        : {}),
-      jobId: job.id,
-    }, { jwt, myceliaUrl }) as Record<string, unknown>;
+    let totalProcessed = 0;
+    let lastResult: Record<string, any> = { success: true, idle: true };
+    // One durable BullMQ job owns the visible campaign progress. The backend
+    // still commits only 25 files per request, so a restart resumes safely from
+    // Mongo without creating a long HTTP request or a chain of user-visible
+    // continuation jobs.
+    for (let chunk = 0; chunk < 1_000; chunk += 1) {
+      const result = await callResource("media-library", {
+        action: "processFolderCampaign",
+        ...(typeof job.data.campaignId === "string"
+          ? { campaignId: job.data.campaignId }
+          : {}),
+        jobId: job.id,
+      }, { jwt, myceliaUrl }) as Record<string, any>;
+      lastResult = result;
+      const processed = Number(result.processed ?? 0);
+      if (Number.isFinite(processed) && processed > 0) {
+        totalProcessed += processed;
+      }
+      if (result.progress && typeof result.progress === "object") {
+        await job.updateProgress(result.progress);
+      }
+      if (result.hasMore !== true) {
+        return { ...result, processed: totalProcessed, hasMore: false };
+      }
+      if (processed <= 0) {
+        // A non-stale claim from a worker interrupted during the previous
+        // chunk must age out before the watchdog resumes it. Do not manufacture
+        // another immediate continuation row in Jobs.
+        return {
+          ...result,
+          processed: totalProcessed,
+          hasMore: false,
+          waitingForRecovery: true,
+        };
+      }
+    }
+    return {
+      ...lastResult,
+      processed: totalProcessed,
+      hasMore: false,
+      waitingForRecovery: true,
+    };
   },
 };
 

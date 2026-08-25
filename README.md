@@ -78,12 +78,15 @@ your own words.
   failed items in a structured table, supports explicit per-photo batch
   processing, and shows unmatched event candidates as single photos instead of
   silently omitting them.
-- Large mounted folders use resumable scan → review → confirm campaigns in
-  25-file chunks. The inventory is cursor-paginated, and an exact SHA-bound
-  Google batch can process every eligible photo with one ordinary recognition
-  job per item. Individual photos have a default Photos map layer and adaptive
-  Photos Timeline track; missing time/GPS stays visible as Unplaced and can be
-  assigned locally with audit history.
+- Large mounted folders use a visual folder picker and resumable scan → review →
+  confirm campaigns. The mounted root is selected by default and subfolders are
+  browsable without typing paths. One `mediaFolderImport` job reports live
+  checked/total progress, speed and ETA while committing durable 25-file steps.
+  The inventory is cursor-paginated, and an exact SHA-bound Google batch can
+  process every eligible photo with one ordinary recognition job per item.
+  Individual photos have a default Photos map layer and adaptive Photos Timeline
+  track; missing time/GPS stays visible as Unplaced and can be assigned locally
+  with audit history.
 - Google media billing supports a fail-closed 24-hour Free Trial confirmation
   or an explicit persistent paid-account acknowledgement bound to one project;
   both retain the application monthly, daily, per-asset, and per-event limits.

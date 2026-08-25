@@ -218,10 +218,13 @@ preview and confirmation; cancelling a worker after the provider-start fence is
 not proof that the remote request was cancelled or unbilled.
 
 For the 900-photo campaign, place originals under
-`MEDIA_SOURCE_HOST_PATH/900-photos/` and enter `900-photos` on `/media`. Local
-folder sync does not call Google. The separate **Process all with Google Cloud
-EU Photo Knowledge** preview selects every eligible asset server-side, not only
-the visible inventory page, fixes visual-understanding + OCR, and shows the
+`MEDIA_SOURCE_HOST_PATH/900-photos/` and select `900-photos` in the mounted
+folder browser on `/media`; `.` remains the default recursive root. Local folder
+sync does not call Google. Its single normal `mediaFolderImport` job loops over
+durable 25-file commits and publishes checked/total progress, speed and ETA to
+Media and Jobs. The separate **Process all with Google Cloud EU Photo
+Knowledge** preview selects every eligible asset server-side, not only the
+visible inventory page, fixes visual-understanding + OCR, and shows the
 authoritative batch ceiling before consent. Photos with local time/GPS are
 queryable through indexed Timeline/Map projections in every recognition state;
 missing values are kept in Unplaced and can be edited without a provider call.

@@ -86,21 +86,26 @@ upload controls remain available when recognition is disabled. Keep
 `Queue recognition after import` off, either upload files or analyze the
 relative path `.`, review the storage-mode badge and preview, and confirm.
 
-`Analyze mounted path` accepts a path **relative to** `MEDIA_SOURCE_HOST_PATH`,
-not an arbitrary macOS path. Use `.` to scan the whole mounted folder or a value
-such as `2026/photos` for a subfolder. To change the real host folder, edit
+The mounted-folder browser exposes only directories below
+`MEDIA_SOURCE_HOST_PATH`, not arbitrary macOS paths. The root (`.`) is selected
+by default and scans the whole mount recursively; choose visible folders and
+breadcrumbs to narrow the scan, for example to `2026/photos`. Symlinks are not
+listed or followed. To change the real host folder, edit
 `MEDIA_SOURCE_HOST_PATH` in `.env.media.local`, recreate only `backend`, and
 restart `nginx`:
 
 For the large gallery workflow, create a subfolder such as
-`~/Pictures/Mycelia-Import/900-photos/` under the mounted host root and enter
-only `900-photos` in the browser. Use **Sync mounted folder locally** instead of
-the older bounded preview button. The durable campaign walks subdirectories
+`~/Pictures/Mycelia-Import/900-photos/` under the mounted host root and select
+`900-photos` in the folder browser. Use **Sync mounted folder locally** instead
+of the older bounded preview button. The durable campaign walks subdirectories
 without following symlinks, inventories unsupported files, hashes and inspects
-25 entries per worker job, and survives backend restarts. Its local report
-separates imported, duplicate, unsupported, changed, and failed entries before
-or during confirmation. Originals remain read-only external references; only
-EXIF/GPS, stripped WebP previews, hashes, and derived data enter Mycelia.
+25 entries per durable step, and survives backend restarts. One visible
+`mediaFolderImport` job carries the whole normal campaign and reports the phase,
+checked/total count, percentage, speed, ETA and last progress time; a recovery
+job is created only after an interruption. Its local report separates imported,
+duplicate, unsupported, changed, and failed entries before or during
+confirmation. Originals remain read-only external references; only EXIF/GPS,
+stripped WebP previews, hashes, and derived data enter Mycelia.
 
 ```bash
 docker compose \

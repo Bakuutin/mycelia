@@ -164,6 +164,22 @@ export const WORKER_CATALOG: readonly CatalogDefinition[] = [
     { routingKind: "llm", progressKind: "entity-typing" },
   ),
   pipeline(
+    "mediaFolderImport",
+    "Media folder import",
+    "Scans and imports one mounted photo-folder campaign with durable progress.",
+    140,
+    {
+      progressKind: "media-folder-import",
+      capabilities: {
+        manualRun: false,
+        pause: true,
+        schedule: false,
+        concurrency: false,
+        batchSize: false,
+      },
+    },
+  ),
+  pipeline(
     "histRecalculation",
     "Timeline density",
     "Rebuilds stale or selected Timeline density ranges.",

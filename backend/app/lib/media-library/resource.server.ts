@@ -10,6 +10,7 @@ import { enqueueJob } from "@/lib/jobs/queue.ts";
 import {
   createWebpPreview,
   inspectLocalMedia,
+  listMediaSourceFolders,
   mediaSourceConfigured,
   resolveMediaSourcePath,
   scanMediaSourceInventory,
@@ -35,14 +36,22 @@ const MAX_FOLDER_FILES = 20_000;
 export const RECOGNITION_WINDOW = 16;
 const PREVIEW_TTL_MS = 60 * 60 * 1000;
 const STALE_ITEM_MS = 20 * 60 * 1000;
+const FOLDER_STALE_ITEM_MS = 5 * 60 * 1000;
 
 const startFolderScanSchema = z.object({
   action: z.literal("startFolderScan"),
   relativePath: z.string().trim().min(1).default("."),
 });
+const listMountedFoldersSchema = z.object({
+  action: z.literal("listMountedFolders"),
+  relativePath: z.string().trim().min(1).default("."),
+});
 const getFolderCampaignSchema = z.object({
   action: z.literal("getFolderCampaign"),
   campaignId: z.string().refine(ObjectId.isValid),
+});
+const getActiveFolderCampaignSchema = z.object({
+  action: z.literal("getActiveFolderCampaign"),
 });
 const confirmFolderCampaignSchema = z.object({
   action: z.literal("confirmFolderCampaign"),
@@ -118,8 +127,10 @@ const updatePlacementSchema = z.object({
 });
 
 export const mediaLibraryRequestSchema = z.discriminatedUnion("action", [
+  listMountedFoldersSchema,
   startFolderScanSchema,
   getFolderCampaignSchema,
+  getActiveFolderCampaignSchema,
   confirmFolderCampaignSchema,
   processFolderCampaignSchema,
   previewRecognitionBatchSchema,
@@ -289,16 +300,140 @@ async function stateCounts(
   return counts;
 }
 
-function publicFolderCounts(counts: Record<string, number>) {
+export function publicFolderCounts(counts: Record<string, number>) {
   return {
     total: counts.total ?? 0,
-    pending: (counts.pending ?? 0) + (counts.inspecting ?? 0) +
-      (counts.ready ?? 0) + (counts.importing ?? 0),
+    pending: counts.pending ?? 0,
+    processing: (counts.inspecting ?? 0) + (counts.importing ?? 0),
+    ready: counts.ready ?? 0,
     imported: counts.imported ?? 0,
     duplicate: counts.duplicate ?? 0,
     unsupported: counts.unsupported ?? 0,
     changed: counts.changed ?? 0,
     failed: counts.failed ?? 0,
+  };
+}
+
+export function folderCampaignProgress(
+  campaign: any,
+  rawCounts: Record<string, number>,
+) {
+  const status = String(campaign.status);
+  const totalEntries = rawCounts.total ?? 0;
+  const unsupported = rawCounts.unsupported ?? 0;
+  const supportedTotal = Math.max(0, totalEntries - unsupported);
+  const scanRemaining = (rawCounts.pending ?? 0) +
+    (rawCounts.inspecting ?? 0);
+  const scanProcessed = Math.max(0, supportedTotal - scanRemaining);
+  const confirmedReady = Number(
+    campaign.confirmationReceipt?.counts?.ready ?? supportedTotal,
+  );
+  const importRemaining = (rawCounts.ready ?? 0) +
+    (rawCounts.importing ?? 0);
+  const importProcessed = Math.max(0, confirmedReady - importRemaining);
+  const stage = status === "queued"
+    ? "inventory"
+    : status === "scanning"
+    ? "metadata_scan"
+    : status === "preview_ready"
+    ? "awaiting_confirmation"
+    : status === "importing"
+    ? "creating_previews"
+    : status === "cancelled"
+    ? "cancelled"
+    : status === "failed"
+    ? "failed"
+    : "completed";
+  const total = stage === "inventory"
+    ? totalEntries
+    : stage === "creating_previews"
+    ? confirmedReady
+    : supportedTotal;
+  const processed = stage === "inventory"
+    ? 0
+    : stage === "metadata_scan"
+    ? scanProcessed
+    : stage === "creating_previews"
+    ? importProcessed
+    : total;
+  const remaining = Math.max(0, total - processed);
+  const percent = total > 0
+    ? Math.min(100, Math.max(0, Number((processed / total * 100).toFixed(1))))
+    : 0;
+  const startedAt = stage === "creating_previews"
+    ? campaign.importStartedAt ?? campaign.updatedAt
+    : campaign.scanStartedAt ?? campaign.createdAt;
+  const elapsedSeconds = startedAt
+    ? Math.max(1, (Date.now() - new Date(startedAt).getTime()) / 1_000)
+    : 0;
+  const filesPerSecond = processed > 0 && elapsedSeconds > 0
+    ? Number((processed / elapsedSeconds).toFixed(2))
+    : undefined;
+  const etaSeconds = filesPerSecond && remaining > 0
+    ? Math.ceil(remaining / filesPerSecond)
+    : undefined;
+  const lastProgressAt = campaign.lastProgressAt ?? campaign.updatedAt;
+  const waitingForRecovery = stage === "metadata_scan" && remaining > 0 &&
+    lastProgressAt &&
+    Date.now() - new Date(lastProgressAt).getTime() > 60_000;
+  const copy = waitingForRecovery
+    ? {
+      message:
+        "Waiting for an interrupted local file step to become safe to resume",
+      nextStep:
+        "No action is required; the watchdog will release the stale claim automatically",
+    }
+    : stage === "inventory"
+    ? {
+      message: "Building a recursive local file inventory",
+      nextStep: "Metadata and hashes will be checked locally in 25-file steps",
+    }
+    : stage === "metadata_scan"
+    ? {
+      message: "Reading metadata and hashes locally; Google is not used",
+      nextStep:
+        "When scanning finishes, review the report and confirm the local import",
+    }
+    : stage === "awaiting_confirmation"
+    ? {
+      message: "Local scan complete; no files have been imported yet",
+      nextStep: "Review the totals and select Confirm local import",
+    }
+    : stage === "creating_previews"
+    ? {
+      message: "Creating compact WebP previews and read-only asset references",
+      nextStep:
+        "The Media inventory will refresh when the local import finishes",
+    }
+    : stage === "completed"
+    ? {
+      message: "Mounted-folder campaign finished",
+      nextStep:
+        "Review imported and attention-needed photos in the Media inventory",
+    }
+    : stage === "failed"
+    ? {
+      message: "Mounted-folder campaign stopped with an error",
+      nextStep:
+        "Review the safe error below and start the scan again after fixing it",
+    }
+    : {
+      message: "Mounted-folder campaign was cancelled",
+      nextStep: "Start a new scan when you are ready",
+    };
+  return {
+    stage,
+    processed,
+    total,
+    remaining,
+    percent,
+    ...(filesPerSecond ? { filesPerSecond } : {}),
+    ...(!waitingForRecovery && etaSeconds !== undefined ? { etaSeconds } : {}),
+    ...(waitingForRecovery ? { waitingForRecovery: true } : {}),
+    chunkSize: FOLDER_CHUNK_SIZE,
+    ...copy,
+    ...(startedAt ? { startedAt } : {}),
+    ...(lastProgressAt ? { lastProgressAt } : {}),
   };
 }
 
@@ -358,9 +493,13 @@ async function recoverStaleRecognitionClaims(db: Db, batch: any) {
 }
 
 async function publicFolderCampaign(db: Db, campaign: any) {
-  const counts = publicFolderCounts(
-    await stateCounts(db, "media_folder_items", "campaignId", campaign._id),
+  const rawCounts = await stateCounts(
+    db,
+    "media_folder_items",
+    "campaignId",
+    campaign._id,
   );
+  const counts = publicFolderCounts(rawCounts);
   const samples = await db.collection("media_folder_items").find({
     campaignId: campaign._id,
     state: { $in: ["ready", "duplicate", "imported"] },
@@ -380,6 +519,7 @@ async function publicFolderCampaign(db: Db, campaign: any) {
     relativePath: campaign.relativePath,
     status: campaign.status,
     counts,
+    progress: folderCampaignProgress(campaign, rawCounts),
     samples,
     inventoryTruncated: Boolean(campaign.inventoryTruncated),
     safeError: campaign.safeError,
@@ -447,6 +587,7 @@ async function initializeFolderInventory(db: Db, campaign: any): Promise<void> {
       { ordered: false },
     );
   }
+  const scanStartedAt = campaign.scanStartedAt ?? new Date();
   await db.collection("media_folder_campaigns").updateOne(
     { _id: campaign._id, inventoryInitialized: { $ne: true } },
     {
@@ -454,10 +595,14 @@ async function initializeFolderInventory(db: Db, campaign: any): Promise<void> {
         inventoryInitialized: true,
         inventoryTruncated: false,
         status: "scanning",
-        updatedAt: new Date(),
+        scanStartedAt,
+        lastProgressAt: scanStartedAt,
+        updatedAt: scanStartedAt,
       },
     },
   );
+  campaign.scanStartedAt = scanStartedAt;
+  campaign.lastProgressAt = scanStartedAt;
 }
 
 async function inspectFolderChunk(
@@ -466,7 +611,7 @@ async function inspectFolderChunk(
   config: MediaKnowledgeConfig,
 ): Promise<number> {
   const items = db.collection<any>("media_folder_items");
-  const staleBefore = new Date(Date.now() - STALE_ITEM_MS);
+  const staleBefore = new Date(Date.now() - FOLDER_STALE_ITEM_MS);
   await items.updateMany(
     {
       campaignId: campaign._id,
@@ -737,6 +882,36 @@ async function materializeFolderItem(
   }
 }
 
+async function folderWorkerResult(
+  db: Db,
+  campaignId: ObjectId,
+  processed: number,
+  hasMore: boolean,
+) {
+  const campaign = await db.collection<any>("media_folder_campaigns").findOne({
+    _id: campaignId,
+  });
+  if (!campaign) {
+    return { success: true, idle: true, processed: 0, hasMore: false };
+  }
+  const publicCampaign = await publicFolderCampaign(db, campaign);
+  return {
+    success: true,
+    campaignId: String(campaignId),
+    processed,
+    hasMore,
+    progress: {
+      ...publicCampaign.progress,
+      campaignId: String(campaignId),
+      relativePath: campaign.relativePath,
+      unsupported: publicCampaign.counts.unsupported ?? 0,
+      ready: publicCampaign.counts.ready ?? 0,
+      imported: publicCampaign.counts.imported ?? 0,
+      failed: publicCampaign.counts.failed ?? 0,
+    },
+  };
+}
+
 async function processFolderCampaign(
   db: Db,
   requestedCampaignId?: ObjectId,
@@ -760,6 +935,7 @@ async function processFolderCampaign(
     }
     if (campaign.status === "queued" || campaign.status === "scanning") {
       const processed = await inspectFolderChunk(db, campaign, config);
+      const lastProgressAt = new Date();
       const remaining = await db.collection("media_folder_items")
         .countDocuments({
           campaignId: campaign._id,
@@ -781,21 +957,27 @@ async function processFolderCampaign(
               status: "preview_ready",
               counts,
               inventoryCompletedAt: new Date(),
-              updatedAt: new Date(),
+              lastProgressAt,
+              updatedAt: lastProgressAt,
             },
           },
         );
+      } else if (processed > 0) {
+        await campaigns.updateOne(
+          { _id: campaign._id, status: "scanning" },
+          { $set: { lastProgressAt, updatedAt: lastProgressAt } },
+        );
       }
-      return {
-        success: true,
-        campaignId: String(campaign._id),
+      return await folderWorkerResult(
+        db,
+        campaign._id,
         processed,
-        hasMore: remaining > 0,
-      };
+        remaining > 0,
+      );
     }
 
     const items = db.collection<any>("media_folder_items");
-    const staleBefore = new Date(Date.now() - STALE_ITEM_MS);
+    const staleBefore = new Date(Date.now() - FOLDER_STALE_ITEM_MS);
     await items.updateMany(
       {
         campaignId: campaign._id,
@@ -828,6 +1010,7 @@ async function processFolderCampaign(
       campaignId: campaign._id,
       state: { $in: ["ready", "importing"] },
     });
+    const lastProgressAt = new Date();
     if (remaining === 0) {
       const rawCounts = await stateCounts(
         db,
@@ -845,17 +1028,23 @@ async function processFolderCampaign(
             status: hasErrors ? "completed_with_errors" : "completed",
             counts,
             completedAt: new Date(),
-            updatedAt: new Date(),
+            lastProgressAt,
+            updatedAt: lastProgressAt,
           },
         },
       );
+    } else if (processed > 0) {
+      await campaigns.updateOne(
+        { _id: campaign._id, status: "importing" },
+        { $set: { lastProgressAt, updatedAt: lastProgressAt } },
+      );
     }
-    return {
-      success: true,
-      campaignId: String(campaign._id),
+    return await folderWorkerResult(
+      db,
+      campaign._id,
       processed,
-      hasMore: remaining > 0,
-    };
+      remaining > 0,
+    );
   } catch (error) {
     await campaigns.updateOne(
       { _id: campaign._id },
@@ -1638,6 +1827,8 @@ async function confirmFolderCampaign(
       $set: {
         status: "importing",
         confirmationReceipt: receipt,
+        importStartedAt: campaign.importStartedAt ?? now,
+        lastProgressAt: now,
         updatedAt: now,
       },
       $unset: { safeError: "" },
@@ -1967,6 +2158,8 @@ export class MediaLibraryResource
   async use(input: MediaLibraryRequest, auth: Auth): Promise<unknown> {
     const db = await getRootDB();
     switch (input.action) {
+      case "listMountedFolders":
+        return { listing: await listMediaSourceFolders(input.relativePath) };
       case "startFolderScan":
         return await startFolderCampaign(db, auth, input.relativePath);
       case "getFolderCampaign": {
@@ -1977,6 +2170,18 @@ export class MediaLibraryResource
           });
         if (!campaign) throw new Error("Folder campaign was not found");
         return { campaign: await publicFolderCampaign(db, campaign) };
+      }
+      case "getActiveFolderCampaign": {
+        const campaign = await db.collection<any>("media_folder_campaigns")
+          .findOne({
+            owner: auth.principal,
+            status: {
+              $in: ["queued", "scanning", "preview_ready", "importing"],
+            },
+          }, { sort: { createdAt: -1 } });
+        return {
+          campaign: campaign ? await publicFolderCampaign(db, campaign) : null,
+        };
       }
       case "confirmFolderCampaign":
         return await confirmFolderCampaign(

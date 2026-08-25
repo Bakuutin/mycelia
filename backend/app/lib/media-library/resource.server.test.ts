@@ -8,9 +8,11 @@ import { estimateMediaGrossUsd } from "@/lib/media/costs.ts";
 import {
   assertRecognitionTasks,
   FOLDER_CHUNK_SIZE,
+  folderCampaignProgress,
   geoBoundsQuery,
   mediaLibraryRequestSchema,
   MediaLibraryResource,
+  publicFolderCounts,
   RECOGNITION_WINDOW,
   recognitionEligibilityQuery,
   selectionDigest,
@@ -35,6 +37,46 @@ const googleProfile = {
 Deno.test("folder and recognition campaigns use bounded work windows", () => {
   assertEquals(FOLDER_CHUNK_SIZE, 25);
   assertEquals(RECOGNITION_WINDOW, 16);
+});
+
+Deno.test("folder scan progress separates checked ready files from pending work", () => {
+  const raw = {
+    total: 904,
+    unsupported: 103,
+    pending: 775,
+    inspecting: 1,
+    ready: 24,
+  };
+  assertEquals(publicFolderCounts(raw), {
+    total: 904,
+    pending: 775,
+    processing: 1,
+    ready: 24,
+    imported: 0,
+    duplicate: 0,
+    unsupported: 103,
+    changed: 0,
+    failed: 0,
+  });
+  const progress = folderCampaignProgress({ status: "scanning" }, raw);
+  assertEquals(progress.stage, "metadata_scan");
+  assertEquals(progress.processed, 25);
+  assertEquals(progress.total, 801);
+  assertEquals(progress.remaining, 776);
+  assertEquals(progress.percent, 3.1);
+
+  const interrupted = folderCampaignProgress({
+    status: "scanning",
+    createdAt: new Date(Date.now() - 10 * 60_000),
+    lastProgressAt: new Date(Date.now() - 2 * 60_000),
+  }, {
+    total: 904,
+    unsupported: 103,
+    inspecting: 2,
+    ready: 799,
+  });
+  assertEquals(interrupted.waitingForRecovery, true);
+  assertEquals(interrupted.etaSeconds, undefined);
 });
 
 Deno.test("bulk Google photo knowledge is fixed to visual understanding and OCR", () => {
@@ -151,6 +193,24 @@ Deno.test("map bounds use GeoJSON and split an antimeridian viewport", () => {
 Deno.test("worker-only campaign actions require process capability", () => {
   const resource = new MediaLibraryResource();
   const jobId = new ObjectId().toString();
+  assertEquals(
+    resource.extractActions(
+      mediaLibraryRequestSchema.parse({
+        action: "listMountedFolders",
+        relativePath: ".",
+      }),
+    ),
+    [{ path: ["media-library", "listMountedFolders"], actions: ["use"] }],
+  );
+  assertEquals(
+    resource.extractActions(
+      mediaLibraryRequestSchema.parse({ action: "getActiveFolderCampaign" }),
+    ),
+    [{
+      path: ["media-library", "getActiveFolderCampaign"],
+      actions: ["use"],
+    }],
+  );
   assertEquals(
     resource.extractActions(
       mediaLibraryRequestSchema.parse({

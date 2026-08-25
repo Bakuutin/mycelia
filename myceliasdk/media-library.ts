@@ -37,12 +37,46 @@ export const zMediaBatchCounts = z.object({
   cancelled: z.number().int().nonnegative().default(0),
 }).partial().default({});
 
+export const zMediaFolderCampaignProgress = z.object({
+  stage: z.enum([
+    "inventory",
+    "metadata_scan",
+    "awaiting_confirmation",
+    "creating_previews",
+    "completed",
+    "failed",
+    "cancelled",
+  ]),
+  processed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  percent: z.number().min(0).max(100),
+  filesPerSecond: z.number().nonnegative().optional(),
+  etaSeconds: z.number().int().nonnegative().optional(),
+  waitingForRecovery: z.boolean().optional(),
+  chunkSize: z.number().int().positive(),
+  message: z.string().min(1),
+  nextStep: z.string().min(1),
+  startedAt: zDateOrString().optional(),
+  lastProgressAt: zDateOrString().optional(),
+});
+
+export const zMediaSourceFolderListing = z.object({
+  currentPath: z.string().min(1),
+  parentPath: z.string().min(1).optional(),
+  folders: z.array(z.object({
+    name: z.string().min(1),
+    relativePath: z.string().min(1),
+  })),
+});
+
 export const zMediaFolderCampaign = z.object({
   _id: zObjectId(),
   owner: z.string().min(1),
   relativePath: z.string().min(1),
   status: zMediaFolderCampaignStatus,
   counts: zMediaBatchCounts,
+  progress: zMediaFolderCampaignProgress.optional(),
   safeError: z.string().optional(),
   createdAt: zDateOrString(),
   updatedAt: zDateOrString(),
@@ -89,6 +123,12 @@ export const zMediaMapItem = z.object({
 });
 
 export type MediaFolderCampaign = z.infer<typeof zMediaFolderCampaign>;
+export type MediaFolderCampaignProgress = z.infer<
+  typeof zMediaFolderCampaignProgress
+>;
+export type MediaSourceFolderListing = z.infer<
+  typeof zMediaSourceFolderListing
+>;
 export type MediaRecognitionBatch = z.infer<typeof zMediaRecognitionBatch>;
 export type MediaTimelineItem = z.infer<typeof zMediaTimelineItem>;
 export type MediaMapItem = z.infer<typeof zMediaMapItem>;

@@ -3,6 +3,7 @@ import {
   zMediaBatchCounts,
   zMediaFolderCampaign,
   zMediaRecognitionBatch,
+  zMediaSourceFolderListing,
 } from "./media-library.ts";
 
 Deno.test("media batch counts preserve changed and unplaced-scale totals", () => {
@@ -29,6 +30,18 @@ Deno.test("folder and recognition campaign schemas reject unbounded invalid stat
       ...base,
       relativePath: "900-photos",
       status: "scanning",
+      progress: {
+        stage: "metadata_scan",
+        processed: 200,
+        total: 801,
+        remaining: 601,
+        percent: 24.968789,
+        filesPerSecond: 1.6,
+        etaSeconds: 376,
+        chunkSize: 25,
+        message: "Reading metadata and hashes locally",
+        nextStep: "Review and confirm the local import",
+      },
     }).relativePath,
     "900-photos",
   );
@@ -41,5 +54,12 @@ Deno.test("folder and recognition campaign schemas reject unbounded invalid stat
       requestedTasks: ["labels"],
       authorizedGrossUsd: -1,
     })
+  );
+  assertEquals(
+    zMediaSourceFolderListing.parse({
+      currentPath: ".",
+      folders: [{ name: "Trips", relativePath: "Trips" }],
+    }).folders[0]?.relativePath,
+    "Trips",
   );
 });
