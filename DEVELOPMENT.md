@@ -229,6 +229,12 @@ links that interval to Timeline without querying `audio_chunks` again.
 Older/manual jobs fall back to their requested `data.start`/`data.end`; a job
 with neither field has no range rendered rather than an inferred one.
 
+The Job Detail page keeps a batch's recorded diarization errors as historical
+evidence, but resolves each affected range against current `audio_chunks` so it
+can distinguish recovered retries, pending retries, and exhausted failures.
+Raw job payloads, worker logs, and access-audit rows remain available in closed
+technical sections instead of expanding the page by default.
+
 Deploy changes to this path by pausing only the diarization worker, draining its
 active jobs, recreating `backend` and `python-worker`, and then resuming the
 same worker. Do not clear waiting or delayed jobs, and do not restart MongoDB or

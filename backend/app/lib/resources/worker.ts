@@ -41,6 +41,7 @@ import {
 } from "@/lib/jobs/timeline-campaign-recovery.ts";
 import { resolveLiveJobState } from "@/lib/jobs/job-live-state.ts";
 import { runExactCount } from "@/lib/jobs/exact-count.ts";
+import { deriveDiarizationErrorOutcomes } from "@/lib/jobs/diarization-error-outcome.ts";
 import { buildWorkerCatalog } from "@/lib/jobs/worker-catalog.ts";
 import {
   beginDashboardRefresh,
@@ -884,6 +885,52 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       modelProvenance = entries;
     }
 
+    let diarizationErrorOutcomes:
+      | ReturnType<typeof deriveDiarizationErrorOutcomes>
+      | undefined;
+    const diarizationErrors = job.type === "diarization" &&
+        Array.isArray(job.result?.errors)
+      ? job.result.errors.slice(0, 100)
+      : [];
+    if (diarizationErrors.length > 0) {
+      const errorRanges = diarizationErrors.flatMap((error: any) => {
+        if (
+          typeof error?.originalId !== "string" ||
+          !ObjectId.isValid(error.originalId)
+        ) return [];
+        const start = validDate(error.start);
+        const end = validDate(error.end);
+        if (!start || !end) return [];
+        return [{
+          original_id: new ObjectId(error.originalId),
+          start: { $gte: start, $lte: end },
+          "vad.has_speech": true,
+        }];
+      });
+      const chunks = errorRanges.length > 0
+        ? await mongo({
+          action: "find",
+          collection: "audio_chunks",
+          query: { $or: errorRanges },
+          options: {
+            sort: { start: 1 },
+            limit: Math.min(diarizationErrors.length * 128, 5_000),
+            maxTimeMS: 5_000,
+            projection: {
+              original_id: 1,
+              start: 1,
+              diarized_at: 1,
+              diarizationFailure: 1,
+            },
+          },
+        })
+        : [];
+      diarizationErrorOutcomes = deriveDiarizationErrorOutcomes(
+        diarizationErrors,
+        chunks,
+      );
+    }
+
     return {
       id: job._id.toString(),
       type: job.type,
@@ -905,6 +952,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       queuePresent: queueJob != null,
       queueAdmission: job.queueAdmission,
       ...(modelProvenance && { modelProvenance }),
+      ...(diarizationErrorOutcomes && { diarizationErrorOutcomes }),
     };
   }
 
