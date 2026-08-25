@@ -5,7 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "@/lib/api";
 import VoiceIdentityReviewPage from "./VoiceIdentityReviewPage";
 
-vi.mock("@/lib/api", () => ({ callResource: vi.fn() }));
+vi.mock("@/lib/api", () => ({
+  callResource: vi.fn(),
+  apiClient: {
+    fetch: vi.fn(async () =>
+      new Response(new ArrayBuffer(0), {
+        headers: { "content-type": "audio/wav" },
+      })
+    ),
+  },
+}));
 vi.mock("./VoiceIdentityReviewPlayer", () => ({
   buildVoiceReviewAudioUrl: () => "/api/audio/review",
   VoiceIdentityReviewPlayer: (props: any) => (
@@ -666,10 +675,13 @@ describe("VoiceIdentityReviewPage", () => {
 
     renderPage();
 
-    await screen.findByText("Split blocked");
-    for (const blocker of blockedPreview.blockers) {
-      expect(screen.getAllByText(blocker).length).toBeGreaterThan(0);
-    }
+    await screen.findByText("Check needs attention");
+    expect(screen.getByText(
+      "Check needs both Sky and not-Sky examples. Move a different mixed recording to Check.",
+    )).toBeInTheDocument();
+    expect(screen.getByText(blockedPreview.blockers[1])).toBeInTheDocument();
+    expect(screen.getByText(/Independent accuracy is below 98%/i))
+      .toBeInTheDocument();
     expect(screen.getByText(/Only 3 source recordings/i)).toBeInTheDocument();
   });
 

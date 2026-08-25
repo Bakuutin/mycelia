@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useJobsListener } from "@/hooks/useJobsListener";
@@ -63,13 +63,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Command,
@@ -87,7 +87,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { JobInfo } from "@/types/jobs";
-import type { JobsDashboard } from "@/types/jobsDashboard";
+import type { JobsDashboard, WorkerCatalogEntry } from "@/types/jobsDashboard";
 import type {
   TimelineBookkeepingRepair,
   TimelineIntegrityReport,
@@ -490,6 +490,28 @@ const STATUS_PRIORITY: Record<string, number> = {
  * has to be grouped with "failed" wherever errors are shown or filtered.
  */
 const ERRORED_JOB_STATES = new Set(["failed", "cancelled"]);
+
+const WORKER_SECTIONS: ReadonlyArray<{
+  id: WorkerCatalogEntry["section"];
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "pipeline",
+    label: "Pipeline",
+    description: "Audio to transcripts, speakers, conversations, and metadata.",
+  },
+  {
+    id: "maintenance",
+    label: "Maintenance",
+    description: "Backfills, catalogs, locations, and derived Timeline data.",
+  },
+  {
+    id: "diagnostic",
+    label: "Diagnostics",
+    description: "Integration checks that verify worker execution paths.",
+  },
+];
 
 /**
  * Renders the worker's actual processed interval when available, falling back
@@ -2718,33 +2740,6 @@ export default function JobsPage() {
     },
   });
 
-  const saveSttModelMutation = useMutation({
-    mutationFn: async (model: string) => {
-      if (!model) throw new Error("Choose an STT model first");
-      return await api.callResource("config", {
-        action: "patch",
-        path: "transcription",
-        updates: { model },
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["inference-routing-config"] });
-      void markPipelineHealthStale();
-      setServiceTestResults((current) => ({
-        ...current,
-        stt: "STT model saved. New transcription jobs will use it.",
-      }));
-    },
-    onError: (error) => {
-      setServiceTestResults((current) => ({
-        ...current,
-        stt: error instanceof Error
-          ? error.message
-          : "Failed to save STT model",
-      }));
-    },
-  });
-
   const setSttRouteEnabledMutation = useMutation({
     mutationFn: async ({ profileId, enabled }: {
       profileId: string;
@@ -3266,6 +3261,12 @@ export default function JobsPage() {
       a.order - b.order || a.type.localeCompare(b.type)
     );
   }, [catalogWorkers]);
+
+  const workerGroups = useMemo(() =>
+    WORKER_SECTIONS.map((section) => ({
+      ...section,
+      workers: sortedWorkers.filter((worker) => worker.section === section.id),
+    })).filter((section) => section.workers.length > 0), [sortedWorkers]);
 
   // Job type statistics from backend (aggregates ALL jobs in database)
   const jobTypeStats = useMemo(() => {
@@ -4065,9 +4066,16 @@ export default function JobsPage() {
               )
               : (
                 <>
-                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  <div
+                    id="routing-details"
+                    className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+                  >
                     {services.map((service) => {
                       const allPausedForService = service.usedBy.every(
+                        (workerType) =>
+                          workerStatus?.workers[workerType]?.paused,
+                      );
+                      const somePausedForService = service.usedBy.some(
                         (workerType) =>
                           workerStatus?.workers[workerType]?.paused,
                       );
@@ -4172,6 +4180,29 @@ export default function JobsPage() {
                           </div>
                           {showRoutingDetails && routes.length > 0 && (
                             <div className="mt-2 border-t pt-2">
+                              <div className="mb-1.5 min-w-0 text-[9px] leading-tight text-muted-foreground">
+                                <div
+                                  className="truncate font-mono text-foreground"
+                                  title={service.baseUrl || "Not configured"}
+                                >
+                                  {service.baseUrl || "Not configured"}
+                                </div>
+                                <div className="mt-0.5 truncate">
+                                  {service.source || "no source"}
+                                  {service.providerProfileName
+                                    ? ` · ${service.providerProfileName}`
+                                    : ""}
+                                  {service.httpStatus
+                                    ? ` · HTTP ${service.httpStatus}`
+                                    : ""}
+                                  {` · checked ${
+                                    format(
+                                      new Date(service.checkedAt),
+                                      "HH:mm:ss",
+                                    )
+                                  }`}
+                                </div>
+                              </div>
                               <div className="mb-1.5 flex items-center justify-between gap-2">
                                 <span className="text-[10px] font-medium text-muted-foreground">
                                   Routes ·{" "}
@@ -4270,7 +4301,38 @@ export default function JobsPage() {
                                         compact
                                       />
                                     )}
-                                    <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
+                                    {service.id === "llm" &&
+                                      !route.enabled &&
+                                      Object.values(pinnedTaskRoutes ?? {})
+                                          .filter((providerId) =>
+                                            providerId ===
+                                              route.providerProfileId
+                                          ).length > 0 &&
+                                      (
+                                        <Badge
+                                          variant="destructive"
+                                          className="h-4 shrink-0 px-1 text-[8px]"
+                                          title="Workers are pinned to this disabled route"
+                                        >
+                                          {Object.values(pinnedTaskRoutes ?? {})
+                                            .filter((providerId) =>
+                                              providerId ===
+                                                route.providerProfileId
+                                            ).length} pinned
+                                        </Badge>
+                                      )}
+                                    <span
+                                      className="min-w-0 max-w-[52%] truncate font-mono text-[9px] text-muted-foreground"
+                                      title={`Priority ${route.priority}${
+                                        route.concurrency
+                                          ? ` · ${route.concurrency} slot${
+                                            route.concurrency === 1 ? "" : "s"
+                                          }`
+                                          : ""
+                                      }${
+                                        route.model ? ` · ${route.model}` : ""
+                                      }`}
+                                    >
                                       P{route.priority}
                                       {route.concurrency
                                         ? ` · ${route.concurrency} slot${
@@ -4279,6 +4341,91 @@ export default function JobsPage() {
                                         : ""}
                                       {route.model ? ` · ${route.model}` : ""}
                                     </span>
+                                    {service.id === "diarizator" && (
+                                      <div className="flex shrink-0 items-center gap-0.5">
+                                        <Input
+                                          type="number"
+                                          min={1}
+                                          max={100}
+                                          step={1}
+                                          value={diarizationPriorityDrafts[
+                                            route.providerProfileId
+                                          ] ?? String(route.priority)}
+                                          onChange={(event) =>
+                                            setDiarizationPriorityDrafts((
+                                              current,
+                                            ) => ({
+                                              ...current,
+                                              [route.providerProfileId]:
+                                                event.target.value,
+                                            }))}
+                                          className="h-6 w-12 px-1 text-[9px]"
+                                          aria-label={`Priority for ${route.providerProfileName}`}
+                                        />
+                                        <Button
+                                          type="button"
+                                          size="icon"
+                                          variant="ghost"
+                                          className="h-6 w-6"
+                                          disabled={!Number.isInteger(Number(
+                                            diarizationPriorityDrafts[
+                                              route.providerProfileId
+                                            ] ?? route.priority,
+                                          )) ||
+                                            Number(
+                                                diarizationPriorityDrafts[
+                                                  route.providerProfileId
+                                                ] ?? route.priority,
+                                              ) < 1 ||
+                                            Number(
+                                                diarizationPriorityDrafts[
+                                                  route.providerProfileId
+                                                ] ?? route.priority,
+                                              ) > 100 ||
+                                            Number(
+                                                diarizationPriorityDrafts[
+                                                  route.providerProfileId
+                                                ] ?? route.priority,
+                                              ) === route.priority ||
+                                            updateDiarizationRouteMutation
+                                              .isPending}
+                                          onClick={() =>
+                                            updateDiarizationRouteMutation
+                                              .mutate({
+                                                profileId:
+                                                  route.providerProfileId,
+                                                changes: {
+                                                  priority: Number(
+                                                    diarizationPriorityDrafts[
+                                                      route.providerProfileId
+                                                    ] ?? route.priority,
+                                                  ),
+                                                },
+                                              })}
+                                          aria-label={`Save priority for ${route.providerProfileName}`}
+                                          title="Save priority"
+                                        >
+                                          <Save className="h-3 w-3" />
+                                        </Button>
+                                      </div>
+                                    )}
+                                    {service.id === "llm" && (
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 shrink-0 px-1.5 text-[9px]"
+                                        onClick={() =>
+                                          makeLlmPrimaryMutation.mutate(
+                                            route.providerProfileId,
+                                          )}
+                                        disabled={makeLlmPrimaryMutation
+                                          .isPending}
+                                        title="Give this route the highest priority"
+                                      >
+                                        Primary
+                                      </Button>
+                                    )}
                                     <span
                                       className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                                         route.status === "healthy"
@@ -4292,603 +4439,76 @@ export default function JobsPage() {
                                   </div>
                                 ))}
                               </div>
+                              <div className="mt-1.5 flex flex-wrap items-center gap-1 border-t pt-1.5">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 px-1.5 text-[9px]"
+                                  asChild
+                                >
+                                  <Link
+                                    to={service.id === "diarizator"
+                                      ? "/settings/diarization"
+                                      : service.id === "stt"
+                                      ? "/settings/speech-to-text"
+                                      : "/settings/inference"}
+                                  >
+                                    Configure
+                                  </Link>
+                                </Button>
+                                {service.id !== "diarizator" && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 px-1.5 text-[9px]"
+                                    onClick={() =>
+                                      testServiceMutation.mutate(
+                                        service.id === "stt" ? "stt" : "llm",
+                                      )}
+                                    disabled={testServiceMutation.isPending}
+                                  >
+                                    Test
+                                  </Button>
+                                )}
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 px-1.5 text-[9px]"
+                                  onClick={() =>
+                                    setServiceWorkersPausedMutation.mutate({
+                                      workerTypes: service.usedBy,
+                                      paused: !somePausedForService,
+                                    })}
+                                  disabled={setServiceWorkersPausedMutation
+                                    .isPending}
+                                >
+                                  {somePausedForService ? "Resume" : "Pause"}
+                                  {" workers"}
+                                </Button>
+                                {serviceTestResults[service.id] && (
+                                  <span
+                                    className="min-w-0 flex-1 truncate text-[9px] text-muted-foreground"
+                                    title={serviceTestResults[service.id]}
+                                  >
+                                    {serviceTestResults[service.id]}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>
                       );
                     })}
                   </div>
-                  {showRoutingDetails && (
-                    <div
-                      id="routing-details"
-                      className="mt-3 grid gap-3 xl:grid-cols-2"
-                    >
-                      {services.map((service) => {
-                        const allPausedForService = service.usedBy.every(
-                          (workerType) =>
-                            workerStatus?.workers[workerType]?.paused,
-                        );
-                        const intentionallyPaused = allPausedForService &&
-                          service.status !== "healthy";
-                        const statusClass = intentionallyPaused
-                          ? "bg-amber-500/10 text-amber-600"
-                          : service.status === "healthy"
-                          ? "bg-green-500/10 text-green-600"
-                          : service.status === "loading"
-                          ? "bg-amber-500/10 text-amber-600"
-                          : "bg-red-500/10 text-red-600";
-                        return (
-                          <div
-                            key={service.id}
-                            className="space-y-2 rounded-lg border p-3"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex items-start gap-3">
-                                {intentionallyPaused
-                                  ? (
-                                    <PauseCircle className="mt-0.5 h-5 w-5 text-amber-500" />
-                                  )
-                                  : service.status === "healthy"
-                                  ? (
-                                    <Wifi className="mt-0.5 h-5 w-5 text-green-500" />
-                                  )
-                                  : (
-                                    <WifiOff className="mt-0.5 h-5 w-5 text-red-500" />
-                                  )}
-                                <div>
-                                  <div className="font-medium">
-                                    {service.label}
-                                  </div>
-                                  <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
-                                    {service.baseUrl || "Not configured"}
-                                  </div>
-                                </div>
-                              </div>
-                              <Badge
-                                variant="secondary"
-                                className={statusClass}
-                              >
-                                {intentionallyPaused
-                                  ? "paused intentionally"
-                                  : service.status}
-                                {service.httpStatus
-                                  ? ` · HTTP ${service.httpStatus}`
-                                  : ""}
-                              </Badge>
-                            </div>
-
-                            <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-                              <div>
-                                Source:{" "}
-                                <span className="font-mono text-foreground">
-                                  {service.source || "none"}
-                                </span>
-                              </div>
-                              {service.providerProfileName && (
-                                <div>
-                                  Preset:{" "}
-                                  <span className="font-mono text-foreground">
-                                    {service.providerProfileName}
-                                  </span>
-                                </div>
-                              )}
-                              <div>
-                                Model:{" "}
-                                <span className="font-mono text-foreground">
-                                  {service.model || service.models?.[0] ||
-                                    "unknown"}
-                                </span>
-                              </div>
-                              <div>
-                                Latency:{" "}
-                                <span className="text-foreground">
-                                  {service.latencyMs != null
-                                    ? `${service.latencyMs} ms`
-                                    : "—"}
-                                </span>
-                              </div>
-                              <div>
-                                Checked:{" "}
-                                <span className="text-foreground">
-                                  {format(
-                                    new Date(service.checkedAt),
-                                    "HH:mm:ss",
-                                  )}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div
-                              className={`rounded p-2 text-xs ${
-                                service.status === "healthy"
-                                  ? "bg-green-500/5"
-                                  : intentionallyPaused
-                                  ? "bg-amber-500/5 text-amber-700"
-                                  : "bg-red-500/5 text-red-500"
-                              }`}
-                            >
-                              {intentionallyPaused
-                                ? `Expected while all routed workers are paused. Last probe: ${service.message}`
-                                : service.message}
-                            </div>
-
-                            {service.id === "diarizator" && (
-                              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div>
-                                    <p className="text-xs font-medium">
-                                      Diarizator routes
-                                    </p>
-                                    <p className="text-xs text-muted-foreground">
-                                      New jobs use the first healthy enabled
-                                      route by priority.
-                                    </p>
-                                  </div>
-                                  <Button size="sm" variant="outline" asChild>
-                                    <Link to="/settings/diarization">
-                                      Configure
-                                    </Link>
-                                  </Button>
-                                </div>
-                                {service.routes?.map((route) => {
-                                  const priorityDraft =
-                                    diarizationPriorityDrafts[
-                                      route.providerProfileId
-                                    ] ?? String(route.priority);
-                                  const parsedPriority = Number(priorityDraft);
-                                  const validPriority = Number.isInteger(
-                                    parsedPriority,
-                                  ) && parsedPriority >= 1 &&
-                                    parsedPriority <= 100;
-                                  return (
-                                    <div
-                                      key={route.providerProfileId}
-                                      className="flex flex-wrap items-center gap-2 rounded border bg-background p-2 text-xs md:flex-nowrap"
-                                      title={route.message}
-                                    >
-                                      <div className="flex shrink-0 items-center gap-1.5">
-                                        <Switch
-                                          checked={route.enabled}
-                                          disabled={updateDiarizationRouteMutation
-                                            .isPending}
-                                          onCheckedChange={(enabled) =>
-                                            updateDiarizationRouteMutation
-                                              .mutate(
-                                                {
-                                                  profileId:
-                                                    route.providerProfileId,
-                                                  changes: { enabled },
-                                                },
-                                              )}
-                                          aria-label={`Enable ${route.providerProfileName}`}
-                                        />
-                                        <span className="w-6 text-muted-foreground">
-                                          {route.enabled ? "On" : "Off"}
-                                        </span>
-                                      </div>
-                                      <div className="flex min-w-[9rem] flex-wrap items-center gap-1.5">
-                                        <span className="truncate font-medium">
-                                          {route.providerProfileName}
-                                        </span>
-                                        <DiarizatorReadinessStatusBadge
-                                          route={route}
-                                        />
-                                        <span className="text-muted-foreground">
-                                          {` · ${route.concurrency ?? 1} slot${
-                                            (route.concurrency ?? 1) === 1
-                                              ? ""
-                                              : "s"
-                                          }`}
-                                        </span>
-                                      </div>
-                                      <div
-                                        className="min-w-[11rem] flex-1 truncate font-mono text-muted-foreground"
-                                        title={route.baseUrl}
-                                      >
-                                        {route.baseUrl}
-                                      </div>
-                                      <div className="flex shrink-0 items-center gap-1.5">
-                                        <Label
-                                          htmlFor={`diar-priority-${route.providerProfileId}`}
-                                          className="text-[11px] text-muted-foreground"
-                                        >
-                                          Priority
-                                        </Label>
-                                        <Input
-                                          id={`diar-priority-${route.providerProfileId}`}
-                                          type="number"
-                                          min={1}
-                                          max={100}
-                                          step={1}
-                                          value={priorityDraft}
-                                          onChange={(event) =>
-                                            setDiarizationPriorityDrafts((
-                                              current,
-                                            ) => ({
-                                              ...current,
-                                              [route.providerProfileId]:
-                                                event.target.value,
-                                            }))}
-                                          className="h-8 w-16"
-                                          aria-label={`Priority for ${route.providerProfileName}`}
-                                        />
-                                        <Button
-                                          size="icon"
-                                          variant="outline"
-                                          className="h-8 w-8"
-                                          disabled={!validPriority ||
-                                            updateDiarizationRouteMutation
-                                              .isPending ||
-                                            parsedPriority === route.priority}
-                                          onClick={() =>
-                                            updateDiarizationRouteMutation
-                                              .mutate(
-                                                {
-                                                  profileId:
-                                                    route.providerProfileId,
-                                                  changes: {
-                                                    priority: parsedPriority,
-                                                  },
-                                                },
-                                              )}
-                                          aria-label={`Save priority for ${route.providerProfileName}`}
-                                          title="Save priority"
-                                        >
-                                          <Save className="h-3.5 w-3.5" />
-                                        </Button>
-                                      </div>
-                                      <Badge
-                                        variant={route.status === "healthy"
-                                          ? "secondary"
-                                          : route.status === "disabled"
-                                          ? "outline"
-                                          : "destructive"}
-                                        className="shrink-0"
-                                        aria-label={`${
-                                          route.status === "healthy"
-                                            ? "running"
-                                            : route.status
-                                        }: ${route.message}`}
-                                        title={route.message}
-                                      >
-                                        {route.status === "healthy"
-                                          ? "running"
-                                          : route.status}
-                                      </Badge>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-
-                            {service.id === "llm" && (
-                              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                                {service.routes?.length
-                                  ? (
-                                    <>
-                                      <Label className="text-xs">
-                                        Provider-aware LLM routes
-                                      </Label>
-                                      <p className="text-xs text-muted-foreground">
-                                        Requests use the highest-priority
-                                        enabled route and fail over down the
-                                        list on errors.
-                                      </p>
-                                      <div className="space-y-1">
-                                        {service.routes.map((route) => {
-                                          const pinnedWorkers = Object.entries(
-                                            pinnedTaskRoutes ?? {},
-                                          )
-                                            .filter(([, providerId]) =>
-                                              providerId ===
-                                                route.providerProfileId
-                                            )
-                                            .map(([workerType]) => workerType);
-                                          return (
-                                            <div
-                                              key={route.providerProfileId}
-                                              className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
-                                            >
-                                              <div className="flex min-w-0 items-center gap-2">
-                                                <Switch
-                                                  checked={route.enabled}
-                                                  disabled={setLlmRouteEnabledMutation
-                                                    .isPending}
-                                                  onCheckedChange={(enabled) =>
-                                                    setLlmRouteEnabledMutation
-                                                      .mutate(
-                                                        {
-                                                          profileId: route
-                                                            .providerProfileId,
-                                                          enabled,
-                                                        },
-                                                      )}
-                                                  aria-label={`Enable ${route.providerProfileName} LLM route`}
-                                                />
-                                                <div className="min-w-0">
-                                                  <div className="truncate font-medium">
-                                                    {route.providerProfileName}
-                                                  </div>
-                                                  <div className="text-muted-foreground">
-                                                    {route.enabled
-                                                      ? "Enabled for new requests"
-                                                      : "Disabled for new requests"}
-                                                  </div>
-                                                  {!route.enabled &&
-                                                    pinnedWorkers.length > 0 &&
-                                                    (
-                                                      <div className="text-red-500">
-                                                        {pinnedWorkers.length}
-                                                        {" "}
-                                                        task route(s) pinned to
-                                                        this provider will fail:
-                                                        {" "}
-                                                        {pinnedWorkers.join(
-                                                          ", ",
-                                                        )} —{" "}
-                                                        <Link
-                                                          to="/settings/inference"
-                                                          className="underline"
-                                                        >
-                                                          Configure routing
-                                                        </Link>
-                                                      </div>
-                                                    )}
-                                                </div>
-                                              </div>
-                                              <span className="font-mono text-muted-foreground">
-                                                P{route.priority} ·{" "}
-                                                {route.model || "unknown"}
-                                                {typeof route.concurrency ===
-                                                    "number"
-                                                  ? ` · ${route.concurrency} req${
-                                                    route.concurrency === 1
-                                                      ? ""
-                                                      : "s"
-                                                  }`
-                                                  : ""}
-                                              </span>
-                                              <div className="flex items-center gap-2">
-                                                <Button
-                                                  size="sm"
-                                                  variant="outline"
-                                                  onClick={() =>
-                                                    makeLlmPrimaryMutation
-                                                      .mutate(
-                                                        route.providerProfileId,
-                                                      )}
-                                                  disabled={makeLlmPrimaryMutation
-                                                    .isPending}
-                                                  title="Give this route the highest priority"
-                                                >
-                                                  Make primary
-                                                </Button>
-                                                <Badge
-                                                  variant="secondary"
-                                                  className={route.status ===
-                                                      "disabled"
-                                                    ? "bg-muted text-muted-foreground"
-                                                    : undefined}
-                                                >
-                                                  {route.status}
-                                                </Badge>
-                                              </div>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    </>
-                                  )
-                                  : (
-                                    <p className="text-xs text-muted-foreground">
-                                      No LLM provider routes are configured yet.
-                                    </p>
-                                  )}
-                                <div className="flex flex-wrap gap-2">
-                                  <Button asChild size="sm" variant="outline">
-                                    <Link to="/settings/inference">
-                                      Configure LLM providers
-                                    </Link>
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() =>
-                                      testServiceMutation.mutate("llm")}
-                                    disabled={testServiceMutation.isPending}
-                                  >
-                                    <RefreshCw
-                                      className={`mr-2 h-3.5 w-3.5 ${
-                                        testServiceMutation.isPending &&
-                                          testServiceMutation.variables ===
-                                            "llm"
-                                          ? "animate-spin"
-                                          : ""
-                                      }`}
-                                    />
-                                    Test LLM
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
-
-                            {service.id === "stt" && (
-                              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                                {service.routes?.length
-                                  ? (
-                                    <>
-                                      <Label className="text-xs">
-                                        Provider-aware transcription routes
-                                      </Label>
-                                      <p className="text-xs text-muted-foreground">
-                                        The toggle controls Mycelia routing for
-                                        new jobs; it does not stop the server
-                                        process.
-                                      </p>
-                                      <div className="space-y-1">
-                                        {service.routes.map((route) => (
-                                          <div
-                                            key={route.providerProfileId}
-                                            className="flex flex-wrap items-center justify-between gap-2 rounded border bg-background p-2 text-xs"
-                                          >
-                                            <div className="flex min-w-0 items-center gap-2">
-                                              <Switch
-                                                checked={route.enabled}
-                                                disabled={setSttRouteEnabledMutation
-                                                  .isPending}
-                                                onCheckedChange={(enabled) =>
-                                                  setSttRouteEnabledMutation
-                                                    .mutate({
-                                                      profileId:
-                                                        route.providerProfileId,
-                                                      enabled,
-                                                    })}
-                                                aria-label={`Enable ${route.providerProfileName} STT route`}
-                                              />
-                                              <div className="min-w-0">
-                                                <div className="truncate font-medium">
-                                                  {route.providerProfileName}
-                                                </div>
-                                                <div className="text-muted-foreground">
-                                                  {route.enabled
-                                                    ? "Enabled for new jobs"
-                                                    : "Disabled for new jobs"}
-                                                </div>
-                                              </div>
-                                            </div>
-                                            <span className="font-mono text-muted-foreground">
-                                              P{route.priority} ·{" "}
-                                              {route.model || "unknown"} ·{" "}
-                                              {route.concurrency}{" "}
-                                              slot{route.concurrency ===
-                                                  1
-                                                ? ""
-                                                : "s"}
-                                            </span>
-                                            <Badge
-                                              variant="secondary"
-                                              className={route.status ===
-                                                  "disabled"
-                                                ? "bg-muted text-muted-foreground"
-                                                : undefined}
-                                            >
-                                              {route.status}
-                                            </Badge>
-                                          </div>
-                                        ))}
-                                      </div>
-                                      <Button
-                                        asChild
-                                        size="sm"
-                                        variant="outline"
-                                      >
-                                        <Link to="/settings/speech-to-text">
-                                          Configure STT providers
-                                        </Link>
-                                      </Button>
-                                    </>
-                                  )
-                                  : (
-                                    <>
-                                      <Label className="text-xs">
-                                        Model for transcription jobs
-                                      </Label>
-                                      <div className="flex flex-wrap gap-2">
-                                        <Select
-                                          value={selectedSttModel}
-                                          onValueChange={setSelectedSttModel}
-                                          disabled={!service.models?.length}
-                                        >
-                                          <SelectTrigger className="min-w-52 flex-1">
-                                            <SelectValue placeholder="Load STT models first" />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {[
-                                              ...new Set([
-                                                ...(service.models || []),
-                                                ...(selectedSttModel
-                                                  ? [selectedSttModel]
-                                                  : []),
-                                              ]),
-                                            ].map((model) => (
-                                              <SelectItem
-                                                key={model}
-                                                value={model}
-                                              >
-                                                {model}
-                                              </SelectItem>
-                                            ))}
-                                          </SelectContent>
-                                        </Select>
-                                        <Button
-                                          size="sm"
-                                          onClick={() =>
-                                            saveSttModelMutation.mutate(
-                                              selectedSttModel,
-                                            )}
-                                          disabled={!selectedSttModel ||
-                                            saveSttModelMutation.isPending}
-                                        >
-                                          <Save className="mr-2 h-3.5 w-3.5" />
-                                          Save model
-                                        </Button>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() =>
-                                            testServiceMutation.mutate("stt")}
-                                          disabled={testServiceMutation
-                                            .isPending}
-                                        >
-                                          <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                                          Test & load models
-                                        </Button>
-                                      </div>
-                                    </>
-                                  )}
-                              </div>
-                            )}
-
-                            {serviceTestResults[service.id] && (
-                              <div className="text-xs text-muted-foreground">
-                                {serviceTestResults[service.id]}
-                              </div>
-                            )}
-
-                            <div className="space-y-2">
-                              <div className="text-xs text-muted-foreground">
-                                Routed workers: {service.usedBy.join(", ")}
-                              </div>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() =>
-                                  setServiceWorkersPausedMutation.mutate({
-                                    workerTypes: service.usedBy,
-                                    paused: !allPausedForService,
-                                  })}
-                                disabled={setServiceWorkersPausedMutation
-                                  .isPending}
-                              >
-                                {allPausedForService
-                                  ? <PlayCircle className="mr-2 h-4 w-4" />
-                                  : <PauseCircle className="mr-2 h-4 w-4" />}
-                                {allPausedForService
-                                  ? "Resume affected workers"
-                                  : "Pause affected workers"}
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
                 </>
               )}
           </CardContent>
         </Card>
 
-        <Card className="order-2">
+        <Card className="order-3">
           <CardHeader className="px-3 py-2.5">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
@@ -5160,30 +4780,48 @@ export default function JobsPage() {
           </CardContent>
         </Card>
 
-        <Card id="timeline-integrity" className="order-5 scroll-mt-4">
-          <Sheet>
-            <CardHeader className="px-3 py-2.5">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <CardTitle className="text-base">
+        <Card id="timeline-integrity" className="order-2 scroll-mt-4">
+          <Dialog>
+            <CardContent className="p-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <CardTitle className="text-sm">
                     Timeline density integrity
                   </CardTitle>
-                  <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
-                    Checks whether Timeline density bars match raw audio and
-                    transcriptions.
-                  </p>
+                  {timelineIntegrity && hasTimelineSnapshot && (
+                    <Badge
+                      variant="secondary"
+                      className={`h-5 px-1.5 text-[10px] ${
+                        timelineVerificationRequired
+                          ? "bg-amber-500/10 text-amber-500"
+                          : timelineCampaignBusy
+                          ? "bg-blue-500/10 text-blue-500"
+                          : timelineIntegrity.status === "healthy"
+                          ? "bg-green-500/10 text-green-500"
+                          : "bg-amber-500/10 text-amber-500"
+                      }`}
+                    >
+                      {timelineVerificationRequired
+                        ? "Verification needed"
+                        : timelineCampaignBusy
+                        ? "Repair in progress"
+                        : timelineIntegrity.status === "healthy"
+                        ? "Up to date"
+                        : "Repair needed"}
+                    </Badge>
+                  )}
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex items-center gap-1.5">
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 px-2.5 text-xs"
+                    className="h-7 px-2 text-[11px]"
                     onClick={() => refreshTimelineIntegrityMutation.mutate()}
                     disabled={refreshTimelineIntegrityMutation.isPending ||
                       timelineIntegrity?.snapshot?.state === "refreshing"}
                   >
                     <RefreshCw
-                      className={`mr-2 h-3.5 w-3.5 ${
+                      className={`mr-1.5 h-3.5 w-3.5 ${
                         refreshTimelineIntegrityMutation.isPending ||
                           timelineIntegrity?.snapshot?.state === "refreshing"
                           ? "animate-spin"
@@ -5193,146 +4831,96 @@ export default function JobsPage() {
                     {timelineIntegrity?.snapshot?.state === "refreshing"
                       ? "Checking…"
                       : timelineVerificationRequired
-                      ? "Run exact verification"
+                      ? "Verify result"
                       : hasTimelineSnapshot
                       ? "Check now"
                       : "Run check"}
                   </Button>
-                  <SheetTrigger asChild>
+                  <DialogTrigger asChild>
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="h-8 px-2.5 text-xs"
+                      className="h-7 px-2 text-[11px]"
                     >
                       Details
                     </Button>
-                  </SheetTrigger>
+                  </DialogTrigger>
                 </div>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-3 px-3 pb-3 pt-0">
-              {!hasTimelineSnapshot && (
-                <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-                  No saved check yet. Run the check to find dates that need a
-                  density repair.
-                </div>
-              )}
-              {timelineIntegrity?.snapshot?.lastError && (
-                <div className="text-xs text-red-500">
-                  Check failed:{" "}
-                  {timelineIntegrity.snapshot.lastError}. Showing the saved
-                  result from {formatTimelineAuditDate(
-                    timelineIntegrity.snapshot.asOf,
-                  )}.
-                </div>
-              )}
-              {timelineIntegrity && hasTimelineSnapshot && (
-                <>
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <Badge
-                      variant="secondary"
-                      className={timelineIntegrity.status === "healthy"
-                        ? "bg-green-500/10 text-green-500"
-                        : "bg-amber-500/10 text-amber-500"}
-                    >
-                      {timelineIntegrity.status === "healthy"
-                        ? "Density is up to date"
-                        : "Repair needed"}
-                    </Badge>
-                    <span className="text-muted-foreground">
-                      Checked {formatTimelineAuditDate(
-                        timelineIntegrity.checkedAt,
-                      )}
-                    </span>
-                    {timelineRepairRanges.length > 0 && (
-                      <span className="text-muted-foreground">
-                        · {timelineRepairDays} affected day(s) in{" "}
-                        {timelineRepairRanges.length} range(s)
-                      </span>
-                    )}
-                  </div>
-                  {timelineIntegrity.issues.length > 0 && (
-                    <div className="space-y-2">
-                      {timelineIntegrity.issues.map((issue) => (
-                        <div
-                          key={issue.code}
-                          className={`flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-xs ${
-                            issue.severity === "error"
-                              ? "border-red-500/30 bg-red-500/5"
-                              : "border-amber-500/30 bg-amber-500/5"
-                          }`}
-                        >
-                          <div
-                            className={issue.severity === "error"
-                              ? "flex min-w-0 items-start gap-2 text-red-500"
-                              : "flex min-w-0 items-start gap-2 text-amber-500"}
-                          >
-                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            <span>{issue.message}</span>
-                          </div>
-                          {issue.action === "repair_ranges" && (
-                            <Button
-                              size="sm"
-                              className="h-7 shrink-0 px-2 text-xs"
-                              onClick={() => void queueAffectedTimelineDates()}
-                              disabled={timelineRepairRanges.length === 0 ||
-                                timelineCampaignBusy ||
-                                timelineVerificationRequired ||
-                                startTimelineRebuildMutation.isPending}
-                            >
-                              <Play className="mr-1.5 h-3.5 w-3.5" />
-                              Repair affected dates
-                            </Button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+              <div className="mt-1.5 flex min-h-7 flex-wrap items-center justify-between gap-2 border-t pt-1.5 text-[11px]">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+                  {!hasTimelineSnapshot && (
+                    <span>Run the check to find dates needing repair.</span>
                   )}
-                  {timelineIntegrity.campaign && (timelineCampaignBusy ||
-                    timelineVerificationRequired) &&
-                    (
-                      <div className="rounded-md border p-3 text-xs">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-medium">
-                            Density repair {timelineCampaignBusy
-                              ? "in progress"
-                              : "finished — verification needed"}
+                  {timelineIntegrity?.snapshot?.lastError && (
+                    <span className="text-red-500">
+                      Check failed: {timelineIntegrity.snapshot.lastError}
+                    </span>
+                  )}
+                  {timelineIntegrity && hasTimelineSnapshot && (
+                    <>
+                      <span>
+                        Checked {formatTimelineAuditDate(
+                          timelineIntegrity.checkedAt,
+                        )}
+                      </span>
+                      {timelineCampaignBusy && timelineIntegrity.campaign
+                        ? (
+                          <span>
+                            · {timelineIntegrity.campaign.completed}/
+                            {timelineIntegrity.campaign.plannedJobs}{" "}
+                            ranges complete
                           </span>
-                          {timelineVerificationRequired && (
-                            <Button
-                              size="sm"
-                              className="h-7 px-2 text-xs"
-                              onClick={() =>
-                                refreshTimelineIntegrityMutation.mutate()}
-                              disabled={refreshTimelineIntegrityMutation
-                                .isPending ||
-                                timelineIntegrity.snapshot?.state ===
-                                  "refreshing"}
-                            >
-                              Verify result
-                            </Button>
-                          )}
-                        </div>
-                        <Progress
-                          value={timelineIntegrity.campaign.plannedJobs > 0
-                            ? timelineIntegrity.campaign.completed /
-                              timelineIntegrity.campaign.plannedJobs * 100
-                            : 0}
-                          className="mt-2 h-2"
-                        />
-                      </div>
-                    )}
-                </>
-              )}
+                        )
+                        : timelineVerificationRequired
+                        ? <span>· Repair finished; verify the result.</span>
+                        : timelineIntegrity.issues.length === 0
+                        ? <span>· Density bars match raw data.</span>
+                        : timelineIntegrity.issues.map((issue) => (
+                          <span
+                            key={issue.code}
+                            className={issue.severity === "error"
+                              ? "text-red-500"
+                              : "text-amber-500"}
+                          >
+                            · {issue.message}
+                          </span>
+                        ))}
+                      {timelineRepairRanges.length > 0 && (
+                        <span>
+                          · {timelineRepairDays} affected day(s) in{" "}
+                          {timelineRepairRanges.length} range(s)
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+                {timelineIntegrity?.issues.some((issue) =>
+                  issue.action === "repair_ranges"
+                ) && (
+                  <Button
+                    size="sm"
+                    className="h-7 shrink-0 px-2 text-[11px]"
+                    onClick={() => void queueAffectedTimelineDates()}
+                    disabled={timelineRepairRanges.length === 0 ||
+                      timelineCampaignBusy ||
+                      timelineVerificationRequired ||
+                      startTimelineRebuildMutation.isPending}
+                  >
+                    <Play className="mr-1.5 h-3.5 w-3.5" />
+                    Repair affected dates
+                  </Button>
+                )}
+              </div>
             </CardContent>
-            <SheetContent className="w-[min(920px,95vw)] overflow-y-auto sm:max-w-3xl">
-              <SheetHeader className="mb-4 pr-8">
-                <SheetTitle>Timeline density details</SheetTitle>
-                <SheetDescription>
+            <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+              <DialogHeader className="mb-2 pr-8">
+                <DialogTitle>Timeline density details</DialogTitle>
+                <DialogDescription>
                   Source totals, density buckets, transcription completion
                   markers, manual repair periods, and campaign history.
-                </SheetDescription>
-              </SheetHeader>
+                </DialogDescription>
+              </DialogHeader>
               <div className="space-y-3">
                 {!hasTimelineSnapshot && (
                   <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
@@ -5952,16 +5540,21 @@ export default function JobsPage() {
                     </>
                   )}
               </div>
-            </SheetContent>
-          </Sheet>
+            </DialogContent>
+          </Dialog>
         </Card>
 
         {/* Workers & Statistics */}
         <Card className="order-3">
           <CardHeader className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Workers</CardTitle>
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <CardTitle className="text-base">Workers</CardTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Runtime queues grouped by their role in the system.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-muted-foreground">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -6101,573 +5694,680 @@ export default function JobsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sortedWorkers.map((worker) => {
-                      const isPaused =
-                        workerStatus?.workers[worker.type]?.paused ?? false;
-                      // Only the row being toggled waits; a slow pause request
-                      // must not freeze the other workers' checkboxes.
-                      const isMutating = (pauseWorkerMutation.isPending &&
-                        pauseWorkerMutation.variables === worker.type) ||
-                        (resumeWorkerMutation.isPending &&
-                          resumeWorkerMutation.variables === worker.type);
-                      const stats = jobTypeStats.find((s) =>
-                        s.type === worker.type
-                      );
-                      const runtime = workerStatus?.workers[worker.type];
-                      const routedCapacity = routedWorkerCapacities.get(
-                        worker.type,
-                      );
-                      const routeManaged = routedCapacity != null;
-                      const liveJobs = (runtime?.active ?? 0) +
-                        (runtime?.waiting ?? 0) + (runtime?.delayed ?? 0);
-                      const forceStartSlots = isPaused ? 0 : Math.max(
+                    {workerGroups.map((group) => {
+                      const pausedInGroup = group.workers.filter((worker) =>
+                        workerStatus?.workers[worker.type]?.paused
+                      ).length;
+                      const activeInGroup = group.workers.reduce(
+                        (total, worker) =>
+                          total +
+                          (workerStatus?.workers[worker.type]?.active ?? 0),
                         0,
-                        (runtime?.effectiveConcurrency ?? 1) - liveJobs,
+                      );
+                      const queuedInGroup = group.workers.reduce(
+                        (total, worker) =>
+                          total +
+                          (workerStatus?.workers[worker.type]?.waiting ?? 0) +
+                          (workerStatus?.workers[worker.type]?.delayed ?? 0),
+                        0,
                       );
                       return (
-                        <TableRow
-                          key={worker.type}
-                          className={`h-9 ${isPaused ? "bg-amber-500/5" : ""} ${
-                            !allTypesSelected && filterTypes.size === 1 &&
-                              filterTypes.has(worker.type)
-                              ? "ring-1 ring-inset ring-primary/30"
-                              : ""
-                          }`}
-                        >
-                          <TableCell className="pl-4 py-1">
-                            <Checkbox
-                              checked={!isPaused}
-                              onCheckedChange={() =>
-                                handleToggleWorker(worker.type, isPaused)}
-                              disabled={isMutating ||
-                                !worker.capabilities.pause}
-                              className="cursor-pointer"
-                              aria-label={`${worker.type} enabled`}
-                            />
-                          </TableCell>
-                          <TableCell className="py-1">
-                            <div className="flex items-center">
-                              {!worker.capabilities.manualRun
-                                ? (
-                                  <Button
-                                    asChild
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 px-2 text-[10px]"
+                        <Fragment key={group.id}>
+                          <TableRow className="border-y bg-muted/35 hover:bg-muted/35">
+                            <TableCell
+                              colSpan={showWorkerAdvanced ? 8 : 5}
+                              className="px-4 py-2"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold">
+                                    {group.label}
+                                    <span className="ml-1.5 font-normal text-muted-foreground">
+                                      {group.workers.length}
+                                    </span>
+                                  </div>
+                                  <div className="truncate text-[10px] text-muted-foreground">
+                                    {group.description}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                                  <span
+                                    className={activeInGroup > 0
+                                      ? "text-blue-500"
+                                      : undefined}
                                   >
-                                    <Link to="/audio/pipeline">
-                                      Audio Pipeline
-                                    </Link>
-                                  </Button>
-                                )
-                                : worker.type === "diarization"
-                                ? <DiarizationLaunchDialog />
-                                : worker.type === "speakerIdentity"
-                                ? <SpeakerIdentityLaunchDialog />
-                                : (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Link
-                                        to={`/jobs/new?type=${worker.type}`}
-                                      >
+                                    {activeInGroup} active
+                                  </span>
+                                  <span
+                                    className={queuedInGroup > 0
+                                      ? "text-yellow-500"
+                                      : undefined}
+                                  >
+                                    {queuedInGroup} queued
+                                  </span>
+                                  {pausedInGroup > 0 && (
+                                    <span className="text-amber-500">
+                                      {pausedInGroup} paused
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                          {group.workers.map((worker) => {
+                            const isPaused =
+                              workerStatus?.workers[worker.type]?.paused ??
+                                false;
+                            // Only the row being toggled waits; a slow pause request
+                            // must not freeze the other workers' checkboxes.
+                            const isMutating = (pauseWorkerMutation.isPending &&
+                              pauseWorkerMutation.variables === worker.type) ||
+                              (resumeWorkerMutation.isPending &&
+                                resumeWorkerMutation.variables === worker.type);
+                            const stats = jobTypeStats.find((s) =>
+                              s.type === worker.type
+                            );
+                            const runtime = workerStatus?.workers[worker.type];
+                            const routedCapacity = routedWorkerCapacities.get(
+                              worker.type,
+                            );
+                            const routeManaged = routedCapacity != null;
+                            const liveJobs = (runtime?.active ?? 0) +
+                              (runtime?.waiting ?? 0) + (runtime?.delayed ?? 0);
+                            const forceStartSlots = isPaused ? 0 : Math.max(
+                              0,
+                              (runtime?.effectiveConcurrency ?? 1) - liveJobs,
+                            );
+                            return (
+                              <TableRow
+                                key={worker.type}
+                                className={`h-9 ${
+                                  isPaused ? "bg-amber-500/5" : ""
+                                } ${
+                                  !allTypesSelected && filterTypes.size === 1 &&
+                                    filterTypes.has(worker.type)
+                                    ? "ring-1 ring-inset ring-primary/30"
+                                    : ""
+                                }`}
+                              >
+                                <TableCell className="pl-4 py-1">
+                                  <Checkbox
+                                    checked={!isPaused}
+                                    onCheckedChange={() =>
+                                      handleToggleWorker(worker.type, isPaused)}
+                                    disabled={isMutating ||
+                                      !worker.capabilities.pause}
+                                    className="cursor-pointer"
+                                    aria-label={`${worker.type} enabled`}
+                                  />
+                                </TableCell>
+                                <TableCell className="py-1">
+                                  <div className="flex items-center">
+                                    {!worker.capabilities.manualRun
+                                      ? (
+                                        <Button
+                                          asChild
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-7 px-2 text-[10px]"
+                                        >
+                                          <Link to="/audio/pipeline">
+                                            Audio Pipeline
+                                          </Link>
+                                        </Button>
+                                      )
+                                      : worker.type === "diarization"
+                                      ? <DiarizationLaunchDialog />
+                                      : worker.type === "speakerIdentity"
+                                      ? <SpeakerIdentityLaunchDialog />
+                                      : (
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Link
+                                              to={`/jobs/new?type=${worker.type}`}
+                                            >
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-7 w-7"
+                                                aria-label={`Run ${worker.type} job`}
+                                              >
+                                                <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                                              </Button>
+                                            </Link>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            Run {worker.type} job
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      )}
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
                                         <Button
                                           variant="ghost"
                                           size="icon"
                                           className="h-7 w-7"
-                                          aria-label={`Run ${worker.type} job`}
+                                          aria-label={`Clear ${worker.type} queue`}
+                                          disabled={clearQueueMutation
+                                            .isPending ||
+                                            !worker.capabilities.pause ||
+                                            ((runtime?.waiting ?? 0) +
+                                                (runtime?.delayed ?? 0) === 0)}
+                                          onClick={() =>
+                                            handleClearWorkerQueue(
+                                              worker.type,
+                                              runtime?.active ?? 0,
+                                              runtime?.waiting ?? 0,
+                                              runtime?.delayed ?? 0,
+                                            )}
                                         >
-                                          <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
                                         </Button>
-                                      </Link>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      Run {worker.type} job
-                                    </TooltipContent>
-                                  </Tooltip>
-                                )}
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    aria-label={`Clear ${worker.type} queue`}
-                                    disabled={clearQueueMutation.isPending ||
-                                      !worker.capabilities.pause ||
-                                      ((runtime?.waiting ?? 0) +
-                                          (runtime?.delayed ?? 0) === 0)}
-                                    onClick={() =>
-                                      handleClearWorkerQueue(
-                                        worker.type,
-                                        runtime?.active ?? 0,
-                                        runtime?.waiting ?? 0,
-                                        runtime?.delayed ?? 0,
-                                      )}
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  Clear {worker.type} queue
-                                </TooltipContent>
-                              </Tooltip>
-                              <DropdownMenu>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <DropdownMenuTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-7 w-7"
-                                        disabled={restartJobMutation
-                                          .isPending ||
-                                          forceStartMutation.isPending ||
-                                          resetWorkerMutation.isPending ||
-                                          !worker.capabilities.manualRun}
-                                        aria-label={`Recovery actions for ${worker.type}`}
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        Clear {worker.type} queue
+                                      </TooltipContent>
+                                    </Tooltip>
+                                    <DropdownMenu>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <DropdownMenuTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="icon"
+                                              className="h-7 w-7"
+                                              disabled={restartJobMutation
+                                                .isPending ||
+                                                forceStartMutation.isPending ||
+                                                resetWorkerMutation.isPending ||
+                                                !worker.capabilities.manualRun}
+                                              aria-label={`Recovery actions for ${worker.type}`}
+                                            >
+                                              <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
+                                            </Button>
+                                          </DropdownMenuTrigger>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          Restart stale or force start
+                                        </TooltipContent>
+                                      </Tooltip>
+                                      <DropdownMenuContent
+                                        align="end"
+                                        className="w-72"
                                       >
-                                        <RotateCcw className="h-3.5 w-3.5 text-amber-500" />
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    Restart stale or force start
-                                  </TooltipContent>
-                                </Tooltip>
-                                <DropdownMenuContent
-                                  align="end"
-                                  className="w-72"
-                                >
-                                  {runtime?.staleJobs?.length
-                                    ? runtime.staleJobs.map((staleJob) => (
-                                      <DropdownMenuItem
-                                        key={staleJob.id}
-                                        onClick={async () => {
-                                          if (
-                                            await confirmAction({
-                                              title:
-                                                `Restart stale ${worker.type} job?`,
-                                              description:
-                                                `Restart job ${staleJob.id}. The original job will remain in history.`,
-                                              actionLabel: "Restart job",
-                                            })
-                                          ) {
-                                            restartJobMutation.mutate(
-                                              staleJob.id,
-                                            );
-                                          }
-                                        }}
-                                      >
-                                        <RotateCcw className="mr-2 h-4 w-4" />
-                                        Restart stale job …{staleJob.id.slice(
-                                          -6,
-                                        )}
-                                      </DropdownMenuItem>
-                                    ))
-                                    : (
-                                      <DropdownMenuItem disabled>
-                                        No stale active jobs
-                                      </DropdownMenuItem>
-                                    )}
-                                  <DropdownMenuSeparator />
-                                  {forceStartSlots > 0
-                                    ? Array.from(
-                                      { length: forceStartSlots },
-                                      (_, index) => index + 1,
-                                    ).map((count) => (
-                                      <DropdownMenuItem
-                                        key={count}
-                                        onClick={() =>
-                                          forceStartMutation.mutate({
-                                            workerType: worker.type,
-                                            count,
-                                          })}
-                                      >
-                                        <PlayCircle className="mr-2 h-4 w-4" />
-                                        Force start {count}{" "}
-                                        job{count > 1 ? "s" : ""}
-                                      </DropdownMenuItem>
-                                    ))
-                                    : (
-                                      <DropdownMenuItem disabled>
-                                        {isPaused
-                                          ? "Resume worker before force start"
-                                          : "No free concurrency slots"}
-                                      </DropdownMenuItem>
-                                    )}
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    className="text-destructive focus:text-destructive"
-                                    onClick={() =>
-                                      handleResetWorker(
-                                        worker.type,
-                                        runtime?.active ?? 0,
-                                        runtime?.waiting ?? 0,
-                                        runtime?.delayed ?? 0,
-                                        runtime?.staleClaims ?? 0,
-                                      )}
+                                        {runtime?.staleJobs?.length
+                                          ? runtime.staleJobs.map((
+                                            staleJob,
+                                          ) => (
+                                            <DropdownMenuItem
+                                              key={staleJob.id}
+                                              onClick={async () => {
+                                                if (
+                                                  await confirmAction({
+                                                    title:
+                                                      `Restart stale ${worker.type} job?`,
+                                                    description:
+                                                      `Restart job ${staleJob.id}. The original job will remain in history.`,
+                                                    actionLabel: "Restart job",
+                                                  })
+                                                ) {
+                                                  restartJobMutation.mutate(
+                                                    staleJob.id,
+                                                  );
+                                                }
+                                              }}
+                                            >
+                                              <RotateCcw className="mr-2 h-4 w-4" />
+                                              Restart stale job …{staleJob.id
+                                                .slice(
+                                                  -6,
+                                                )}
+                                            </DropdownMenuItem>
+                                          ))
+                                          : (
+                                            <DropdownMenuItem disabled>
+                                              No stale active jobs
+                                            </DropdownMenuItem>
+                                          )}
+                                        <DropdownMenuSeparator />
+                                        {forceStartSlots > 0
+                                          ? Array.from(
+                                            { length: forceStartSlots },
+                                            (_, index) => index + 1,
+                                          ).map((count) => (
+                                            <DropdownMenuItem
+                                              key={count}
+                                              onClick={() =>
+                                                forceStartMutation.mutate({
+                                                  workerType: worker.type,
+                                                  count,
+                                                })}
+                                            >
+                                              <PlayCircle className="mr-2 h-4 w-4" />
+                                              Force start {count}{" "}
+                                              job{count > 1 ? "s" : ""}
+                                            </DropdownMenuItem>
+                                          ))
+                                          : (
+                                            <DropdownMenuItem disabled>
+                                              {isPaused
+                                                ? "Resume worker before force start"
+                                                : "No free concurrency slots"}
+                                            </DropdownMenuItem>
+                                          )}
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem
+                                          className="text-destructive focus:text-destructive"
+                                          onClick={() =>
+                                            handleResetWorker(
+                                              worker.type,
+                                              runtime?.active ?? 0,
+                                              runtime?.waiting ?? 0,
+                                              runtime?.delayed ?? 0,
+                                              runtime?.staleClaims ?? 0,
+                                            )}
+                                        >
+                                          <Trash2 className="mr-2 h-4 w-4" />
+                                          Danger: reset entire worker
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="py-1">
+                                  <button
+                                    type="button"
+                                    className="flex items-start gap-1.5 text-left hover:text-primary"
+                                    onClick={() => toggleOnlyType(worker.type)}
+                                    title={!allTypesSelected &&
+                                        filterTypes.size === 1 &&
+                                        filterTypes.has(worker.type)
+                                      ? "Show all workers"
+                                      : `Show only ${worker.type} jobs`}
                                   >
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    Danger: reset entire worker
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                          </TableCell>
-                          <TableCell className="py-1">
-                            <button
-                              type="button"
-                              className="flex items-start gap-1.5 text-left hover:text-primary"
-                              onClick={() => toggleOnlyType(worker.type)}
-                              title={!allTypesSelected &&
-                                  filterTypes.size === 1 &&
-                                  filterTypes.has(worker.type)
-                                ? "Show all workers"
-                                : `Show only ${worker.type} jobs`}
-                            >
-                              <span className="min-w-0 max-w-[42rem]">
-                                <span
-                                  className={`flex items-center gap-1.5 text-sm ${
-                                    isPaused ? "text-muted-foreground" : ""
-                                  }`}
-                                >
-                                  <span>{worker.label}</span>
-                                  <Badge
-                                    variant="outline"
-                                    className="px-1 py-0 text-[9px] font-normal"
-                                  >
-                                    {worker.availability.replaceAll("_", " ")}
-                                  </Badge>
-                                  <span className="text-[9px] uppercase text-muted-foreground">
-                                    {worker.section}
-                                  </span>
-                                </span>
-                                <span
-                                  className="block truncate text-xs text-muted-foreground"
-                                  title={worker.description}
-                                >
-                                  {worker.description}
-                                </span>
-                              </span>
-                            </button>
-                          </TableCell>
-                          {showWorkerAdvanced && (
-                            <TableCell className="py-1">
-                              <div className="flex items-center justify-center gap-1">
-                                <Input
-                                  type="number"
-                                  min={runtime?.minConcurrency ?? 1}
-                                  max={runtime?.maxConcurrency ?? 8}
-                                  value={routeManaged
-                                    ? String(routedCapacity)
-                                    : concurrencyDrafts[worker.type] ??
-                                      String(runtime?.desiredConcurrency ?? 1)}
-                                  onChange={(event) =>
-                                    setConcurrencyDrafts((current) => ({
-                                      ...current,
-                                      [worker.type]: event.target.value,
-                                    }))}
-                                  className="h-7 w-16 px-2 text-center"
-                                  aria-label={`${worker.type} desired concurrency`}
-                                  disabled={routeManaged ||
-                                    !worker.capabilities.concurrency}
-                                  title={routeManaged
-                                    ? "Managed by enabled inference-route slots"
-                                    : undefined}
-                                />
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  disabled={setWorkerConcurrencyMutation
-                                    .isPending ||
-                                    (routeManaged
-                                      ? runtime?.desiredConcurrency ===
-                                          routedCapacity &&
-                                        runtime?.effectiveConcurrency ===
-                                          routedCapacity
-                                      : Number(
-                                        concurrencyDrafts[worker.type] ??
-                                          runtime?.desiredConcurrency ?? 1,
-                                      ) ===
-                                        (runtime?.desiredConcurrency ?? 1))}
-                                  onClick={() =>
-                                    setWorkerConcurrencyMutation.mutate({
-                                      workerType: worker.type,
-                                      concurrency: routeManaged
-                                        ? routedCapacity
-                                        : Number(
-                                          concurrencyDrafts[worker.type],
-                                        ),
-                                    })}
-                                  title={routeManaged
-                                    ? `Sync to ${routedCapacity} enabled route slots`
-                                    : "Save and apply concurrency"}
-                                >
-                                  <Save className="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                              <div className="text-center text-[10px] text-muted-foreground">
-                                {setWorkerConcurrencyMutation.isPending &&
-                                    setWorkerConcurrencyMutation.variables
-                                        ?.workerType === worker.type
-                                  ? "applying…"
-                                  : `effective ${
-                                    runtime?.effectiveConcurrency ?? "—"
-                                  }`}
-                                {runtime && runtime.desiredConcurrency !==
-                                    runtime.effectiveConcurrency &&
-                                  ` · desired ${runtime.desiredConcurrency}`}
-                                {runtime &&
-                                  ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
-                                {routeManaged &&
-                                  ` · route slots ${routedCapacity}`}
-                              </div>
-                            </TableCell>
-                          )}
-                          {showWorkerAdvanced && (
-                            <TableCell className="py-1 text-center">
-                              {batchCapableWorkers[worker.type]
-                                ? (
-                                  <>
+                                    <span className="min-w-0 max-w-[42rem]">
+                                      <span
+                                        className={`flex items-center gap-1.5 text-sm ${
+                                          isPaused
+                                            ? "text-muted-foreground"
+                                            : ""
+                                        }`}
+                                      >
+                                        <span>{worker.label}</span>
+                                        <Badge
+                                          variant="outline"
+                                          className="px-1 py-0 text-[9px] font-normal"
+                                        >
+                                          {worker.availability.replaceAll(
+                                            "_",
+                                            " ",
+                                          )}
+                                        </Badge>
+                                      </span>
+                                      <span
+                                        className="block truncate text-xs text-muted-foreground"
+                                        title={worker.description}
+                                      >
+                                        {worker.description}
+                                      </span>
+                                    </span>
+                                  </button>
+                                </TableCell>
+                                {showWorkerAdvanced && (
+                                  <TableCell className="py-1">
                                     <div className="flex items-center justify-center gap-1">
                                       <Input
                                         type="number"
-                                        min={batchCapableWorkers[worker.type]
-                                          .min}
-                                        max={batchCapableWorkers[worker.type]
-                                          .max}
-                                        value={batchDrafts[worker.type] ??
-                                          String(
-                                            getEffectiveBatchSize(
-                                              worker.type,
-                                            ) ??
-                                              "",
-                                          )}
+                                        min={runtime?.minConcurrency ?? 1}
+                                        max={runtime?.maxConcurrency ?? 8}
+                                        value={routeManaged
+                                          ? String(routedCapacity)
+                                          : concurrencyDrafts[worker.type] ??
+                                            String(
+                                              runtime?.desiredConcurrency ?? 1,
+                                            )}
                                         onChange={(event) =>
-                                          setBatchDrafts((current) => ({
+                                          setConcurrencyDrafts((current) => ({
                                             ...current,
                                             [worker.type]: event.target.value,
                                           }))}
                                         className="h-7 w-16 px-2 text-center"
-                                        aria-label={`${worker.type} batch size`}
-                                        title={worker.type === "transcription"
-                                          ? "Audio sequences per STT request"
-                                          : worker.type === "diarization"
-                                          ? "Speech sequences processed per diarization job"
-                                          : "Items per LLM call"}
+                                        aria-label={`${worker.type} desired concurrency`}
+                                        disabled={routeManaged ||
+                                          !worker.capabilities.concurrency}
+                                        title={routeManaged
+                                          ? "Managed by enabled inference-route slots"
+                                          : undefined}
                                       />
                                       <Button
                                         variant="ghost"
                                         size="icon"
                                         className="h-7 w-7"
-                                        disabled={setWorkerBatchMutation
+                                        disabled={setWorkerConcurrencyMutation
                                           .isPending ||
-                                          Number(
-                                              batchDrafts[worker.type] ??
-                                                getEffectiveBatchSize(
-                                                  worker.type,
-                                                ),
+                                          (routeManaged
+                                            ? runtime?.desiredConcurrency ===
+                                                routedCapacity &&
+                                              runtime?.effectiveConcurrency ===
+                                                routedCapacity
+                                            : Number(
+                                              concurrencyDrafts[worker.type] ??
+                                                runtime?.desiredConcurrency ??
+                                                1,
                                             ) ===
-                                            getEffectiveBatchSize(worker.type)}
+                                              (runtime?.desiredConcurrency ??
+                                                1))}
                                         onClick={() =>
-                                          setWorkerBatchMutation.mutate({
+                                          setWorkerConcurrencyMutation.mutate({
                                             workerType: worker.type,
-                                            batchSize: Number(
-                                              batchDrafts[worker.type] ??
-                                                getEffectiveBatchSize(
-                                                  worker.type,
-                                                ),
-                                            ),
+                                            concurrency: routeManaged
+                                              ? routedCapacity
+                                              : Number(
+                                                concurrencyDrafts[worker.type],
+                                              ),
                                           })}
-                                        title="Save batch size (applies to newly enqueued jobs)"
+                                        title={routeManaged
+                                          ? `Sync to ${routedCapacity} enabled route slots`
+                                          : "Save and apply concurrency"}
                                       >
                                         <Save className="h-3.5 w-3.5" />
                                       </Button>
                                     </div>
                                     <div className="text-center text-[10px] text-muted-foreground">
-                                      {setWorkerBatchMutation.isPending &&
-                                          setWorkerBatchMutation.variables
+                                      {setWorkerConcurrencyMutation.isPending &&
+                                          setWorkerConcurrencyMutation.variables
                                               ?.workerType === worker.type
                                         ? "applying…"
-                                        : `${
-                                          worker.type === "diarization"
-                                            ? "sequences/job"
-                                            : "batch"
-                                        } ${
-                                          getEffectiveBatchSize(worker.type) ??
-                                            "—"
+                                        : `effective ${
+                                          runtime?.effectiveConcurrency ?? "—"
                                         }`}
-                                      {` · allowed ${
-                                        batchCapableWorkers[worker.type].min
-                                      }–${
-                                        batchCapableWorkers[worker.type].max
-                                      }`}
+                                      {runtime && runtime.desiredConcurrency !==
+                                          runtime.effectiveConcurrency &&
+                                        ` · desired ${runtime.desiredConcurrency}`}
+                                      {runtime &&
+                                        ` · allowed ${runtime.minConcurrency}–${runtime.maxConcurrency}`}
+                                      {routeManaged &&
+                                        ` · route slots ${routedCapacity}`}
                                     </div>
-                                  </>
-                                )
-                                : (
-                                  <span className="text-sm text-muted-foreground">
-                                    —
-                                  </span>
+                                  </TableCell>
                                 )}
-                            </TableCell>
-                          )}
-                          <TableCell className="py-1 text-center">
-                            <div className="flex items-center justify-center gap-2 text-[10px]">
-                              <span
-                                className={(runtime?.active ?? 0) > 0
-                                  ? "text-blue-500"
-                                  : "text-muted-foreground"}
-                                title="Jobs running now"
-                              >
-                                Active {runtime?.active ?? 0}
-                              </span>
-                              <span
-                                className={(runtime?.waiting ?? 0) +
-                                      (runtime?.delayed ?? 0) > 0
-                                  ? "text-yellow-500"
-                                  : "text-muted-foreground"}
-                                title="Waiting and delayed jobs"
-                              >
-                                Queued {(runtime?.waiting ?? 0) +
-                                  (runtime?.delayed ?? 0)}
-                              </span>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span
-                                    className={((runtime?.staleActive ?? 0) +
-                                        (runtime?.staleClaims ?? 0)) > 0
-                                      ? "cursor-help text-amber-500"
-                                      : "text-muted-foreground"}
-                                  >
-                                    Stale {(runtime?.staleActive ?? 0) +
-                                      (runtime?.staleClaims ?? 0)}
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  {runtime?.staleActive ?? 0}{" "}
-                                  stale active job(s),{" "}
-                                  {runtime?.staleClaims ?? 0} stale claim(s)
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
-                          </TableCell>
-                          <TableCell className="py-1 text-center">
-                            <div className="flex items-center justify-center gap-2 text-[10px]">
-                              <span
-                                className={(stats?.failed ?? 0) > 0
-                                  ? "text-red-500"
-                                  : "text-muted-foreground"}
-                                title="Failed runs"
-                              >
-                                Failed {stats?.failed ?? "—"}
-                              </span>
-                              <span
-                                className="text-muted-foreground"
-                                title="Total runs"
-                              >
-                                Runs {stats?.totalRuns ?? "—"}
-                              </span>
-                              <Badge
-                                variant="secondary"
-                                className={`${
-                                  !stats
-                                    ? "text-muted-foreground"
-                                    : stats.successRate >= 95
-                                    ? "bg-green-500/10 text-green-600"
-                                    : stats.successRate >= 80
-                                    ? "bg-yellow-500/10 text-yellow-600"
-                                    : "bg-red-500/10 text-red-600"
-                                } px-1.5 py-0 font-mono text-[10px]`}
-                                title="Success rate"
-                              >
-                                {stats
-                                  ? `${stats.successRate.toFixed(0)}% ok`
-                                  : "—"}
-                              </Badge>
-                              <span
-                                className="text-muted-foreground"
-                                title="Empty runs"
-                              >
-                                Empty {stats?.emptyRuns ?? "—"}
-                              </span>
-                            </div>
-                          </TableCell>
-                          {showWorkerAdvanced && (
-                            <TableCell className="py-1 text-center">
-                              {typeof runtime?.defaultTriggerIntervalSeconds ===
-                                  "number"
-                                ? (
-                                  <>
-                                    <div className="flex items-center justify-center gap-1">
-                                      <Input
-                                        type="number"
-                                        min={0}
-                                        max={86400}
-                                        value={intervalDrafts[worker.type] ??
-                                          String(
-                                            runtime?.triggerIntervalSeconds ??
-                                              "",
-                                          )}
-                                        onChange={(event) =>
-                                          setIntervalDrafts((current) => ({
-                                            ...current,
-                                            [worker.type]: event.target.value,
-                                          }))}
-                                        className="h-7 w-16 px-2 text-center"
-                                        aria-label={`${worker.type} scheduled-run interval in seconds`}
-                                        title="Scheduled-run interval in seconds; 0 disables scheduled runs (event triggers still fire)"
-                                      />
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-7 w-7"
-                                        disabled={setWorkerIntervalMutation
-                                          .isPending ||
-                                          Number(
-                                              intervalDrafts[worker.type] ??
-                                                runtime
-                                                  ?.triggerIntervalSeconds ??
-                                                NaN,
-                                            ) ===
-                                            (runtime?.triggerIntervalSeconds ??
-                                              NaN)}
-                                        onClick={() =>
-                                          setWorkerIntervalMutation.mutate({
-                                            workerType: worker.type,
-                                            seconds: Number(
-                                              intervalDrafts[worker.type],
-                                            ),
-                                          })}
-                                        title="Save schedule interval"
-                                      >
-                                        <Save className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </div>
-                                    <div className="text-center text-[10px] text-muted-foreground">
-                                      {Number(
-                                          intervalDrafts[worker.type] ??
-                                            runtime?.triggerIntervalSeconds ??
-                                            1,
-                                        ) === 0
-                                        ? "schedule off"
-                                        : `every ${
-                                          intervalDrafts[worker.type] ??
-                                            runtime?.triggerIntervalSeconds
-                                        }s`}
-                                      {` · runs ${stats?.avgFrequency ?? "-"}`}
-                                    </div>
-                                  </>
-                                )
-                                : (
-                                  <span className="text-sm text-muted-foreground">
-                                    {stats?.avgFrequency ?? "-"}
-                                  </span>
+                                {showWorkerAdvanced && (
+                                  <TableCell className="py-1 text-center">
+                                    {batchCapableWorkers[worker.type]
+                                      ? (
+                                        <>
+                                          <div className="flex items-center justify-center gap-1">
+                                            <Input
+                                              type="number"
+                                              min={batchCapableWorkers[
+                                                worker.type
+                                              ]
+                                                .min}
+                                              max={batchCapableWorkers[
+                                                worker.type
+                                              ]
+                                                .max}
+                                              value={batchDrafts[worker.type] ??
+                                                String(
+                                                  getEffectiveBatchSize(
+                                                    worker.type,
+                                                  ) ??
+                                                    "",
+                                                )}
+                                              onChange={(event) =>
+                                                setBatchDrafts((current) => ({
+                                                  ...current,
+                                                  [worker.type]:
+                                                    event.target.value,
+                                                }))}
+                                              className="h-7 w-16 px-2 text-center"
+                                              aria-label={`${worker.type} batch size`}
+                                              title={worker.type ===
+                                                  "transcription"
+                                                ? "Audio sequences per STT request"
+                                                : worker.type === "diarization"
+                                                ? "Speech sequences processed per diarization job"
+                                                : "Items per LLM call"}
+                                            />
+                                            <Button
+                                              variant="ghost"
+                                              size="icon"
+                                              className="h-7 w-7"
+                                              disabled={setWorkerBatchMutation
+                                                .isPending ||
+                                                Number(
+                                                    batchDrafts[worker.type] ??
+                                                      getEffectiveBatchSize(
+                                                        worker.type,
+                                                      ),
+                                                  ) ===
+                                                  getEffectiveBatchSize(
+                                                    worker.type,
+                                                  )}
+                                              onClick={() =>
+                                                setWorkerBatchMutation.mutate({
+                                                  workerType: worker.type,
+                                                  batchSize: Number(
+                                                    batchDrafts[worker.type] ??
+                                                      getEffectiveBatchSize(
+                                                        worker.type,
+                                                      ),
+                                                  ),
+                                                })}
+                                              title="Save batch size (applies to newly enqueued jobs)"
+                                            >
+                                              <Save className="h-3.5 w-3.5" />
+                                            </Button>
+                                          </div>
+                                          <div className="text-center text-[10px] text-muted-foreground">
+                                            {setWorkerBatchMutation.isPending &&
+                                                setWorkerBatchMutation.variables
+                                                    ?.workerType === worker.type
+                                              ? "applying…"
+                                              : `${
+                                                worker.type === "diarization"
+                                                  ? "sequences/job"
+                                                  : "batch"
+                                              } ${
+                                                getEffectiveBatchSize(
+                                                  worker.type,
+                                                ) ??
+                                                  "—"
+                                              }`}
+                                            {` · allowed ${
+                                              batchCapableWorkers[worker.type]
+                                                .min
+                                            }–${
+                                              batchCapableWorkers[worker.type]
+                                                .max
+                                            }`}
+                                          </div>
+                                        </>
+                                      )
+                                      : (
+                                        <span className="text-sm text-muted-foreground">
+                                          —
+                                        </span>
+                                      )}
+                                  </TableCell>
                                 )}
-                            </TableCell>
-                          )}
-                        </TableRow>
+                                <TableCell className="py-1 text-center">
+                                  <div className="flex items-center justify-center gap-2 text-[10px]">
+                                    <span
+                                      className={(runtime?.active ?? 0) > 0
+                                        ? "text-blue-500"
+                                        : "text-muted-foreground"}
+                                      title="Jobs running now"
+                                    >
+                                      Active {runtime?.active ?? 0}
+                                    </span>
+                                    <span
+                                      className={(runtime?.waiting ?? 0) +
+                                            (runtime?.delayed ?? 0) > 0
+                                        ? "text-yellow-500"
+                                        : "text-muted-foreground"}
+                                      title="Waiting and delayed jobs"
+                                    >
+                                      Queued {(runtime?.waiting ?? 0) +
+                                        (runtime?.delayed ?? 0)}
+                                    </span>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span
+                                          className={((runtime?.staleActive ??
+                                              0) +
+                                              (runtime?.staleClaims ?? 0)) > 0
+                                            ? "cursor-help text-amber-500"
+                                            : "text-muted-foreground"}
+                                        >
+                                          Stale {(runtime?.staleActive ?? 0) +
+                                            (runtime?.staleClaims ?? 0)}
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        {runtime?.staleActive ?? 0}{" "}
+                                        stale active job(s),{" "}
+                                        {runtime?.staleClaims ?? 0}{" "}
+                                        stale claim(s)
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="py-1 text-center">
+                                  <div className="flex items-center justify-center gap-2 text-[10px]">
+                                    <span
+                                      className={(stats?.failed ?? 0) > 0
+                                        ? "text-red-500"
+                                        : "text-muted-foreground"}
+                                      title="Failed runs"
+                                    >
+                                      Failed {stats?.failed ?? "—"}
+                                    </span>
+                                    <span
+                                      className="text-muted-foreground"
+                                      title="Total runs"
+                                    >
+                                      Runs {stats?.totalRuns ?? "—"}
+                                    </span>
+                                    <Badge
+                                      variant="secondary"
+                                      className={`${
+                                        !stats
+                                          ? "text-muted-foreground"
+                                          : stats.successRate >= 95
+                                          ? "bg-green-500/10 text-green-600"
+                                          : stats.successRate >= 80
+                                          ? "bg-yellow-500/10 text-yellow-600"
+                                          : "bg-red-500/10 text-red-600"
+                                      } px-1.5 py-0 font-mono text-[10px]`}
+                                      title="Success rate"
+                                    >
+                                      {stats
+                                        ? `${stats.successRate.toFixed(0)}% ok`
+                                        : "—"}
+                                    </Badge>
+                                    <span
+                                      className="text-muted-foreground"
+                                      title="Empty runs"
+                                    >
+                                      Empty {stats?.emptyRuns ?? "—"}
+                                    </span>
+                                  </div>
+                                </TableCell>
+                                {showWorkerAdvanced && (
+                                  <TableCell className="py-1 text-center">
+                                    {typeof runtime
+                                        ?.defaultTriggerIntervalSeconds ===
+                                        "number"
+                                      ? (
+                                        <>
+                                          <div className="flex items-center justify-center gap-1">
+                                            <Input
+                                              type="number"
+                                              min={0}
+                                              max={86400}
+                                              value={intervalDrafts[
+                                                worker.type
+                                              ] ??
+                                                String(
+                                                  runtime
+                                                    ?.triggerIntervalSeconds ??
+                                                    "",
+                                                )}
+                                              onChange={(event) =>
+                                                setIntervalDrafts((
+                                                  current,
+                                                ) => ({
+                                                  ...current,
+                                                  [worker.type]:
+                                                    event.target.value,
+                                                }))}
+                                              className="h-7 w-16 px-2 text-center"
+                                              aria-label={`${worker.type} scheduled-run interval in seconds`}
+                                              title="Scheduled-run interval in seconds; 0 disables scheduled runs (event triggers still fire)"
+                                            />
+                                            <Button
+                                              variant="ghost"
+                                              size="icon"
+                                              className="h-7 w-7"
+                                              disabled={setWorkerIntervalMutation
+                                                .isPending ||
+                                                Number(
+                                                    intervalDrafts[
+                                                      worker.type
+                                                    ] ??
+                                                      runtime
+                                                        ?.triggerIntervalSeconds ??
+                                                      NaN,
+                                                  ) ===
+                                                  (runtime
+                                                    ?.triggerIntervalSeconds ??
+                                                    NaN)}
+                                              onClick={() =>
+                                                setWorkerIntervalMutation
+                                                  .mutate({
+                                                    workerType: worker.type,
+                                                    seconds: Number(
+                                                      intervalDrafts[
+                                                        worker.type
+                                                      ],
+                                                    ),
+                                                  })}
+                                              title="Save schedule interval"
+                                            >
+                                              <Save className="h-3.5 w-3.5" />
+                                            </Button>
+                                          </div>
+                                          <div className="text-center text-[10px] text-muted-foreground">
+                                            {Number(
+                                                intervalDrafts[worker.type] ??
+                                                  runtime
+                                                    ?.triggerIntervalSeconds ??
+                                                  1,
+                                              ) === 0
+                                              ? "schedule off"
+                                              : `every ${
+                                                intervalDrafts[worker.type] ??
+                                                  runtime
+                                                    ?.triggerIntervalSeconds
+                                              }s`}
+                                            {` · runs ${
+                                              stats?.avgFrequency ?? "-"
+                                            }`}
+                                          </div>
+                                        </>
+                                      )
+                                      : (
+                                        <span className="text-sm text-muted-foreground">
+                                          {stats?.avgFrequency ?? "-"}
+                                        </span>
+                                      )}
+                                  </TableCell>
+                                )}
+                              </TableRow>
+                            );
+                          })}
+                        </Fragment>
                       );
                     })}
                   </TableBody>
@@ -6677,30 +6377,34 @@ export default function JobsPage() {
         </Card>
 
         <div className="order-6 space-y-3">
-          <div className="flex flex-wrap items-center gap-1">
-            <Button
-              variant={!isEmptyView ? "default" : "outline"}
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => setJobsView("operational")}
-            >
-              Jobs ({operationalViewCount})
-            </Button>
-            <Button
-              variant={isEmptyView ? "default" : "outline"}
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => setJobsView("idle_auto")}
-              title="Completed automatic checks that found no work"
-            >
-              Empty ({idleViewCount})
-            </Button>
-            {isEmptyView && (
-              <span className="text-xs text-muted-foreground">
-                Automatic checks that found no work. History is retained for
-                diagnostics.
-              </span>
-            )}
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold">Job history</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {isEmptyView
+                  ? "Automatic checks that completed without finding work."
+                  : "Active, queued, failed, and completed worker runs."}
+              </p>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant={!isEmptyView ? "default" : "outline"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setJobsView("operational")}
+              >
+                Jobs ({operationalViewCount})
+              </Button>
+              <Button
+                variant={isEmptyView ? "default" : "outline"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setJobsView("idle_auto")}
+                title="Completed automatic checks that found no work"
+              >
+                Empty ({idleViewCount})
+              </Button>
+            </div>
           </div>
 
           {!isEmptyView && (

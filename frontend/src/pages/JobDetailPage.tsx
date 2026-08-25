@@ -1138,17 +1138,17 @@ export default function JobDetailPage() {
         );
       })()}
 
-        <Card>
+      <Card>
         <CardHeader className="pb-4">
-            <CardTitle>Status</CardTitle>
-          </CardHeader>
+          <CardTitle>Status</CardTitle>
+        </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">State</div>
-              {job.state === "completed" &&
-                  (job.result?.success === false ||
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">State</div>
+            {job.state === "completed" &&
+                (job.result?.success === false ||
                   resultErrorCount > 0)
-                ? (
+              ? (
                 <Badge
                   className={allDiarizationErrorsRecovered
                     ? "border-green-500/30 bg-green-500/10 text-green-500"
@@ -1159,133 +1159,133 @@ export default function JobDetailPage() {
                     : `completed · ${resultErrorCount || "reported"} issue${
                       resultErrorCount === 1 ? "" : "s"
                     }`}
-                  </Badge>
-                )
-                : (
-                  <Badge className={getStatusColor(job.state)}>
-                    {job.state}
-                  </Badge>
-                )}
-            </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">
-                Queue state
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="outline">
-                  {job.queueAdmission?.state ===
-                      "waiting_for_diarizator_slot"
-                    ? "waiting for diarizator slot"
-                    : job.queuePresent
-                    ? (job.queueState || "unknown")
-                    : "not present"}
                 </Badge>
-                {job.state === "active" && job.queueState !== "active" && (
-                  <span className="text-xs text-amber-500">
-                    Database and queue states do not match
-                  </span>
-                )}
-              </div>
-              {job.queueAdmission?.state ===
-                  "waiting_for_diarizator_slot" && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Priority P{job.queueAdmission.priority ?? "?"}. It will start
-                  automatically at the next safe batch boundary; no running
-                  diarization request is interrupted.
-                </p>
+              )
+              : (
+                <Badge className={getStatusColor(job.state)}>
+                  {job.state}
+                </Badge>
+              )}
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">
+              Queue state
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">
+                {job.queueAdmission?.state ===
+                    "waiting_for_diarizator_slot"
+                  ? "waiting for diarizator slot"
+                  : job.queuePresent
+                  ? (job.queueState || "unknown")
+                  : "not present"}
+              </Badge>
+              {job.state === "active" && job.queueState !== "active" && (
+                <span className="text-xs text-amber-500">
+                  Database and queue states do not match
+                </span>
               )}
             </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Type</div>
-              <div className="font-medium">{job.type}</div>
-            </div>
-            {(() => {
-              const route = getDiarizationJobRoute(job);
-              return route
-                ? (
+            {job.queueAdmission?.state ===
+                "waiting_for_diarizator_slot" && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Priority P{job.queueAdmission.priority ?? "?"}. It will start
+                automatically at the next safe batch boundary; no running
+                diarization request is interrupted.
+              </p>
+            )}
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">Type</div>
+            <div className="font-medium">{job.type}</div>
+          </div>
+          {(() => {
+            const route = getDiarizationJobRoute(job);
+            return route
+              ? (
                 <div className="sm:col-span-2">
-                    <div className="text-sm text-muted-foreground mb-1">
-                      Diarizator service
+                  <div className="text-sm text-muted-foreground mb-1">
+                    Diarizator service
+                  </div>
+                  <div className="font-medium">{route.name}</div>
+                  {route.url && (
+                    <div className="break-all font-mono text-xs text-muted-foreground">
+                      {route.url}
                     </div>
-                    <div className="font-medium">{route.name}</div>
-                    {route.url && (
-                      <div className="break-all font-mono text-xs text-muted-foreground">
-                        {route.url}
-                      </div>
-                    )}
-                        {route.modelId && (
+                  )}
+                  {route.modelId && (
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                       {route.modelId && (
                         <span>
-                            <span className="text-muted-foreground">
-                              Model:
-                            </span>{" "}
-                            <span className="font-mono">{route.modelId}</span>
-                            </span>
-                        )}
-                        {route.runtimeProvenanceSource && (
-                          <Badge variant="outline" className="font-normal">
-                            {route.runtimeProvenanceSource ===
-                                "historical_backfill_0069"
-                              ? "historical backfill"
-                              : "verified at admission"}
-                          </Badge>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-                : null;
-            })()}
-            {job.trigger && (
-            <div className="sm:col-span-2">
-                <div className="text-sm text-muted-foreground mb-1">
-                  Trigger
-                </div>
-                <div className="flex flex-col gap-1">
-                  <Badge variant="outline" className="w-fit">
-                    {job.trigger.type}
-                  </Badge>
-                  {job.trigger.reason && (
-                    <div className="text-sm text-muted-foreground italic">
-                      {job.trigger.reason}
+                          <span className="text-muted-foreground">
+                            Model:
+                          </span>{" "}
+                          <span className="font-mono">{route.modelId}</span>
+                        </span>
+                      )}
+                      {route.runtimeProvenanceSource && (
+                        <Badge variant="outline" className="font-normal">
+                          {route.runtimeProvenanceSource ===
+                              "historical_backfill_0069"
+                            ? "historical backfill"
+                            : "verified at admission"}
+                        </Badge>
+                      )}
                     </div>
                   )}
                 </div>
+              )
+              : null;
+          })()}
+          {job.trigger && (
+            <div className="sm:col-span-2">
+              <div className="text-sm text-muted-foreground mb-1">
+                Trigger
               </div>
-            )}
-            {job.failedReason && (
+              <div className="flex flex-col gap-1">
+                <Badge variant="outline" className="w-fit">
+                  {job.trigger.type}
+                </Badge>
+                {job.trigger.reason && (
+                  <div className="text-sm text-muted-foreground italic">
+                    {job.trigger.reason}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {job.failedReason && (
             <div className="sm:col-span-2 lg:col-span-4">
               <JobErrorPanel failedReason={job.failedReason} />
             </div>
-            )}
+          )}
 
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Created</div>
-              <div className="text-sm">
-                {job.timestamp ? format(new Date(job.timestamp), "PPpp") : "-"}
-              </div>
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">Created</div>
+            <div className="text-sm">
+              {job.timestamp ? format(new Date(job.timestamp), "PPpp") : "-"}
             </div>
-            {job.finishedOn && (
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">
-                  Finished
-                </div>
-                <div className="text-sm">
-                  {format(new Date(job.finishedOn), "PPpp")}
-                </div>
-              </div>
-            )}
+          </div>
+          {job.finishedOn && (
             <div>
               <div className="text-sm text-muted-foreground mb-1">
-                Duration
+                Finished
               </div>
               <div className="text-sm">
-                {formatDuration(job.processedOn, job.finishedOn)}
+                {format(new Date(job.finishedOn), "PPpp")}
               </div>
             </div>
-          </CardContent>
-        </Card>
+          )}
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">
+              Duration
+            </div>
+            <div className="text-sm">
+              {formatDuration(job.processedOn, job.finishedOn)}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {job.type === "conversation_extractor" && job.modelProvenance && (
         <ModelProvenanceDetails entries={job.modelProvenance} />
@@ -2276,6 +2276,20 @@ export default function JobDetailPage() {
                               {chunk.promptChars != null && (
                                 <span>{chunk.promptChars} prompt chars</span>
                               )}
+                              {chunk.promptWindowCount != null && (
+                                <span>
+                                  {chunk.promptWindowCount} extraction window(s)
+                                  {chunk.maxPromptChars != null
+                                    ? ` ≤ ${chunk.maxPromptChars} chars`
+                                    : ""}
+                                </span>
+                              )}
+                              {chunk.adaptiveSplitCount > 0 && (
+                                <span>
+                                  {chunk.adaptiveSplitCount}{" "}
+                                  adaptive split(s) after truncation
+                                </span>
+                              )}
                               {chunk.responseChars != null && (
                                 <span>
                                   {chunk.responseChars} response chars
@@ -2296,6 +2310,21 @@ export default function JobDetailPage() {
                           {chunk.error && (
                             <div className="mt-2 text-xs text-red-400">
                               {chunk.error}
+                            </div>
+                          )}
+                          {Array.isArray(chunk.windows) &&
+                            chunk.windows.length > 1 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                              {chunk.windows.map((window: any) => (
+                                <Badge
+                                  key={window.index}
+                                  variant="outline"
+                                >
+                                  {window.index}: {window.promptChars} chars,
+                                  {" "}
+                                  {window.boundaryReason}
+                                </Badge>
+                              ))}
                             </div>
                           )}
                           {Array.isArray(chunk.segments) &&
@@ -2329,6 +2358,11 @@ export default function JobDetailPage() {
                                       </span>
                                     )}
                                   <div className="flex flex-wrap gap-1.5">
+                                    {seg.windowIndex != null && (
+                                      <Badge variant="outline">
+                                        window {seg.windowIndex}
+                                      </Badge>
+                                    )}
                                     <Badge
                                       variant={seg.boundaryResolved
                                         ? "secondary"
@@ -2688,50 +2722,50 @@ export default function JobDetailPage() {
           jobLogs.length === 1 ? "y" : "ies"
         }; open for raw worker output`}
       >
-          {isLogsLoading
-            ? <Skeleton className="h-48 w-full" />
-            : jobLogs.length === 0
-            ? <div className="text-sm text-muted-foreground">No logs yet</div>
-            : (
-              <div className="max-h-96 overflow-auto space-y-2 font-mono text-xs">
-                {jobLogs.map((log, index) => {
-                  const timestampDate = log.timestamp
-                    ? new Date(log.timestamp)
-                    : null;
-                  const timestamp =
-                    timestampDate && !isNaN(timestampDate.getTime())
-                      ? format(timestampDate, "PPpp")
-                      : "-";
-                  const isLegacyProgress = log.text.startsWith("__PROGRESS__:");
-                  const displayStream = isLegacyProgress
-                    ? "progress"
-                    : log.stream;
-                  const streamStyle = displayStream === "stderr"
-                    ? "text-red-500"
-                    : displayStream === "progress"
-                    ? "text-blue-500"
-                    : "text-muted-foreground";
-                  return (
-                    <div
-                      key={log._id ?? `${log.timestamp}-${index}`}
-                      className="flex flex-col gap-1 border-b border-border/50 pb-2 last:border-b-0"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{displayStream}</Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {timestamp}
-                        </span>
-                      </div>
-                      <div
-                        className={`whitespace-pre-wrap break-words ${streamStyle}`}
-                      >
-                        {log.text}
-                      </div>
+        {isLogsLoading
+          ? <Skeleton className="h-48 w-full" />
+          : jobLogs.length === 0
+          ? <div className="text-sm text-muted-foreground">No logs yet</div>
+          : (
+            <div className="max-h-96 overflow-auto space-y-2 font-mono text-xs">
+              {jobLogs.map((log, index) => {
+                const timestampDate = log.timestamp
+                  ? new Date(log.timestamp)
+                  : null;
+                const timestamp =
+                  timestampDate && !isNaN(timestampDate.getTime())
+                    ? format(timestampDate, "PPpp")
+                    : "-";
+                const isLegacyProgress = log.text.startsWith("__PROGRESS__:");
+                const displayStream = isLegacyProgress
+                  ? "progress"
+                  : log.stream;
+                const streamStyle = displayStream === "stderr"
+                  ? "text-red-500"
+                  : displayStream === "progress"
+                  ? "text-blue-500"
+                  : "text-muted-foreground";
+                return (
+                  <div
+                    key={log._id ?? `${log.timestamp}-${index}`}
+                    className="flex flex-col gap-1 border-b border-border/50 pb-2 last:border-b-0"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">{displayStream}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {timestamp}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                    <div
+                      className={`whitespace-pre-wrap break-words ${streamStyle}`}
+                    >
+                      {log.text}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
       </CollapsibleCard>
 
       <CollapsibleCard
@@ -2740,56 +2774,56 @@ export default function JobDetailPage() {
           accessLogs.length === 1 ? "y" : "ies"
         }; useful for debugging permissions and database operations`}
       >
-          {isAccessLogsLoading
-            ? <Skeleton className="h-48 w-full" />
-            : accessLogs.length === 0
-            ? (
-              <div className="text-sm text-muted-foreground">
-                No access logs yet
-              </div>
-            )
-            : (
-              <div className="max-h-96 overflow-auto space-y-3">
-                {accessLogs.map((log) => {
-                  const timestampDate = log.timestamp
-                    ? new Date(log.timestamp)
-                    : null;
-                  const timestamp =
-                    timestampDate && !isNaN(timestampDate.getTime())
-                      ? format(timestampDate, "PPpp")
-                      : "-";
-                  return (
-                    <div
-                      key={log._id}
-                      className="border-b border-border/50 pb-3 last:border-b-0"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline">{log.resource}</Badge>
-                        </div>
-                        <span className="text-xs text-muted-foreground">
-                          {timestamp}
-                        </span>
+        {isAccessLogsLoading
+          ? <Skeleton className="h-48 w-full" />
+          : accessLogs.length === 0
+          ? (
+            <div className="text-sm text-muted-foreground">
+              No access logs yet
+            </div>
+          )
+          : (
+            <div className="max-h-96 overflow-auto space-y-3">
+              {accessLogs.map((log) => {
+                const timestampDate = log.timestamp
+                  ? new Date(log.timestamp)
+                  : null;
+                const timestamp =
+                  timestampDate && !isNaN(timestampDate.getTime())
+                    ? format(timestampDate, "PPpp")
+                    : "-";
+                return (
+                  <div
+                    key={log._id}
+                    className="border-b border-border/50 pb-3 last:border-b-0"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{log.resource}</Badge>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        {log.actions.map((action, idx) => (
-                          <div
-                            key={idx}
-                            className="text-xs bg-muted rounded px-2 py-1"
-                          >
-                            <span className="font-mono">
-                              {action.path.join(".")}
-                            </span>
-                            <span className="mx-1">:</span>
-                            <span>{action.actions.join(", ")}</span>
-                          </div>
-                        ))}
-                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        {timestamp}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                    <div className="flex flex-wrap gap-2">
+                      {log.actions.map((action, idx) => (
+                        <div
+                          key={idx}
+                          className="text-xs bg-muted rounded px-2 py-1"
+                        >
+                          <span className="font-mono">
+                            {action.path.join(".")}
+                          </span>
+                          <span className="mx-1">:</span>
+                          <span>{action.actions.join(", ")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
       </CollapsibleCard>
     </div>
   );

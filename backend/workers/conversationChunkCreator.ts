@@ -7,6 +7,12 @@ import { mongoCursor } from "@/lib/mongo/cursor.ts";
 import { createHash } from "node:crypto";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
 import { hasIndexedPendingWork } from "@/lib/jobs/pending-work.ts";
+import {
+  DEFAULT_EXTRACTION_MAX_PROMPT_CHARS,
+  formatChunkAsPrompt,
+  transcriptionToUtterances,
+  type Utterance as PromptUtterance,
+} from "@/lib/extraction/shared.ts";
 
 // ============================================================================
 // Constants
@@ -29,6 +35,7 @@ interface Utterance {
   start: Date;
   end: Date;
   text: string;
+  promptUtterances: PromptUtterance[];
   createdAt?: Date;
 }
 
@@ -37,6 +44,9 @@ interface PendingChunk {
   end: Date;
   transcriptionIds: ObjectId[];
   totalTextLength: number;
+  promptChars: number;
+  original_id?: ObjectId;
+  splitReason?: "source_change" | "prompt_limit" | "gap";
 }
 
 interface OpenChunk {
@@ -46,6 +56,7 @@ interface OpenChunk {
   end: Date;
   transcriptionIds: ObjectId[];
   totalTextLength: number;
+  promptChars?: number;
   lastActivityAt: Date;
 }
 
@@ -81,6 +92,8 @@ export const schema = z.object({
   // Thresholds
   gapThresholds: gapThresholdsSchema.optional(),
   charThresholds: charThresholdsSchema.optional(),
+  maxPromptChars: z.number().int().min(4_000).max(200_000)
+    .default(DEFAULT_EXTRACTION_MAX_PROMPT_CHARS),
   // Processing options
   policyVersion: z.string().optional(),
   model: z.string().optional(),
@@ -116,11 +129,41 @@ function generateChunkKey(
   return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
 
+function transcriptionUnit(doc: any): Utterance {
+  const text = doc.segments?.map((segment: any) => segment.text).join("")
+    .trim() ?? doc.text ?? "";
+  return {
+    _id: doc._id,
+    original: doc.original,
+    start: new Date(doc.start),
+    end: new Date(doc.end),
+    text,
+    promptUtterances: transcriptionToUtterances(doc),
+    createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
+  };
+}
+
+function promptCharsFor(units: Utterance[]): number {
+  return promptCharsForUtterances(
+    units.flatMap((unit) => unit.promptUtterances),
+  );
+}
+
+function promptCharsForUtterances(utterances: PromptUtterance[]): number {
+  return utterances.length === 0
+    ? 0
+    : formatChunkAsPrompt(utterances).prompt.length;
+}
+
+function sourceKey(unit: Utterance): string {
+  return unit.original == null ? "__none__" : unit.original.toString();
+}
+
 // ============================================================================
 // Chunking Engine (for backfill batch processing)
 // ============================================================================
 
-class ChunkingEngine {
+export class ChunkingEngine {
   private buffer: Utterance[] = [];
   private totalTextLength = 0;
   private lastTimestamp: Date | null = null;
@@ -129,6 +172,7 @@ class ChunkingEngine {
   constructor(
     private gapThresholds: { sparse: number; normal: number; dense: number },
     private charThresholds: { sparseMax: number; normalMax: number },
+    private maxPromptChars = DEFAULT_EXTRACTION_MAX_PROMPT_CHARS,
   ) {
     console.log(
       `[ChunkingEngine] Initialized with gapThresholds=${
@@ -146,33 +190,53 @@ class ChunkingEngine {
     this.processedCount++;
 
     if (this.buffer.length > 0 && this.lastTimestamp) {
-      // Gap is from current utterance's end to the last buffered utterance's start
-      // Since we're going backwards: lastTimestamp is more recent, utterance is older
-      const gap = this.lastTimestamp.getTime() -
-        new Date(utterance.end).getTime();
-      const threshold = allowedGap(
-        this.totalTextLength,
-        this.gapThresholds,
-        this.charThresholds,
-      );
+      const projectedPromptChars = promptCharsFor([
+        ...this.buffer,
+        utterance,
+      ]);
+      const sourceChanged = sourceKey(this.buffer[0]) !== sourceKey(utterance);
 
-      console.log(
-        `[ChunkingEngine] Processing #${this.processedCount}: gap=${gap}ms, threshold=${threshold}ms, bufferTextLen=${this.totalTextLength}, bufferCount=${this.buffer.length}`,
-      );
+      if (sourceChanged) {
+        console.log(
+          `[ChunkingEngine] Source changed, finalizing ${this.buffer.length} buffered transcription(s)`,
+        );
+        result = this.finalize("source_change");
+      } else if (projectedPromptChars > this.maxPromptChars) {
+        console.log(
+          `[ChunkingEngine] Prompt cap exceeded (${projectedPromptChars} > ${this.maxPromptChars}), finalizing ${this.buffer.length} buffered transcription(s)`,
+        );
+        result = this.finalize("prompt_limit");
+      }
 
-      if (this.totalTextLength > 100 && gap > threshold) {
-        console.log(
-          `[ChunkingEngine] Gap threshold exceeded (${gap} > ${threshold}), finalizing chunk with ${this.buffer.length} items`,
+      if (!result && this.lastTimestamp) {
+        // Gap is from current utterance's end to the last buffered utterance's
+        // start. Since backfill runs backwards, lastTimestamp is more recent.
+        const gap = this.lastTimestamp.getTime() -
+          new Date(utterance.end).getTime();
+        const threshold = allowedGap(
+          this.totalTextLength,
+          this.gapThresholds,
+          this.charThresholds,
         );
-        result = this.finalize();
-      } else if (this.totalTextLength <= 100) {
+
         console.log(
-          `[ChunkingEngine] Buffer too small (${this.totalTextLength} <= 100 chars), continuing to buffer`,
+          `[ChunkingEngine] Processing #${this.processedCount}: gap=${gap}ms, threshold=${threshold}ms, bufferTextLen=${this.totalTextLength}, bufferCount=${this.buffer.length}`,
         );
-      } else {
-        console.log(
-          `[ChunkingEngine] Gap within threshold (${gap} <= ${threshold}), continuing to buffer`,
-        );
+
+        if (this.totalTextLength > 100 && gap > threshold) {
+          console.log(
+            `[ChunkingEngine] Gap threshold exceeded (${gap} > ${threshold}), finalizing chunk with ${this.buffer.length} items`,
+          );
+          result = this.finalize("gap");
+        } else if (this.totalTextLength <= 100) {
+          console.log(
+            `[ChunkingEngine] Buffer too small (${this.totalTextLength} <= 100 chars), continuing to buffer`,
+          );
+        } else {
+          console.log(
+            `[ChunkingEngine] Gap within threshold (${gap} <= ${threshold}), continuing to buffer`,
+          );
+        }
       }
     } else {
       console.log(
@@ -188,7 +252,9 @@ class ChunkingEngine {
   }
 
   /** Finalize current buffer into a chunk */
-  finalize(): PendingChunk | null {
+  finalize(
+    splitReason?: PendingChunk["splitReason"],
+  ): PendingChunk | null {
     console.log(
       `[ChunkingEngine] finalize() called: bufferLen=${this.buffer.length}, totalTextLen=${this.totalTextLength}`,
     );
@@ -210,6 +276,9 @@ class ChunkingEngine {
       end: new Date(sorted[sorted.length - 1].end),
       transcriptionIds: sorted.map((u) => u._id),
       totalTextLength: this.totalTextLength,
+      promptChars: promptCharsFor(sorted),
+      ...(sorted[0].original ? { original_id: sorted[0].original } : {}),
+      ...(splitReason ? { splitReason } : {}),
     };
 
     console.log(
@@ -311,15 +380,7 @@ async function findRecentUnassignedTranscriptions(
     },
   }) as any[];
 
-  return docs.map((doc) => ({
-    _id: doc._id,
-    original: doc.original,
-    start: new Date(doc.start),
-    end: new Date(doc.end),
-    text: doc.segments?.map((s: any) => s.text).join("").trim() ?? doc.text ??
-      "",
-    createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
-  }));
+  return docs.map(transcriptionUnit);
 }
 
 export async function findHistoricalUnassignedTranscriptions(
@@ -338,18 +399,7 @@ export async function findHistoricalUnassignedTranscriptions(
     },
   }) as any[];
 
-  const results = docs.map((doc) => {
-    const text = doc.segments?.map((s: any) => s.text).join("").trim() ??
-      doc.text ?? "";
-    return {
-      _id: doc._id,
-      original: doc.original,
-      start: new Date(doc.start),
-      end: new Date(doc.end),
-      text,
-      createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
-    };
-  });
+  const results = docs.map(transcriptionUnit);
 
   if (results.length > 0) {
     console.log(
@@ -402,6 +452,7 @@ async function findOrCreateOpenChunk(
       transcriptionIds: [],
       transcriptionCount: 0,
       totalTextLength: 0,
+      promptChars: 0,
       lastActivityAt: now,
       createdAt: now,
       policyVersion,
@@ -424,6 +475,7 @@ async function findOrCreateOpenChunk(
       end: now,
       transcriptionIds: [],
       totalTextLength: 0,
+      promptChars: 0,
       lastActivityAt: now,
     };
   }
@@ -435,6 +487,7 @@ async function appendToChunk(
   mongo: MongoFn,
   chunk: OpenChunk,
   transcription: Utterance,
+  promptChars: number,
 ): Promise<void> {
   const update: any = {
     $push: { transcriptionIds: transcription._id },
@@ -444,7 +497,7 @@ async function appendToChunk(
     },
     $min: { start: transcription.start },
     $max: { end: transcription.end },
-    $set: { lastActivityAt: new Date() },
+    $set: { lastActivityAt: new Date(), promptChars },
   };
 
   await mongo({
@@ -465,14 +518,33 @@ async function appendToChunk(
   // Update local state
   chunk.transcriptionIds.push(transcription._id);
   chunk.totalTextLength += transcription.text.length;
+  chunk.promptChars = promptChars;
   if (transcription.start < chunk.start) chunk.start = transcription.start;
   if (transcription.end > chunk.end) chunk.end = transcription.end;
+}
+
+async function loadChunkPromptUtterances(
+  mongo: MongoFn,
+  transcriptionIds: ObjectId[],
+): Promise<PromptUtterance[]> {
+  if (transcriptionIds.length === 0) return [];
+  const docs = await mongo({
+    action: "find",
+    collection: "transcriptions",
+    query: { _id: { $in: transcriptionIds } },
+    options: {
+      sort: { start: 1 },
+      projection: { start: 1, end: 1, text: 1, segments: 1 },
+    },
+  }) as any[];
+  return docs.flatMap((doc) => transcriptionToUtterances(doc));
 }
 
 async function finalizeChunk(
   mongo: MongoFn,
   chunk: OpenChunk,
   policyVersion: string,
+  splitReason?: PendingChunk["splitReason"],
 ): Promise<boolean> {
   if (chunk.transcriptionIds.length === 0) {
     // Empty chunk, just delete it
@@ -495,6 +567,7 @@ async function finalizeChunk(
         state: "ready",
         chunkKey,
         finalizedAt: new Date(),
+        ...(splitReason ? { splitReason } : {}),
       },
     },
   });
@@ -516,7 +589,7 @@ async function createBackfillChunk(
     chunk.end,
   );
   console.log(
-    `[ChunkCreator] createBackfillChunk: chunkKey=${chunkKey}, transcriptionIds=${chunk.transcriptionIds.length}, textLen=${chunk.totalTextLength}`,
+    `[ChunkCreator] createBackfillChunk: chunkKey=${chunkKey}, transcriptionIds=${chunk.transcriptionIds.length}, textLen=${chunk.totalTextLength}, promptChars=${chunk.promptChars}`,
   );
 
   // Check if chunk already exists
@@ -550,11 +623,14 @@ async function createBackfillChunk(
     transcriptionIds: chunk.transcriptionIds,
     transcriptionCount: chunk.transcriptionIds.length,
     totalTextLength: chunk.totalTextLength,
+    promptChars: chunk.promptChars,
     state: "ready" as ChunkState,
     mode: "backfill" as ChunkMode,
     params: { force: false },
     createdAt: new Date(),
     createdByJobId: params.jobId,
+    ...(chunk.original_id ? { original_id: chunk.original_id } : {}),
+    ...(chunk.splitReason ? { splitReason: chunk.splitReason } : {}),
   };
 
   await mongo({
@@ -624,6 +700,7 @@ async function processStreamingTranscriptions(
   gapThresholds: { sparse: number; normal: number; dense: number },
   charThresholds: { sparseMax: number; normalMax: number },
   policyVersion: string,
+  maxPromptChars: number,
 ): Promise<{ streamed: number; chunksFinalized: number }> {
   const transcriptions = await findRecentUnassignedTranscriptions(mongo);
   let streamed = 0;
@@ -665,6 +742,10 @@ async function processStreamingTranscriptions(
     console.log(
       `[ChunkCreator] Open chunk for ${originalKey}: id=${openChunk._id}, transcriptions=${openChunk.transcriptionIds.length}, end=${openChunk.end?.toISOString()}`,
     );
+    let openPromptUtterances = await loadChunkPromptUtterances(
+      mongo,
+      openChunk.transcriptionIds,
+    );
 
     // Check if open chunk is stale by end timestamp (content is old)
     if (openChunk.transcriptionIds.length > 0 && openChunk.end) {
@@ -686,12 +767,18 @@ async function processStreamingTranscriptions(
           originalId,
           policyVersion,
         );
+        openPromptUtterances = [];
       }
     }
 
     for (const transcription of utterances) {
-      // Check if gap threshold exceeded → finalize current, create new
+      // Enforce the actual extractor prompt cap before appending. The existing
+      // time-gap policy still supplies semantic boundaries for smaller chunks.
       if (openChunk.transcriptionIds.length > 0) {
+        const projectedPromptChars = promptCharsForUtterances([
+          ...openPromptUtterances,
+          ...transcription.promptUtterances,
+        ]);
         const gap = transcription.start.getTime() - openChunk.end.getTime();
         const threshold = allowedGap(
           openChunk.totalTextLength,
@@ -700,17 +787,21 @@ async function processStreamingTranscriptions(
         );
 
         console.log(
-          `[ChunkCreator] Streaming gap check: gap=${gap}ms, threshold=${threshold}ms, textLen=${openChunk.totalTextLength}`,
+          `[ChunkCreator] Streaming boundary check: gap=${gap}ms, threshold=${threshold}ms, textLen=${openChunk.totalTextLength}, projectedPromptChars=${projectedPromptChars}`,
         );
 
-        if (gap > threshold) {
+        if (projectedPromptChars > maxPromptChars || gap > threshold) {
+          const splitReason = projectedPromptChars > maxPromptChars
+            ? "prompt_limit"
+            : "gap";
           console.log(
-            `[ChunkCreator] Gap exceeded, finalizing chunk ${openChunk._id}`,
+            `[ChunkCreator] ${splitReason} boundary reached, finalizing chunk ${openChunk._id}`,
           );
           const wasFinalized = await finalizeChunk(
             mongo,
             openChunk,
             policyVersion,
+            splitReason,
           );
           if (wasFinalized) chunksFinalized++;
           openChunk = await findOrCreateOpenChunk(
@@ -718,10 +809,21 @@ async function processStreamingTranscriptions(
             originalId,
             policyVersion,
           );
+          openPromptUtterances = [];
         }
       }
 
-      await appendToChunk(mongo, openChunk, transcription);
+      const appendedPromptUtterances = [
+        ...openPromptUtterances,
+        ...transcription.promptUtterances,
+      ];
+      await appendToChunk(
+        mongo,
+        openChunk,
+        transcription,
+        promptCharsForUtterances(appendedPromptUtterances),
+      );
+      openPromptUtterances = appendedPromptUtterances;
       streamed++;
     }
   }
@@ -737,6 +839,7 @@ async function processBackfillBatch(
   gapThresholds: { sparse: number; normal: number; dense: number },
   charThresholds: { sparseMax: number; normalMax: number },
   policyVersion: string,
+  maxPromptChars: number,
   jobId?: string,
 ): Promise<{ backfilled: number; chunksCreated: number }> {
   console.log(`[ChunkCreator] processBackfillBatch starting...`);
@@ -753,7 +856,11 @@ async function processBackfillBatch(
     `[ChunkCreator] processBackfillBatch: Processing ${transcriptions.length} transcriptions`,
   );
 
-  const engine = new ChunkingEngine(gapThresholds, charThresholds);
+  const engine = new ChunkingEngine(
+    gapThresholds,
+    charThresholds,
+    maxPromptChars,
+  );
   let chunksCreated = 0;
   let midLoopChunks = 0;
 
@@ -819,14 +926,7 @@ async function* iterateTranscriptionsInRange(
   );
 
   for await (const doc of cursor) {
-    const text = doc.segments?.map((s: any) => s.text).join("").trim() ?? "";
-    yield {
-      _id: doc._id,
-      original: doc.original,
-      start: new Date(doc.start),
-      end: new Date(doc.end),
-      text,
-    };
+    yield transcriptionUnit(doc);
   }
 }
 
@@ -837,13 +937,18 @@ async function processManualRange(
   gapThresholds: { sparse: number; normal: number; dense: number },
   charThresholds: { sparseMax: number; normalMax: number },
   policyVersion: string,
+  maxPromptChars: number,
   force: boolean,
   maxChunks: number,
   jobId?: string,
 ): Promise<
   { chunksCreated: number; transcriptionsProcessed: number; hasMore: boolean }
 > {
-  const engine = new ChunkingEngine(gapThresholds, charThresholds);
+  const engine = new ChunkingEngine(
+    gapThresholds,
+    charThresholds,
+    maxPromptChars,
+  );
   let chunksCreated = 0;
   let transcriptionsProcessed = 0;
   let hasMore = false;
@@ -956,7 +1061,9 @@ const capability: JobCapability = {
       { sparse: 45 * 60 * 1000, normal: 5 * 60 * 1000, dense: 40 * 1000 };
     const charThresholds = data.charThresholds ??
       { sparseMax: 500, normalMax: 20000 };
-    const policyVersion = data.policyVersion ?? "v1";
+    const policyVersion = data.policyVersion ?? "size-bounded-v2";
+    const maxPromptChars = data.maxPromptChars ??
+      DEFAULT_EXTRACTION_MAX_PROMPT_CHARS;
     // `model` remains accepted for historical job restart compatibility, but
     // chunk creation performs no inference and intentionally ignores it.
     const mode = data.mode ?? "auto";
@@ -976,6 +1083,7 @@ const capability: JobCapability = {
         gapThresholds,
         charThresholds,
         policyVersion,
+        maxPromptChars,
         force,
         data.maxChunks ?? Infinity,
         job.id,
@@ -1021,6 +1129,7 @@ const capability: JobCapability = {
         gapThresholds,
         charThresholds,
         policyVersion,
+        maxPromptChars,
       );
       totalStreamed = streamResult.streamed;
       totalChunksCreated += streamResult.chunksFinalized;
@@ -1046,6 +1155,7 @@ const capability: JobCapability = {
         gapThresholds,
         charThresholds,
         policyVersion,
+        maxPromptChars,
         job.id,
       );
       totalBackfilled = backfillResult.backfilled;

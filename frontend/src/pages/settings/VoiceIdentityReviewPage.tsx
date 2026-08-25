@@ -1490,7 +1490,7 @@ export default function VoiceIdentityReviewPage() {
     sessionStatus: null,
     segment: issue.segment,
   });
-  const latestReviewHistoryItem = reviewHistory?.items[0] ?? null;
+  const latestReviewHistoryItem = reviewHistory?.items?.[0] ?? null;
   const olderVisibleReviewHistory = visibleReviewHistory.filter((item) =>
     item.decisionId !== latestReviewHistoryItem?.decisionId
   );
@@ -2781,8 +2781,10 @@ export default function VoiceIdentityReviewPage() {
                   remaining={windowItems.filter((item) =>
                     item.status === "pending"
                   ).length}
-                  sessionAnswered={(reviewSession.windowReviewedCount ?? 0) +
-                    (reviewSession.windowSkippedCount ?? 0)}
+                  sessionAnswered={(reviewSession.windowReviewedCount ??
+                    reviewSession.reviewedCount ?? 0) +
+                    (reviewSession.windowSkippedCount ??
+                      reviewSession.skippedCount ?? 0)}
                   sessionTotal={reviewSession.loadedCount}
                   pending={reviewPending || decisionSegmentIds.length === 0 ||
                     (reviewSession.status !== "active" && !editingSegmentId) ||

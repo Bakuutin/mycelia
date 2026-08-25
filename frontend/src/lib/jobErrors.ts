@@ -43,7 +43,9 @@ export function parseJobError(
     return {
       label: "API credit limit",
       detail: match
-        ? `Requested ${match[1]} tokens, only ${match[2]} available. Top up credits or lower the worker's maxTokens setting.`
+        ? `Requested ${match[1]} tokens, only ${
+          match[2]
+        } available. Top up credits or lower the worker's maxTokens setting.`
         : "Insufficient credits for request. Top up credits or lower the worker's maxTokens setting.",
     };
   }
@@ -110,7 +112,7 @@ export function parseJobError(
       label: "Output truncated",
       detail: `The model hit the output-token cap${
         cap ? ` (maxTokens=${cap})` : ""
-      } before finishing. Raise the worker's maxTokens (Launch Job form or the worker's defaults) or shorten the prompt, then retry.`,
+      } before finishing. Extraction automatically bisects a truncated window; if this error still surfaced, lower maxPromptChars for the recovery run. Increase maxTokens only when the expected output size justifies it.`,
     };
   }
   if (r.includes("LLM_EMPTY_RESPONSE")) {

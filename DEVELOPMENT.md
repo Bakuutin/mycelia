@@ -69,8 +69,8 @@ statistics, missing required keys, optional keys, undocumented keys, duplicate
 definitions, blank values, malformed assignments, and formatting issues. The
 command exits non-zero when the files need attention, so `--json` can be used in
 CI or other automation. `--all` treats the root contract as required and the
-standalone diarizator/GPU deployments as optional; missing optional `.env`
-files are reported without failing the audit.
+standalone diarizator/GPU deployments as optional; missing optional `.env` files
+are reported without failing the audit.
 
 Apply only safe automatic repairs with:
 
@@ -246,13 +246,13 @@ batches leave no application cursor registered in the backend, and expired
 Archive-wide `diarization` jobs in `missing` mode use route affinity as a
 preference, not a hard constraint. A continuation keeps its previous route when
 that slot is free, otherwise admission may select another healthy route only
-when `modelId`, `modelVersion`, and `embeddingSpaceId` match exactly. Enrollment,
-profile re-enrollment, targeted diarization, and generation builds retain hard
-route affinity. Every newly routed job snapshots this runtime contract from the
-route readiness payload, and the Python worker checks the inference response
-again before it persists diarizations or profile embeddings. Legacy or unknown
-fingerprints never qualify for compatible fallback.
-On every diarizator terminal event, the backend first drains persisted work in
+when `modelId`, `modelVersion`, and `embeddingSpaceId` match exactly.
+Enrollment, profile re-enrollment, targeted diarization, and generation builds
+retain hard route affinity. Every newly routed job snapshots this runtime
+contract from the route readiness payload, and the Python worker checks the
+inference response again before it persists diarizations or profile embeddings.
+Legacy or unknown fingerprints never qualify for compatible fallback. On every
+diarizator terminal event, the backend first drains persisted work in
 priority/FIFO order and then immediately fills any remaining provider capacity
 with archive-wide missing work. This refill uses live BullMQ reservations and
 healthy route slots; Mongo waiting rows are history/admission state and must not
@@ -278,8 +278,18 @@ provider capacity and BullMQ worker concurrency.
 Jobs → Workers uses the backend worker catalog shared with Settings. Worker
 descriptions, availability, queue state, and history stay visible by default;
 Concurrency, Batch, and Schedule are available through **Advanced columns**.
-Diarization route health and slots stay in External services & routing, so
-there is no second live-slots dashboard.
+Rows are grouped as **Pipeline**, **Maintenance**, and **Diagnostics**. In each
+external-service card, the worker action reads **Resume workers** whenever any
+routed worker is paused; otherwise it reads **Pause workers**. Diarization route
+health and slots stay in External services & routing, so there is no second
+live-slots dashboard.
+
+Conversation extraction fills its configured runtime concurrency with atomically
+distinct chunk claims. Provider concurrency remains a separate inference limit:
+keep a one-slot local LLM profile and the extractor worker at 1, while a tested
+OpenRouter profile may use a higher worker value (currently up to 8). The
+provider-specific tuning contract and the deferred RTX 4090 two-slot experiment
+are documented in `docs/CONVERSATION_EXTRACTION_TROUBLESHOOTING.md`.
 
 #### Timeline density rebuild recovery
 
@@ -320,6 +330,10 @@ ranges**. Transcription completion-marker repair is separate: **Check markers**
 is read-only, and **Repair markers** is needed only when the check finds chunks
 whose completed/empty sequence still has `transcribed_at=null`. It never creates
 or changes transcript text.
+
+The Jobs summary keeps Timeline density integrity in a compact two-row card
+above **Work ready now**. **Details** opens the full recovery controls in a
+centered modal on the same page.
 
 Recent source-file metadata loads independently once and is ordered by
 `source_files.updatedAt`, `start`, and `_id`; it is not described as downstream
@@ -382,10 +396,10 @@ Keep live service availability separate from corpus-wide statistics:
 
 Migration `0056_pipeline_dashboard_indexes.ts` adds the partial Jobs index used
 for recent completed transcription batch history and the compound Map index for
-conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds
-the dashboard cursor/rollup indexes, durable snapshot and campaign collections,
-the unique campaign/batch constraint, and the partial entity-typing marker
-index. Apply pending migrations before relying on the new query hints.
+conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds the
+dashboard cursor/rollup indexes, durable snapshot and campaign collections, the
+unique campaign/batch constraint, and the partial entity-typing marker index.
+Apply pending migrations before relying on the new query hints.
 
 Mongo's Compose health check is an exec-form, one-row native `mongostat` probe
 every 30 seconds, with 1.5-second connection/server/socket deadlines and a
@@ -842,6 +856,15 @@ the automatic cursor to the full history:
    active claim, delayed retry, or terminal failure. Repeating automatic jobs
    with `processed:0` while eligible pending work remains is a contract
    violation, not an idle state.
+
+Conversation extraction has a second safety boundary in addition to queue
+retries. New conversation chunks are finalized at source-file changes or before
+their formatted transcript would exceed `maxPromptChars` (32,000 by default),
+and the merged extractor partitions legacy oversized chunks into the same
+bounded windows before inference. If a bounded window still ends with
+`finish_reason=length`, it is adaptively bisected by utterance and retried, up
+to eight splits per chunk. Do not raise the default `maxTokens=8192` solely for
+a large source chunk; inspect Job Detail window diagnostics first.
 
 ### FFmpeg Import Errors
 
