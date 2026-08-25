@@ -129,6 +129,31 @@ export interface EmptyActivationRepairPlan {
   operations: RepairMutation[];
 }
 
+export const DIARIZATION_RUN_LIFECYCLE_INDEX = "diarization_run_active_start";
+export const DIARIZATION_RUN_LIFECYCLE_END_INDEX =
+  "diarization_run_lifecycle_end";
+export const DIARIZATION_TIMELINE_LIFECYCLE_INDEX =
+  "speaker_timeline_active_range";
+
+export function selectDiarizationLifecycleIndex(
+  query: MongoPredicate,
+): string | undefined {
+  const runId = query.runId;
+  const excludesRuns = runId !== null && typeof runId === "object" &&
+    ("$ne" in (runId as MongoPredicate) ||
+      "$nin" in (runId as MongoPredicate));
+  if (runId !== undefined && !excludesRuns) {
+    if (query.lifecycleStatus && query.start && query.end) {
+      return DIARIZATION_RUN_LIFECYCLE_END_INDEX;
+    }
+    return DIARIZATION_RUN_LIFECYCLE_INDEX;
+  }
+  if (query.lifecycleStatus && query.start && query.end) {
+    return DIARIZATION_TIMELINE_LIFECYCLE_INDEX;
+  }
+  return undefined;
+}
+
 export type GenerationStateCode =
   | "building_running"
   | "building_waiting"

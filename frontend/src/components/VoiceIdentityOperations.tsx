@@ -182,6 +182,10 @@ export function VoiceIdentityOperations() {
   const repairablePreviews = (repairPreviewsQuery.data?.repairs ?? []).filter(
     (preview) => preview.repairable,
   );
+  const blockedRepairPreviews = (repairPreviewsQuery.data?.repairs ?? [])
+    .filter(
+      (preview) => !preview.repairable,
+    );
 
   useEffect(() => {
     if (!requestedRepairRun || repairPreview) return;
@@ -496,6 +500,31 @@ export function VoiceIdentityOperations() {
             Audio Pipeline
           </Link>
         </nav>
+        {repairPreviewsQuery.isPending && (
+          <p className="rounded-md border bg-muted/20 p-3 text-sm text-muted-foreground">
+            Checking active diarization coverage…
+          </p>
+        )}
+        {repairPreviewsQuery.isError && (
+          <section className="rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+            <h3 className="font-semibold text-destructive">
+              Coverage repair check failed
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {repairPreviewsQuery.error instanceof Error
+                ? repairPreviewsQuery.error.message
+                : "The server could not inspect active generations."}
+            </p>
+            <Button
+              className="mt-3"
+              size="sm"
+              variant="outline"
+              onClick={() => repairPreviewsQuery.refetch()}
+            >
+              Retry coverage check
+            </Button>
+          </section>
+        )}
         {repairablePreviews.length > 0 && (
           <section className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -539,6 +568,25 @@ export function VoiceIdentityOperations() {
                     Preview repair
                   </Button>
                 </div>
+              ))}
+            </div>
+          </section>
+        )}
+        {!repairPreviewsQuery.isError && blockedRepairPreviews.length > 0 && (
+          <section className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+            <h3 className="font-semibold text-amber-800 dark:text-amber-300">
+              Coverage issue needs manual inspection
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {blockedRepairPreviews.length} empty active generation
+              {blockedRepairPreviews.length === 1 ? " is" : "s are"}{" "}
+              not safe to restore automatically. No data was changed.
+            </p>
+            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+              {blockedRepairPreviews.map((preview) => (
+                <p key={preview.runId}>
+                  {shortTechnicalId(preview.runId)} · {preview.summary}
+                </p>
               ))}
             </div>
           </section>

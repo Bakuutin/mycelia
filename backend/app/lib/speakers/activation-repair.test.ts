@@ -7,6 +7,7 @@ import {
   evaluateEmptyActivationRepair,
   explainGenerationState,
   previewActivationSafety,
+  selectDiarizationLifecycleIndex,
 } from "./activation-repair.ts";
 
 const RANGE = {
@@ -24,6 +25,24 @@ function run(
     ...overrides,
   };
 }
+
+Deno.test("lifecycle counts use indexes aligned with their range predicate", () => {
+  expect(selectDiarizationLifecycleIndex({ runId: "generation-8" })).toBe(
+    "diarization_run_active_start",
+  );
+  expect(selectDiarizationLifecycleIndex({
+    runId: { $in: ["legacy-v0"] },
+    lifecycleStatus: "superseded",
+    start: { $lt: RANGE.end },
+    end: { $gt: RANGE.start },
+  })).toBe("diarization_run_lifecycle_end");
+  expect(selectDiarizationLifecycleIndex({
+    runId: { $nin: ["generation-8", "legacy-v0"] },
+    lifecycleStatus: "active",
+    start: { $lt: RANGE.end },
+    end: { $gt: RANGE.start },
+  })).toBe("speaker_timeline_active_range");
+});
 
 Deno.test("activation preview blocks an empty run from removing active coverage", () => {
   const preview = evaluateActivationSafety({

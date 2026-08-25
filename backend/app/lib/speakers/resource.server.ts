@@ -68,6 +68,7 @@ import {
   collectReplacementRunIds,
   previewActivationSafety,
   previewEmptyActivationRepair,
+  selectDiarizationLifecycleIndex,
 } from "./activation-repair.ts";
 import { redlock } from "@/lib/redis.ts";
 
@@ -2355,25 +2356,29 @@ async function computeIdentityPreflight(
 
 function exactLifecycleReader(mongo: any) {
   return {
-    countSegments: async (query: Record<string, unknown>) =>
-      Number(
+    countSegments: async (query: Record<string, unknown>) => {
+      const hint = selectDiarizationLifecycleIndex(query);
+      return Number(
         await mongo({
           action: "count",
           collection: "diarizations",
           query,
-          options: { maxTimeMS: 20_000 },
+          options: { maxTimeMS: 20_000, ...(hint ? { hint } : {}) },
         }),
-      ),
-    distinctSegmentRunIds: async (query: Record<string, unknown>) =>
-      ((await mongo({
+      );
+    },
+    distinctSegmentRunIds: async (query: Record<string, unknown>) => {
+      const hint = selectDiarizationLifecycleIndex(query);
+      return ((await mongo({
         action: "aggregate",
         collection: "diarizations",
         pipeline: [
           { $match: query },
           { $group: { _id: "$runId" } },
         ],
-        options: { maxTimeMS: 20_000 },
-      })) as any[]).map((row) => String(row._id)).filter(Boolean),
+        options: { maxTimeMS: 20_000, ...(hint ? { hint } : {}) },
+      })) as any[]).map((row) => String(row._id)).filter(Boolean);
+    },
     countRuns: async (query: Record<string, unknown>) =>
       Number(
         await mongo({

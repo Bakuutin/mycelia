@@ -61,9 +61,10 @@ db.diarization_runs.findOne({ runId: "legacy-v0" });
 ```
 
 Migrations `0066_speaker_review_source_index`,
-`0067_speaker_review_range_index`, and `0072_voice_identity_campaign_safety`
-keep review, classification preflight, Timeline aggregation, calibration
-idempotency, and single-campaign admission indexed. They are applied
+`0067_speaker_review_range_index`, `0072_voice_identity_campaign_safety`, and
+`0073_diarization_run_lifecycle_end_index` keep review, classification
+preflight, Timeline aggregation, calibration idempotency, single-campaign
+admission, and exact empty-activation repair previews indexed. They are applied
 automatically at backend startup.
 
 ## Pilot and backfill
