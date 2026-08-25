@@ -6,13 +6,17 @@ services:
 
   frontend:
     image: mycelia-media-89da-frontend:dev
+    build:
+      context: .
+      dockerfile: ./frontend/Dockerfile.dev
 
   backend:
     image: mycelia-media-89da-backend:dev
+    command: deno task dev
     env_file: !override
       - .env.media.local
     environment:
-      BACKEND_TASK: dev
+      APP_MODE: dev
       REDIS_HOST: redis
       REDIS_PORT: 6379
       MEDIA_SOURCE_ROOT: /media-source
