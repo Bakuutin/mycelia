@@ -1,4 +1,5 @@
 export type SpeakerIdentityProgress = {
+  status?: string | null;
   processed?: number | null;
   total?: number | null;
   remaining?: number | null;
@@ -23,17 +24,35 @@ export function getSpeakerIdentityProgressView(
   const hasTotal = typeof progress.total === "number";
   const total = Math.max(progress.total ?? 0, 0);
   const remaining = Math.max(progress.remaining ?? total - processed, 0);
+  const completed = progress.status === "completed" ||
+    progress.status === "completed_with_errors";
+  const stopped = progress.status === "failed" ||
+    progress.status === "cancelled";
+  const noCompatibleSegments = completed && hasTotal && total === 0;
   return {
     percent: total > 0
       ? Math.min(Math.max(processed / total * 100, 0), 100)
       : 0,
-    progressLabel: hasTotal
+    progressLabel: noCompatibleSegments
+      ? "No compatible segments"
+      : hasTotal
       ? `${processed} / ${total} embeddings`
       : `${processed} embeddings classified`,
-    remainingLabel: hasTotal ? `${remaining} remaining` : null,
+    remainingLabel: noCompatibleSegments
+      ? null
+      : hasTotal
+      ? `${remaining} remaining`
+      : null,
     rateLabel: progress.segmentsPerSecond && progress.segmentsPerSecond > 0
       ? `${(progress.segmentsPerSecond * 60).toFixed(1)}/min`
       : null,
-    etaLabel: formatIdentityEta(progress.etaSeconds),
+    etaLabel: noCompatibleSegments
+      ? "Nothing to classify"
+      : completed
+      ? "Complete"
+      : stopped
+      ? "Stopped"
+      : formatIdentityEta(progress.etaSeconds),
+    noCompatibleSegments,
   };
 }

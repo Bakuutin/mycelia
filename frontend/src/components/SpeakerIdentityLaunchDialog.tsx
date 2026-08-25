@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Play, UserRoundSearch } from "lucide-react";
+import { ChevronDown, Play, UserRoundSearch } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { formatPickerRange } from "@/lib/datePicker";
 import { normalizeObjectId } from "@/lib/diarization";
 import { resolveDefaultTimeZone } from "@/lib/timeZones";
 import {
-  buildSpeakerIdentityLaunchData,
-  compatibleSpeakerIdentityRuns,
-  type SpeakerIdentityLaunchRun,
+  buildSpeakerIdentityCampaignRequest,
+  buildSpeakerIdentityPreflightRequest,
+  shortTechnicalId,
+  type SpeakerIdentityCampaignStart,
+  type SpeakerIdentityPreflight,
+  type SpeakerIdentityScope,
 } from "@/lib/speakerIdentityLaunch";
 import {
   loadVoiceIdentityStatus,
@@ -23,6 +26,11 @@ import { Button } from "@/components/ui/button";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { useSettingsStore } from "@/stores/settingsStore";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -30,14 +38,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 type RangeMode = 24 | 168 | 336 | "custom";
 
@@ -59,13 +59,16 @@ function SpeakerIdentityLauncher({
   const queryClient = useQueryClient();
   const defaultTimeZone = useSettingsStore((state) => state.defaultTimeZone);
   const pickerTimeZone = resolveDefaultTimeZone(defaultTimeZone);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [scopeMode, setScopeMode] = useState<"all_compatible" | "range">(
+    "all_compatible",
+  );
   const [rangeMode, setRangeMode] = useState<RangeMode>(24);
   const [rangeAnchor, setRangeAnchor] = useState(() => new Date());
   const [customStart, setCustomStart] = useState(
     () => new Date(Date.now() - 86_400_000),
   );
   const [customEnd, setCustomEnd] = useState(() => new Date());
-  const [selectedRunId, setSelectedRunId] = useState("");
 
   useEffect(() => {
     if (enabled) setRangeAnchor(new Date());
@@ -84,203 +87,224 @@ function SpeakerIdentityLauncher({
     queryFn: () => loadVoiceIdentityStatus(primaryId!),
     enabled: enabled && Boolean(primaryId),
   });
-  const runsQuery = useQuery<SpeakerIdentityLaunchRun[]>({
-    queryKey: ["speaker-runs"],
-    queryFn: () =>
-      api.callResource("speaker-segments", {
-        action: "list-runs",
-      }) as Promise<SpeakerIdentityLaunchRun[]>,
-    enabled,
-  });
-
   const status = statusQuery.data;
   const calibration = status?.usableCalibration;
   const calibrationPolicy = calibration
     ? calibration.classificationPolicy ??
       (calibration.targetPrecision >= 0.98 ? "full" : "pilot")
     : null;
-  const pilotOnly = Boolean(calibration && calibrationPolicy === "pilot");
+  const pilotOnly = calibrationPolicy === "pilot";
   const maxRangeHours = calibration?.maxRangeHours ?? (pilotOnly ? 24 : null);
-  const compatibleRuns = useMemo(
-    () =>
-      compatibleSpeakerIdentityRuns(
-        runsQuery.data ?? [],
-        calibration?.embeddingSpaceId ?? status?.profile?.embeddingSpaceId,
-      ),
-    [
-      calibration?.embeddingSpaceId,
-      runsQuery.data,
-      status?.profile?.embeddingSpaceId,
-    ],
-  );
 
   useEffect(() => {
-    if (!compatibleRuns.some((run) => run.runId === selectedRunId)) {
-      setSelectedRunId(compatibleRuns[0]?.runId ?? "");
-    }
-  }, [compatibleRuns, selectedRunId]);
-
-  useEffect(() => {
-    if (pilotOnly && rangeMode !== 24 && rangeMode !== "custom") {
+    if (pilotOnly && scopeMode === "all_compatible") {
+      setScopeMode("range");
       setRangeMode(24);
     }
-  }, [pilotOnly, rangeMode]);
+  }, [pilotOnly, scopeMode]);
 
-  const selectedRun = compatibleRuns.find((run) => run.runId === selectedRunId);
   const range = rangeMode === "custom"
     ? { start: customStart, end: customEnd }
     : {
       start: new Date(rangeAnchor.getTime() - rangeMode * 3_600_000),
       end: rangeAnchor,
     };
+  const scope = useMemo<SpeakerIdentityScope>(
+    () =>
+      scopeMode === "all_compatible"
+        ? { mode: "all_compatible" }
+        : { mode: "range", start: range.start, end: range.end },
+    [range.end, range.start, scopeMode],
+  );
+
+  const preflightQuery = useQuery<SpeakerIdentityPreflight>({
+    queryKey: [
+      "speaker-identity-preflight",
+      primaryId,
+      scope.mode,
+      scope.mode === "range" ? scope.start.getTime() : null,
+      scope.mode === "range" ? scope.end.getTime() : null,
+    ],
+    queryFn: () =>
+      api.callResource(
+        "speaker-segments",
+        buildSpeakerIdentityPreflightRequest(primaryId!, scope),
+      ) as Promise<SpeakerIdentityPreflight>,
+    enabled: enabled && Boolean(primaryId),
+    staleTime: 15_000,
+    retry: 1,
+  });
+  const preflight = preflightQuery.data;
+  const resolved = preflight?.resolved;
+  const effectivePolicy = resolved?.classificationPolicy ??
+    calibrationPolicy;
+  const effectivePilot = effectivePolicy === "pilot";
   const activeCampaign = status?.latestCampaign &&
       ["queued", "counting", "running"].includes(status.latestCampaign.status)
     ? status.latestCampaign
     : null;
-  const loading = profilesQuery.isLoading || runsQuery.isLoading ||
-    (Boolean(primaryId) && statusQuery.isLoading);
+  const loading = profilesQuery.isLoading ||
+    (Boolean(primaryId) && statusQuery.isLoading) ||
+    (Boolean(primaryId) && preflightQuery.isLoading);
+  const rangeInvalid = scope.mode === "range" && scope.end <= scope.start;
+  const rangeTooLarge = scope.mode === "range" && maxRangeHours != null &&
+    scope.end.getTime() - scope.start.getTime() >
+      maxRangeHours * 3_600_000;
+  const eligibleSegments = preflight?.totals.eligibleSegments ?? null;
+  const noCompatibleSegments = eligibleSegments === 0;
 
   const blockers = useMemo(() => {
     const values: string[] = [];
-    if (!loading && profilesQuery.isError) {
+    if (!profilesQuery.isLoading && profilesQuery.isError) {
       values.push(
         `Could not load voice profiles: ${errorMessage(profilesQuery.error)}`,
       );
-    } else if (!loading && !primaryId) {
+    } else if (!profilesQuery.isLoading && !primaryId) {
       values.push("Create or select a primary voice profile first");
     }
-    if (!loading && statusQuery.isError) {
+    if (!statusQuery.isLoading && statusQuery.isError) {
       values.push(
         `Could not verify identity readiness: ${
           errorMessage(statusQuery.error)
         }`,
       );
     }
-    if (!loading && runsQuery.isError) {
+    if (!preflightQuery.isLoading && preflightQuery.isError) {
       values.push(
-        `Could not load diarization generations: ${
-          errorMessage(runsQuery.error)
+        `Could not preview compatible segments: ${
+          errorMessage(preflightQuery.error)
         }`,
       );
     }
-    values.push(...(status?.blockers ?? []));
-    if (status && !status.canClassify && values.length === 0) {
-      values.push("Voice identity prerequisites are incomplete");
-    }
-    if (status?.canClassify && !calibration) {
-      values.push("No server-validated calibration is available");
-    }
-    if (
-      calibration && status?.profile &&
-      calibration.profileRevision !== status.profile.revision
-    ) {
-      values.push("Calibration does not match the current profile revision");
-    }
-    if (
-      calibration && primaryId && calibration.profileId !== primaryId
-    ) {
-      values.push("Calibration belongs to another voice profile");
-    }
-    if (
-      calibration && status?.profile?.embeddingSpaceId !==
-        calibration.embeddingSpaceId
-    ) {
-      values.push("Calibration does not match the current embedding space");
-    }
-    if (
-      !loading && !runsQuery.isError &&
-      Boolean(status?.profile?.embeddingSpaceId) &&
-      compatibleRuns.length === 0
-    ) {
-      values.push(
-        "No active diarization generation uses the current profile embedding space",
-      );
-    }
-    if (activeCampaign) {
-      values.push(
-        "A speaker identity classification campaign is already running",
-      );
-    }
-    if (range.end <= range.start) {
-      values.push("End time must be after start time");
-    }
-    if (
-      maxRangeHours != null &&
-      range.end.getTime() - range.start.getTime() >
-        maxRangeHours * 3_600_000
-    ) {
+    values.push(
+      ...(preflight?.blockers ?? []).filter((blocker) =>
+        !(noCompatibleSegments && /no compatible segments/i.test(blocker))
+      ),
+    );
+    if (rangeInvalid) values.push("End time must be after start time");
+    if (rangeTooLarge) {
       values.push(
         `This provisional calibration is limited to ${maxRangeHours} hours per pilot`,
       );
     }
     return [...new Set(values)];
   }, [
-    activeCampaign,
-    calibration,
-    compatibleRuns.length,
-    loading,
     maxRangeHours,
+    noCompatibleSegments,
+    preflight?.blockers,
+    preflightQuery.error,
+    preflightQuery.isError,
+    preflightQuery.isLoading,
     primaryId,
     profilesQuery.error,
     profilesQuery.isError,
-    range.end,
-    range.start,
-    runsQuery.error,
-    runsQuery.isError,
-    status,
+    profilesQuery.isLoading,
+    rangeInvalid,
+    rangeTooLarge,
     statusQuery.error,
     statusQuery.isError,
+    statusQuery.isLoading,
   ]);
 
   const launch = useMutation({
     mutationFn: async () => {
-      if (!primaryId || !status?.profile || !calibration || !selectedRun) {
-        throw new Error(blockers[0] ?? "Identity launch context is incomplete");
+      if (!primaryId || !preflight?.canStart || noCompatibleSegments) {
+        throw new Error(blockers[0] ?? "No compatible segments to classify");
       }
-      return await api.callResource("jobs", {
-        action: "enqueue",
-        data: buildSpeakerIdentityLaunchData({
-          profileId: primaryId,
-          profileRevision: status.profile.revision,
-          calibrationId: calibration.calibrationId,
-          embeddingSpaceId: calibration.embeddingSpaceId,
-          runId: selectedRun.runId,
-          start: range.start,
-          end: range.end,
-        }),
-        priority: 3,
-        trigger: {
-          type: "manual",
-          reason: pilotOnly
-            ? "Provisional Voice Identity pilot from Jobs"
-            : rangeMode === 24
-            ? "Voice Identity 24-hour pilot from Jobs"
-            : "Voice Identity classification from Jobs",
-        },
-      }) as { jobId: string };
+      return await api.callResource(
+        "speaker-segments",
+        buildSpeakerIdentityCampaignRequest(
+          primaryId,
+          preflight.preflightToken,
+        ),
+      ) as SpeakerIdentityCampaignStart;
     },
     onSuccess: (result) => {
-      toast.success("Speaker identity classification queued");
+      toast.success(
+        scope.mode === "all_compatible"
+          ? "Full-history identity campaign queued"
+          : "Speaker identity classification queued",
+      );
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["speaker-identity-campaigns"],
+      });
       void queryClient.invalidateQueries({
         queryKey: voiceIdentityKeys.status(primaryId),
       });
-      onQueued?.(result.jobId);
+      if (result.jobId) onQueued?.(result.jobId);
     },
     onError: (error) => toast.error(errorMessage(error)),
   });
 
+  const snapshotCutoff = preflight?.snapshotCutoff
+    ? new Date(preflight.snapshotCutoff)
+    : null;
+  const canStart = Boolean(
+    !loading && preflight?.canStart && !noCompatibleSegments &&
+      blockers.length === 0,
+  );
+
   return (
     <div className="space-y-4">
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="rounded-lg border border-primary/20 bg-primary/[0.03] p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="font-medium">
+                {effectivePilot
+                  ? "Run a bounded identity pilot"
+                  : "Classify all compatible history"}
+              </p>
+              {!effectivePilot && <Badge>Recommended</Badge>}
+            </div>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              The server selects every compatible active diarization partition,
+              freezes a cutoff, and resumes in batches. Existing audio is not
+              processed again.
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-2xl font-semibold tabular-nums">
+              {preflightQuery.isLoading
+                ? "…"
+                : eligibleSegments == null
+                ? "—"
+                : eligibleSegments.toLocaleString()}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {noCompatibleSegments
+                ? "No compatible segments"
+                : "segments ready"}
+            </p>
+          </div>
+        </div>
+        {preflight && (
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              {preflight.partitions.length} compatible generation
+              {preflight.partitions.length === 1 ? "" : "s"}
+            </span>
+            <span>{preflight.totals.alreadyCurrent} already current</span>
+            <span>
+              {preflight.totals.incompatibleSegments} incompatible skipped
+            </span>
+            <span>~{preflight.totals.estimatedBatches} batches</span>
+          </div>
+        )}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
         <div className="rounded-md border bg-muted/20 p-3">
           <p className="text-xs text-muted-foreground">Voice profile</p>
           <p className="mt-1 text-sm font-medium">
-            {loading ? "Loading…" : primary?.name ?? "No primary profile"}
+            {loading
+              ? "Loading…"
+              : resolved?.profileName ?? primary?.name ?? "No primary profile"}
           </p>
-          {status?.profile && (
+          {(resolved?.profileRevision ?? status?.profile?.revision) && (
             <p className="text-xs text-muted-foreground">
-              Revision {status.profile.revision}
+              Revision {resolved?.profileRevision ?? status?.profile?.revision}
             </p>
           )}
         </div>
@@ -289,130 +313,187 @@ function SpeakerIdentityLauncher({
           <p className="mt-1 text-sm font-medium">
             {loading
               ? "Checking…"
-              : calibration
-              ? calibrationPolicy === "pilot"
-                ? "Provisional pilot"
-                : "Full classification"
+              : effectivePolicy === "full"
+              ? "Full history ready"
+              : effectivePolicy === "pilot"
+              ? "Provisional pilot"
               : "Not ready"}
           </p>
-          {calibration && (
+          {(resolved?.calibrationId ?? calibration) && (
             <Badge
-              className={calibrationPolicy === "pilot"
+              className={effectivePilot
                 ? "mt-1 bg-amber-500/10 text-amber-600"
                 : "mt-1 bg-green-500/10 text-green-600"}
             >
-              {(calibration.targetPrecision * 100).toFixed(0)}% held-out target
+              {(
+                (resolved?.targetPrecision ??
+                  calibration?.targetPrecision ?? 0) * 100
+              ).toFixed(0)}% held-out target
             </Badge>
           )}
         </div>
-        <div className="rounded-md border bg-muted/20 p-3">
-          <p className="text-xs text-muted-foreground">
-            Diarization generation
-          </p>
-          {compatibleRuns.length > 1
-            ? (
-              <Select value={selectedRunId} onValueChange={setSelectedRunId}>
-                <SelectTrigger
-                  className="mt-1 h-8"
-                  aria-label="Diarization generation"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {compatibleRuns.map((run) => (
-                    <SelectItem key={run.runId} value={run.runId}>
-                      Generation {run.generation ?? "legacy"} · active
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )
-            : (
-              <p className="mt-1 text-sm font-medium">
-                {loading
-                  ? "Checking…"
-                  : !calibration
-                  ? selectedRun
-                    ? `Generation ${
-                      selectedRun.generation ?? "legacy"
-                    } · active; calibration pending`
-                    : "No active generation for the profile embedding space"
-                  : selectedRun
-                  ? `Generation ${selectedRun.generation ?? "legacy"} · active`
-                  : "No compatible active generation"}
-              </p>
-            )}
-        </div>
       </div>
 
-      <div className="space-y-2">
-        <Label>Audio range</Label>
-        <div className="flex flex-wrap gap-2">
-          {([
-            [24, "24-hour pilot"],
-            [168, "7 days"],
-            [336, "14 days"],
-          ] as const).map(([hours, label]) => (
-            <Button
-              key={hours}
-              type="button"
-              size="sm"
-              variant={rangeMode === hours ? "default" : "outline"}
-              onClick={() => setRangeMode(hours as 24 | 168 | 336)}
-              disabled={maxRangeHours != null && hours > maxRangeHours}
-            >
-              {label}
-            </Button>
-          ))}
-          <Button
-            type="button"
-            size="sm"
-            variant={rangeMode === "custom" ? "default" : "outline"}
-            onClick={() => setRangeMode("custom")}
-          >
-            Custom
-          </Button>
-        </div>
-      </div>
-
-      {rangeMode === "custom" && (
-        <div className="rounded-md border p-3">
-          <DateRangePicker
-            label="Custom audio range"
-            value={{ start: customStart, end: customEnd }}
-            onChange={(value) => {
-              setCustomStart(value.start);
-              if (value.end) setCustomEnd(value.end);
-            }}
-            maxDurationMs={maxRangeHours == null
-              ? undefined
-              : maxRangeHours * 3_600_000}
-            showAudioTimeline
-          />
+      {effectivePilot && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+          This calibration is provisional. It can classify at most{" "}
+          {maxRangeHours ?? 24}{" "}
+          hours so you can review false positives before enabling full history.
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">
-        Selected: {formatPickerRange(range, pickerTimeZone, "minute")}.{" "}
-        Existing diarization embeddings are classified in resumable batches;
-        audio is not processed again.
-        {pilotOnly && (
-          <>
-            {" "}This lower-precision calibration is provisional, so each run is
-            capped at {maxRangeHours ?? 24}{" "}
-            hours. Review false positives before expanding.
-          </>
-        )}
-      </p>
+      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <CollapsibleTrigger asChild>
+          <Button type="button" variant="outline" size="sm">
+            Advanced · period and technical details
+            <ChevronDown
+              className={`ml-2 h-4 w-4 transition-transform ${
+                advancedOpen ? "rotate-180" : ""
+              }`}
+            />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-3 space-y-3 rounded-md border p-3">
+          <div>
+            <p className="text-sm font-medium">Classification period</p>
+            <p className="text-xs text-muted-foreground">
+              Full compatible history is recommended. Choose a bounded period
+              for diagnostics or a provisional calibration.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {!effectivePilot && (
+              <Button
+                type="button"
+                size="sm"
+                variant={scopeMode === "all_compatible" ? "default" : "outline"}
+                onClick={() => setScopeMode("all_compatible")}
+              >
+                All compatible history
+              </Button>
+            )}
+            {([
+              [24, "24 hours"],
+              [168, "7 days"],
+              [336, "14 days"],
+            ] as const).map(([hours, label]) => (
+              <Button
+                key={hours}
+                type="button"
+                size="sm"
+                variant={scopeMode === "range" && rangeMode === hours
+                  ? "default"
+                  : "outline"}
+                onClick={() => {
+                  setScopeMode("range");
+                  setRangeMode(hours);
+                }}
+                disabled={maxRangeHours != null && hours > maxRangeHours}
+              >
+                {label}
+              </Button>
+            ))}
+            <Button
+              type="button"
+              size="sm"
+              variant={scopeMode === "range" && rangeMode === "custom"
+                ? "default"
+                : "outline"}
+              onClick={() => {
+                setScopeMode("range");
+                setRangeMode("custom");
+              }}
+            >
+              Custom period
+            </Button>
+          </div>
+          {scopeMode === "range" && rangeMode === "custom" && (
+            <DateRangePicker
+              label="Custom audio range"
+              value={{ start: customStart, end: customEnd }}
+              onChange={(value) => {
+                setCustomStart(value.start);
+                if (value.end) setCustomEnd(value.end);
+              }}
+              maxDurationMs={maxRangeHours == null
+                ? undefined
+                : maxRangeHours * 3_600_000}
+              showAudioTimeline
+            />
+          )}
+          <p className="text-xs text-muted-foreground">
+            {scope.mode === "all_compatible"
+              ? snapshotCutoff
+                ? `Frozen through ${
+                  formatPickerRange(
+                    { start: snapshotCutoff, end: snapshotCutoff },
+                    pickerTimeZone,
+                    "minute",
+                  )
+                }`
+                : "The server will freeze the history cutoff before starting."
+              : `Selected: ${
+                formatPickerRange(scope, pickerTimeZone, "minute")
+              }`}
+          </p>
+          {(preflight?.partitions.length ?? 0) > 0 && (
+            <div className="space-y-1 rounded bg-muted/30 p-2 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">
+                Resolved partitions
+              </p>
+              {preflight!.partitions.slice(0, 8).map((partition) => (
+                <div
+                  key={`${partition.runId}-${partition.start}`}
+                  className="flex flex-wrap justify-between gap-2"
+                >
+                  <span>
+                    Generation {partition.generation ?? "legacy"} ·{" "}
+                    {partition.eligibleSegments.toLocaleString()} segments
+                  </span>
+                  <span className="font-mono">
+                    run {shortTechnicalId(partition.runId)} · space{" "}
+                    {shortTechnicalId(partition.embeddingSpaceId)}
+                  </span>
+                </div>
+              ))}
+              {preflight!.partitions.length > 8 && (
+                <p>+{preflight!.partitions.length - 8} more partitions</p>
+              )}
+            </div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
 
       {activeCampaign?.currentJobId && (
         <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-sm">
-          Current classification is {activeCampaign.status}.{"  "}
+          Current classification is {activeCampaign.status}.{" "}
           <Link
             className="font-medium text-primary hover:underline"
             to={`/jobs/${activeCampaign.currentJobId}`}
           >
             Open job details
+          </Link>
+        </div>
+      )}
+
+      {preflight?.coverageRepair?.repairable && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <p className="font-medium text-amber-700 dark:text-amber-400">
+            Active diarization coverage needs repair
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {preflight.coverageRepair.counts.recoverableSupersededSegments
+              .toLocaleString()}{" "}
+            previous speaker segments can be restored. The repair deletes
+            nothing and must be explicitly confirmed.
+          </p>
+          <Link
+            className="mt-2 inline-block text-xs font-medium text-primary hover:underline"
+            to={`/settings/voice-identity/operations?repairRun=${
+              encodeURIComponent(preflight.coverageRepair.runId)
+            }`}
+          >
+            Preview safe coverage repair →
           </Link>
         </div>
       )}
@@ -428,17 +509,28 @@ function SpeakerIdentityLauncher({
           <div className="mt-2 flex flex-wrap gap-3 text-xs font-medium">
             <Link
               className="text-primary hover:underline"
-              to="/settings/voice-identity"
+              to="/settings/voice-identity#calibration"
             >
               Review and validate →
             </Link>
-            <Link
+            <button
+              type="button"
               className="text-primary hover:underline"
-              to="/settings/voice-identity/operations"
+              onClick={() => void preflightQuery.refetch()}
             >
-              Generations →
-            </Link>
+              Check again
+            </button>
           </div>
+        </div>
+      )}
+
+      {!loading && noCompatibleSegments && blockers.length === 0 && (
+        <div className="rounded-md border bg-muted/20 p-3 text-sm">
+          <p className="font-medium">No compatible segments</p>
+          <p className="text-xs text-muted-foreground">
+            Everything in this scope is already current, incompatible with the
+            profile embedding space, or outside active diarization generations.
+          </p>
         </div>
       )}
 
@@ -451,17 +543,16 @@ function SpeakerIdentityLauncher({
         <Button
           type="button"
           onClick={() => launch.mutate()}
-          disabled={loading || blockers.length > 0 || !selectedRun ||
-            launch.isPending}
+          disabled={!canStart || launch.isPending || preflightQuery.isFetching}
         >
           <Play className="mr-2 h-4 w-4" />
           {launch.isPending
-            ? "Queueing…"
-            : pilotOnly
+            ? "Starting…"
+            : effectivePilot
             ? "Start provisional pilot"
-            : rangeMode === 24
-            ? "Start 24-hour pilot"
-            : "Start classification"}
+            : scope.mode === "all_compatible"
+            ? "Classify all compatible history"
+            : "Classify selected period"}
         </Button>
       </div>
     </div>
@@ -490,15 +581,16 @@ export function SpeakerIdentityLaunchDialog() {
           <Play className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <UserRoundSearch className="h-5 w-5 text-primary" />
             Classify existing voice segments
           </DialogTitle>
           <DialogDescription>
-            Profile revision, validated calibration, embedding space and active
-            generation are selected automatically. Only choose the time range.
+            The server resolves compatible generations, profile revision and
+            calibration. Review the preflight count, then start one resumable
+            campaign.
           </DialogDescription>
         </DialogHeader>
         <SpeakerIdentityLauncher
