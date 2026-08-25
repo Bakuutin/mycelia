@@ -1,11 +1,15 @@
 import { expect } from "@std/expect";
 import { z } from "zod";
-import { resourceToAiSdkTools, createAiSdkToolsFromResources } from "./ai-sdk-adapter.ts";
-import { Resource } from "@/lib/auth/resources.ts";
+import {
+  createAiSdkToolsFromResources,
+  resourceToAiSdkTools,
+} from "./ai-sdk-adapter.ts";
+import { Resource, ResourceManager } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 
 // Test resource with simple schema
-class SimpleTestResource implements Resource<{ value: string }, { result: string }> {
+class SimpleTestResource
+  implements Resource<{ value: string }, { result: string }> {
   code = "test_simple";
   description = "Simple test resource";
   schemas = {
@@ -13,7 +17,10 @@ class SimpleTestResource implements Resource<{ value: string }, { result: string
     response: z.object({ result: z.string() }),
   };
 
-  async use(input: { value: string }, _auth: Auth): Promise<{ result: string }> {
+  async use(
+    input: { value: string },
+    _auth: Auth,
+  ): Promise<{ result: string }> {
     return { result: `Processed: ${input.value}` };
   }
 
@@ -23,8 +30,8 @@ class SimpleTestResource implements Resource<{ value: string }, { result: string
 }
 
 // Test resource with discriminated union
-class DiscriminatedUnionResource
-  implements Resource<
+class DiscriminatedUnionResource implements
+  Resource<
     | { action: "get"; id: string }
     | { action: "set"; id: string; value: string },
     { result: any }
@@ -40,7 +47,11 @@ class DiscriminatedUnionResource
   };
 
   async use(
-    input: { action: "get"; id: string } | { action: "set"; id: string; value: string },
+    input: { action: "get"; id: string } | {
+      action: "set";
+      id: string;
+      value: string;
+    },
     _auth: Auth,
   ): Promise<{ result: any }> {
     if (input.action === "get") {
@@ -50,7 +61,11 @@ class DiscriminatedUnionResource
   }
 
   extractActions(
-    _input: { action: "get"; id: string } | { action: "set"; id: string; value: string },
+    _input: { action: "get"; id: string } | {
+      action: "set";
+      id: string;
+      value: string;
+    },
   ) {
     return [{ path: ["test", "discriminated"], actions: ["read", "write"] }];
   }
@@ -75,16 +90,44 @@ Deno.test("AI SDK Adapter - Simple resource creates valid tool schema", async ()
   const tool = tools["test_simple"];
   expect(tool).toBeDefined();
   expect(tool.execute).toBeDefined();
-  
+
   // Test that the tool can be executed with the correct input
   if (!tool.execute) {
     throw new Error("tool.execute is undefined");
   }
   const result = await tool.execute(
     { value: "test" },
-    { toolCallId: "test-call-id", messages: [] }
+    { toolCallId: "test-call-id", messages: [] },
   );
-  expect(result).toEqual({ type: "json", value: { result: "Processed: test" } });
+  expect(result).toEqual({
+    type: "json",
+    value: { result: "Processed: test" },
+  });
+});
+
+Deno.test("AI SDK Adapter - ResourceManager option enforces resource policy before tool use", async () => {
+  const resource = new SimpleTestResource();
+  const resourceManager = new ResourceManager();
+  resourceManager.registerResource(resource);
+  const deniedAuth = new Auth({ principal: "denied-user", policies: [] });
+  const tools = resourceToAiSdkTools(resource, deniedAuth, {
+    resourceManager,
+  });
+  const execute = tools.test_simple.execute;
+  if (!execute) throw new Error("tool.execute is undefined");
+
+  let thrown: unknown;
+  try {
+    await execute(
+      { value: "must-not-run" },
+      { toolCallId: "denied-call", messages: [] },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBeInstanceOf(Response);
+  expect((thrown as Response).status).toBe(403);
 });
 
 Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with correct schemas", async () => {
@@ -95,7 +138,6 @@ Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with corr
     "test_discriminated_get",
     "test_discriminated_set",
   ]);
-
 
   const getTool = tools["test_discriminated_get"];
   const setTool = tools["test_discriminated_set"];
@@ -111,7 +153,7 @@ Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with corr
   }
   const getResult = await getTool.execute(
     { id: "test-id" },
-    { toolCallId: "test-call-id-get", messages: [] }
+    { toolCallId: "test-call-id-get", messages: [] },
   );
   expect(getResult).toEqual({ type: "json", value: { result: "Got test-id" } });
 
@@ -121,9 +163,12 @@ Deno.test("AI SDK Adapter - Discriminated union creates multiple tools with corr
   }
   const setResult = await setTool.execute(
     { id: "test-id", value: "test-value" },
-    { toolCallId: "test-call-id-set", messages: [] }
+    { toolCallId: "test-call-id-set", messages: [] },
   );
-  expect(setResult).toEqual({ type: "json", value: { result: "Set test-id to test-value" } });
+  expect(setResult).toEqual({
+    type: "json",
+    value: { result: "Set test-id to test-value" },
+  });
 });
 
 // Tests for createAiSdkToolsFromResources (passes Zod schema to AI SDK)
@@ -136,16 +181,19 @@ Deno.test("createAiSdkToolsFromResources - Simple resource creates valid tool wi
   const tool = tools["test_simple"];
   expect(tool).toBeDefined();
   expect(tool.execute).toBeDefined();
-  
+
   // Test that the tool can be executed with the correct input
   if (!tool.execute) {
     throw new Error("tool.execute is undefined");
   }
   const result = await tool.execute(
     { value: "test" },
-    { toolCallId: "test-call-id", messages: [] }
+    { toolCallId: "test-call-id", messages: [] },
   );
-  expect(result).toEqual({ type: "json", value: { result: "Processed: test" } });
+  expect(result).toEqual({
+    type: "json",
+    value: { result: "Processed: test" },
+  });
 });
 
 Deno.test("createAiSdkToolsFromResources - Discriminated union creates multiple tools with Zod schemas", async () => {
@@ -171,7 +219,7 @@ Deno.test("createAiSdkToolsFromResources - Discriminated union creates multiple 
   }
   const getResult = await getTool.execute(
     { id: "test-id" },
-    { toolCallId: "test-call-id-get", messages: [] }
+    { toolCallId: "test-call-id-get", messages: [] },
   );
   expect(getResult).toEqual({ type: "json", value: { result: "Got test-id" } });
 
@@ -180,23 +228,29 @@ Deno.test("createAiSdkToolsFromResources - Discriminated union creates multiple 
   }
   const setResult = await setTool.execute(
     { id: "test-id", value: "test-value" },
-    { toolCallId: "test-call-id-set", messages: [] }
+    { toolCallId: "test-call-id-set", messages: [] },
   );
-  expect(setResult).toEqual({ type: "json", value: { result: "Set test-id to test-value" } });
+  expect(setResult).toEqual({
+    type: "json",
+    value: { result: "Set test-id to test-value" },
+  });
 });
 
 Deno.test("createAiSdkToolsFromResources - Multiple resources combined", async () => {
   const simpleResource = new SimpleTestResource();
   const discriminatedResource = new DiscriminatedUnionResource();
-  
-  const tools = createAiSdkToolsFromResources([simpleResource, discriminatedResource], mockAuth);
+
+  const tools = createAiSdkToolsFromResources([
+    simpleResource,
+    discriminatedResource,
+  ], mockAuth);
 
   expect(Object.keys(tools).sort()).toEqual([
     "test_discriminated_get",
     "test_discriminated_set",
     "test_simple",
   ]);
-  
+
   // Verify all tools are executable
   expect(tools["test_simple"].execute).toBeDefined();
   expect(tools["test_discriminated_get"].execute).toBeDefined();
@@ -204,7 +258,8 @@ Deno.test("createAiSdkToolsFromResources - Multiple resources combined", async (
 });
 
 // Test resource with z.any() - common pattern in real resources
-class ResourceWithAnySchema implements Resource<{ data: any }, { result: any }> {
+class ResourceWithAnySchema
+  implements Resource<{ data: any }, { result: any }> {
   code = "test_any";
   description = "Test resource with z.any()";
   schemas = {
@@ -229,23 +284,27 @@ Deno.test("createAiSdkToolsFromResources - Resource with z.any() field creates v
   const tool = tools["test_any"];
   expect(tool).toBeDefined();
   expect(tool.inputSchema).toBeDefined();
-  
+
   // Test execution
   if (!tool.execute) {
     throw new Error("tool.execute is undefined");
   }
   const result = await tool.execute(
     { data: { nested: "value" } },
-    { toolCallId: "test-call-id", messages: [] }
+    { toolCallId: "test-call-id", messages: [] },
   );
-  expect(result).toEqual({ type: "json", value: { result: { nested: "value" } } });
+  expect(result).toEqual({
+    type: "json",
+    value: { result: { nested: "value" } },
+  });
 });
 
 // Test resource with optional fields
-class ResourceWithOptionalFields implements Resource<
-  { required: string; optional?: string },
-  { result: string }
-> {
+class ResourceWithOptionalFields implements
+  Resource<
+    { required: string; optional?: string },
+    { result: string }
+  > {
   code = "test_optional";
   description = "Test resource with optional fields";
   schemas = {
@@ -258,7 +317,7 @@ class ResourceWithOptionalFields implements Resource<
 
   async use(
     input: { required: string; optional?: string },
-    _auth: Auth
+    _auth: Auth,
   ): Promise<{ result: string }> {
     return { result: `${input.required}-${input.optional ?? "none"}` };
   }
@@ -275,21 +334,21 @@ Deno.test("createAiSdkToolsFromResources - Resource with optional fields works c
   const tool = tools["test_optional"];
   expect(tool).toBeDefined();
   expect(tool.inputSchema).toBeDefined();
-  
+
   // Test execution with and without optional
   if (!tool.execute) {
     throw new Error("tool.execute is undefined");
   }
-  
+
   const result1 = await tool.execute(
     { required: "test" },
-    { toolCallId: "test-call-id-1", messages: [] }
+    { toolCallId: "test-call-id-1", messages: [] },
   );
   expect(result1).toEqual({ type: "json", value: { result: "test-none" } });
-  
+
   const result2 = await tool.execute(
     { required: "test", optional: "value" },
-    { toolCallId: "test-call-id-2", messages: [] }
+    { toolCallId: "test-call-id-2", messages: [] },
   );
   expect(result2).toEqual({ type: "json", value: { result: "test-value" } });
 });
@@ -315,7 +374,7 @@ Deno.test("createAiSdkToolsFromResources - Tool approval mechanism for discrimin
 
   expect(tools["test_discriminated_get"]).toBeDefined();
   expect((tools["test_discriminated_get"] as any).needsApproval).toBe(false);
-  
+
   expect(tools["test_discriminated_set"]).toBeDefined();
   expect((tools["test_discriminated_set"] as any).needsApproval).toBe(true);
 });
@@ -344,14 +403,14 @@ Deno.test("createAiSdkToolsFromResources - Smoke test with MongoResource", () =>
   // MongoResource has a discriminated union with many actions
   const toolNames = Object.keys(tools);
   expect(toolNames.length).toBeGreaterThan(0);
-  
+
   // Check that expected mongo tools exist
   expect(toolNames).toContain("mongo_find");
   expect(toolNames).toContain("mongo_findOne");
   expect(toolNames).toContain("mongo_insertOne");
   expect(toolNames).toContain("mongo_updateOne");
   expect(toolNames).toContain("mongo_deleteOne");
-  
+
   // Verify all tools have valid parameters
   for (const [_name, tool] of Object.entries(tools)) {
     expect(tool.inputSchema).toBeDefined();
@@ -364,12 +423,12 @@ Deno.test("createAiSdkToolsFromResources - Smoke test with TimelineResource", ()
 
   const toolNames = Object.keys(tools);
   expect(toolNames.length).toBeGreaterThan(0);
-  
+
   // Check that expected timeline tools exist
   expect(toolNames).toContain("timeline_recalculate");
   expect(toolNames).toContain("timeline_ensureIndex");
   expect(toolNames).toContain("timeline_invalidate");
-  
+
   // Verify all tools have valid parameters
   for (const [_name, tool] of Object.entries(tools)) {
     expect(tool.inputSchema).toBeDefined();
@@ -382,13 +441,13 @@ Deno.test("createAiSdkToolsFromResources - Smoke test with ObjectsResource", () 
 
   const toolNames = Object.keys(tools);
   expect(toolNames.length).toBeGreaterThan(0);
-  
+
   // Check that expected objects tools exist (some may fail JSON Schema conversion due to custom types)
   expect(toolNames).toContain("objects_get");
   expect(toolNames).toContain("objects_list");
   expect(toolNames).toContain("objects_update");
   expect(toolNames).toContain("objects_delete");
-  
+
   // Verify all tools have valid parameters
   for (const [_name, tool] of Object.entries(tools)) {
     expect(tool.inputSchema).toBeDefined();
@@ -399,24 +458,26 @@ Deno.test("createAiSdkToolsFromResources - Smoke test with all real resources co
   const mongoResource = new MongoResource();
   const timelineResource = new TimelineResource();
   const objectsResource = new ObjectsResource();
-  
+
   const resources = [mongoResource, timelineResource, objectsResource];
-  
+
   const tools = createAiSdkToolsFromResources(resources, realResourceAuth);
 
   const toolNames = Object.keys(tools);
-  
+
   // Should have tools from all 3 resources
-  expect(toolNames.some(n => n.startsWith("mongo_"))).toBe(true);
-  expect(toolNames.some(n => n.startsWith("timeline_"))).toBe(true);
-  expect(toolNames.some(n => n.startsWith("objects_"))).toBe(true);
-  
+  expect(toolNames.some((n) => n.startsWith("mongo_"))).toBe(true);
+  expect(toolNames.some((n) => n.startsWith("timeline_"))).toBe(true);
+  expect(toolNames.some((n) => n.startsWith("objects_"))).toBe(true);
+
   // Verify all tools have valid parameters and are executable
   for (const [_name, tool] of Object.entries(tools)) {
     expect(tool.inputSchema).toBeDefined();
     expect(tool.execute).toBeDefined();
   }
-  
-  console.log(`Created ${toolNames.length} tools from real resources:`, toolNames.sort());
-});
 
+  console.log(
+    `Created ${toolNames.length} tools from real resources:`,
+    toolNames.sort(),
+  );
+});

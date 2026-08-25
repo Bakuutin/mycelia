@@ -85,6 +85,12 @@ const SettingsLayout = () => {
       icon: Cloud,
       description: "Photo understanding, providers and credit guard",
     },
+    {
+      name: "Knowledge / RAG",
+      path: "/settings/knowledge",
+      icon: Database,
+      description: "Inspect, update and rebuild the Qdrant projection",
+    },
   ];
 
   const voiceIdentitySettings = [

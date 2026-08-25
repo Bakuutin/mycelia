@@ -20,6 +20,7 @@ import { ChatResource } from "@/lib/chat/resource.server.ts";
 import { MediaResource } from "@/lib/media/resource.server.ts";
 import { MediaEventsResource } from "@/lib/media-events/resource.server.ts";
 import { MediaLibraryResource } from "@/lib/media-library/resource.server.ts";
+import { RagResource } from "@/lib/rag/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -42,6 +43,7 @@ const resources = [
   MediaResource,
   MediaEventsResource,
   MediaLibraryResource,
+  RagResource,
 ];
 
 export async function setupResources(): Promise<void> {

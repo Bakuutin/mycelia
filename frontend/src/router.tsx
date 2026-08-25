@@ -44,6 +44,8 @@ import AudioPipelinePage from "./pages/AudioPipelinePage";
 import SummaryHistoryPage from "./pages/SummaryHistoryPage";
 import MediaPage from "./pages/MediaPage";
 import GoogleCloudSettingsPage from "./pages/settings/GoogleCloudSettingsPage";
+import SearchPage from "./pages/SearchPage";
+import KnowledgeSettingsPage from "./pages/settings/KnowledgeSettingsPage";
 
 export const router = createBrowserRouter([
   {
@@ -105,6 +107,10 @@ export const router = createBrowserRouter([
       {
         path: "chat/:chatId",
         element: <ChatPage />,
+      },
+      {
+        path: "search",
+        element: <SearchPage />,
       },
       {
         path: "transcript",
@@ -217,6 +223,10 @@ export const router = createBrowserRouter([
           {
             path: "google-cloud",
             element: <GoogleCloudSettingsPage />,
+          },
+          {
+            path: "knowledge",
+            element: <KnowledgeSettingsPage />,
           },
           {
             path: "voice-profiles",

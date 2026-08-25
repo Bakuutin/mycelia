@@ -101,6 +101,21 @@ your own words.
   message/pin counts, actual-model labels, unread states, resizable navigation,
   rename, and previous/next navigation across pinned messages.
 
+### Hybrid Knowledge Search
+
+- Optional Qdrant-backed dense + sparse search across transcriptions, messages,
+  objects, and active media descriptions, with source/time filters and links
+  back to canonical Mycelia records.
+- Independent projection lifecycle with durable checkpoints, source/chunk
+  ledger, incremental change-stream updates, periodic reconciliation, and
+  blue/green rebuilds that keep the previous active generation searchable.
+- Dedicated Search page and Knowledge settings page for status, progress,
+  freshness, errors, chunk inspection, reconcile, pause/resume, and confirmed
+  rebuild operations. Chat receives only the read-only search tool.
+- Separate `mycelia-rag` Compose project and volumes; Qdrant is additional
+  rebuildable storage and never replaces canonical MongoDB. See
+  [RAG_QDRANT.md](docs/RAG_QDRANT.md).
+
 ### Object Management
 
 - Create, edit, and browse People, Events, Conversations, Relationships, and
@@ -168,12 +183,13 @@ your own words.
   memories and wearable capture back into Mycelia.
 - GPU diarization stack replacing the current batch-only flow (`diarizator/`
   Helm charts + WebUI).
-- Semantic search + vector memory integration connecting Qdrant-backed pipelines
-  and the OpenMemory MCP bridges into the main timeline.
+- Qdrant retrieval evaluation and owner-scoped authorization hardening.
 
 **Planned**
 
 - Multi-device & multi-modal capture (health, geolocation, photos, sensors).
+- Mem0/OpenMemory and graph-memory integrations built as separate projections
+  after the Qdrant retrieval contract is validated.
 - Privacy + usage dashboards, token metering, and export flows.
 - Processing / artifact templates, batch operations, and backup automation.
 
@@ -199,6 +215,23 @@ The setup script automatically:
 - Starts all services with Docker Compose
 
 Open [http://localhost:3210](http://localhost:3210) in your browser.
+
+#### Optional Qdrant RAG stack
+
+The vector projection is intentionally not part of the main startup. Run it as
+an isolated stack after Mycelia's MongoDB is available:
+
+```bash
+cp .env.rag.example .env.rag.local
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  up -d --build
+```
+
+Then set `RAG_URL` in the main ignored `.env` and recreate only the backend.
+The default standalone ports are `48091` (RAG API), `46333` (Qdrant
+REST/dashboard), and `46334` (Qdrant gRPC).
 
 #### CLI/Python Daemon Users
 

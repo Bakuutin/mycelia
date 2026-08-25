@@ -69,8 +69,8 @@ statistics, missing required keys, optional keys, undocumented keys, duplicate
 definitions, blank values, malformed assignments, and formatting issues. The
 command exits non-zero when the files need attention, so `--json` can be used in
 CI or other automation. `--all` treats the root contract as required and the
-standalone diarizator/GPU deployments as optional; missing optional `.env` files
-are reported without failing the audit.
+standalone diarizator, GPU, and RAG deployments as optional; missing optional
+`.env` files are reported without failing the audit.
 
 Apply only safe automatic repairs with:
 
@@ -95,9 +95,9 @@ specific template with an explicit, single-contract command:
   --fix --prune-undocumented
 ```
 
-The three contracts remain separate because they are loaded by different
-deployments. Compose services pass explicit diarizator variables instead of
-injecting an entire application `.env` containing unrelated secrets.
+The deployment contracts remain separate because they are loaded by different
+services. Compose services pass explicit diarizator and RAG variables instead
+of injecting an entire application `.env` containing unrelated secrets.
 
 #### Readiness and reload diagnostics
 
@@ -228,6 +228,43 @@ visible inventory page, fixes visual-understanding + OCR, and shows the
 authoritative batch ceiling before consent. Photos with local time/GPS are
 queryable through indexed Timeline/Map projections in every recognition state;
 missing values are kept in Unplaced and can be edited without a provider call.
+
+#### Isolated Qdrant RAG development
+
+The vector projection has its own Compose project, ports, state database, model
+cache, and Qdrant volume. Do not add it to the main `docker compose up` command
+or restart MongoDB/Redis while iterating on RAG code.
+
+```bash
+cp .env.rag.example .env.rag.local
+
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  up -d --build
+```
+
+Default host ports are RAG API `48091`, Qdrant REST/dashboard `46333`, and
+Qdrant gRPC `46334`. They do not overlap the main application. Verify process,
+dependency readiness, and projection readiness separately:
+
+```bash
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  ps
+curl -fsS http://127.0.0.1:48091/health
+curl -fsS http://127.0.0.1:48091/ready
+curl -fsS http://127.0.0.1:48091/v1/status
+```
+
+`/health` is only liveness. `/ready` checks for a compatible active Qdrant
+projection/alias and enforces the optional read-only-principal gate;
+`/v1/status` is the authoritative view of build/catch-up/active and checkpoint
+freshness state. A failed blue/green rebuild must leave the previous active
+collection searchable. The complete lifecycle, connection modes, control
+semantics, and deferred authorization/read-only-user migration are documented in
+[docs/RAG_QDRANT.md](docs/RAG_QDRANT.md).
 
 #### Objects browse and Timeline density rollout
 
