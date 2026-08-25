@@ -91,6 +91,7 @@ interface VoiceIdentityReviewPlayerProps {
   editingLabel?: string | null;
   alternateProfiles: VoiceIdentityProfileOption[];
   creatingProfile: boolean;
+  shortcutsEnabled?: boolean;
   onDecision: (decision: VoiceIdentityDecision) => void;
   onAssignProfile: (profileId: string) => void;
   onCreateProfile: (name: string) => Promise<void>;
@@ -106,7 +107,7 @@ const SWIPE_DISTANCE_PX = 72;
 const SWIPE_MAX_VERTICAL_PX = 48;
 
 export function getReviewShortcut(key: string): ReviewCommand | null {
-  if (/^[1-9]$/.test(key)) {
+  if (/^[1-3]$/.test(key)) {
     return { type: "profile", index: Number(key) - 1 };
   }
   switch (key) {
@@ -156,6 +157,12 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   );
 }
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(
+    target.closest("input, textarea, select, [contenteditable='true']"),
+  );
+}
+
 function durationSeconds(segment: VoiceIdentityReviewSegment): number {
   const start = new Date(segment.start).getTime();
   const end = new Date(segment.end).getTime();
@@ -196,6 +203,7 @@ export function VoiceIdentityReviewPlayer({
   editingLabel,
   alternateProfiles,
   creatingProfile,
+  shortcutsEnabled = true,
   onDecision,
   onAssignProfile,
   onCreateProfile,
@@ -260,15 +268,15 @@ export function VoiceIdentityReviewPlayer({
   }, [alternateProfiles, selectedProfileId]);
 
   useEffect(() => {
+    if (!shortcutsEnabled) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        isInteractiveTarget(event.target) ||
-        isInteractiveTarget(document.activeElement)
-      ) return;
       const command = getReviewShortcut(event.key);
       if (!command) return;
       if (typeof command === "object") {
-        if (pending) return;
+        if (
+          pending || isTypingTarget(event.target) ||
+          isTypingTarget(document.activeElement)
+        ) return;
         const profile = alternateProfiles[command.index];
         if (profile) {
           event.preventDefault();
@@ -276,6 +284,10 @@ export function VoiceIdentityReviewPlayer({
         }
         return;
       }
+      if (
+        isInteractiveTarget(event.target) ||
+        isInteractiveTarget(document.activeElement)
+      ) return;
       if (command === "play") {
         event.preventDefault();
         playerRef.current?.togglePlayback();
@@ -316,6 +328,7 @@ export function VoiceIdentityReviewPlayer({
     onPrevious,
     onUndo,
     pending,
+    shortcutsEnabled,
   ]);
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -460,6 +473,29 @@ export function VoiceIdentityReviewPlayer({
               voice sample is separate and is used later to rebuild the profile
               embedding.
             </p>
+            {alternateProfiles.length > 0 && (
+              <div
+                className="mb-3 grid gap-2 sm:grid-cols-3"
+                aria-label="Recently used speakers"
+              >
+                {alternateProfiles.slice(0, 3).map((profile, index) => (
+                  <Button
+                    key={profile.id}
+                    type="button"
+                    variant="secondary"
+                    className="min-w-0 justify-start"
+                    disabled={pending}
+                    onClick={() => stopThen(() => onAssignProfile(profile.id))}
+                    title={`Assign ${profile.name} · shortcut ${index + 1}`}
+                  >
+                    <kbd className="mr-2 rounded border bg-background px-1.5 py-0.5 text-[10px]">
+                      {index + 1}
+                    </kbd>
+                    <span className="truncate">{profile.name}</span>
+                  </Button>
+                ))}
+              </div>
+            )}
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
               {alternateProfiles.length > 0
                 ? (
@@ -477,9 +513,8 @@ export function VoiceIdentityReviewPlayer({
                       onChange={(event) =>
                         setSelectedProfileId(event.target.value)}
                     >
-                      {alternateProfiles.map((profile, index) => (
+                      {alternateProfiles.map((profile) => (
                         <option key={profile.id} value={profile.id}>
-                          {index < 9 ? `${index + 1} · ` : ""}
                           {profile.name}
                         </option>
                       ))}
@@ -530,7 +565,7 @@ export function VoiceIdentityReviewPlayer({
 
           <p className="text-center text-xs text-muted-foreground">
             Swipe or use ← Not {profileName} · → {profileName}{" "}
-            · S skips · 1–9 profiles · Space plays · U undoes · E edits
+            · S skips · 1–3 recent speakers · Space plays · U undoes · E edits
           </p>
         </div>
 

@@ -15,6 +15,7 @@ import {
   Ban,
   BarChart3,
   Check,
+  ChevronDown,
   Clock,
   Copy,
   ExternalLink,
@@ -29,6 +30,11 @@ import {
   Users,
   Volume2,
 } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { ObjectAudioPlayer } from "@/components/ObjectAudioPlayer";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobAccessLogEntry, JobInfo, JobLogEntry } from "@/types/jobs";
@@ -152,7 +158,9 @@ const formatValue = (value: any): string => {
   if (typeof value === "boolean") return value.toString();
   if (value instanceof Date) return format(value, "PPpp");
   if (Array.isArray(value)) {
-    return value.map((v) => String(v)).join(", ");
+    return value.some((item) => item != null && typeof item === "object")
+      ? JSON.stringify(value, null, 2)
+      : value.map((v) => String(v)).join(", ");
   }
   if (typeof value === "object") {
     return JSON.stringify(value);
@@ -260,13 +268,228 @@ function FieldDisplay({ fields }: { fields: Array<[string, any]> }) {
         return (
           <div key={key}>
             <div className="text-sm text-muted-foreground mb-1">{key}</div>
-            <div className="text-sm">
+            <div className="break-words whitespace-pre-wrap text-sm">
               {formatValue(value)}
             </div>
           </div>
         );
       })}
     </>
+  );
+}
+
+function CollapsibleCard(
+  { title, summary, children, defaultOpen = false }: {
+    title: string;
+    summary?: string;
+    children: ReactNode;
+    defaultOpen?: boolean;
+  },
+) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <Card>
+        <CardHeader className="py-4">
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-3 text-left"
+            >
+              <div className="min-w-0">
+                <CardTitle className="text-base">{title}</CardTitle>
+                {summary && (
+                  <p className="mt-1 text-xs font-normal text-muted-foreground">
+                    {summary}
+                  </p>
+                )}
+              </div>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                  open ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+          </CollapsibleTrigger>
+        </CardHeader>
+        <CollapsibleContent>
+          <CardContent className="pt-0">{children}</CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
+  );
+}
+
+function getResultErrorCount(result: any): number {
+  const value = result?.errorCount ??
+    (Array.isArray(result?.errors) ? result.errors.length : result?.errors);
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function describeDiarizationError(error: any): string {
+  if (error?.category === "provider_network") {
+    return "The remote diarization service closed the connection before returning a result.";
+  }
+  if (error?.category === "provider_http" && error?.httpStatus) {
+    return `The diarization service returned HTTP ${error.httpStatus} for this audio sequence.`;
+  }
+  if (error?.category === "timeout") {
+    return "The diarization service did not answer before the request timeout.";
+  }
+  if (error?.category === "provider_busy") {
+    return "The diarization service had no free request slot.";
+  }
+  return error?.message ||
+    "The sequence could not be diarized in this attempt.";
+}
+
+function DiarizationErrorsPanel({ job }: { job: JobInfo }) {
+  const errors = Array.isArray(job.result?.errors) ? job.result.errors : [];
+  if (errors.length === 0) return null;
+
+  const outcomes = new Map(
+    (job.diarizationErrorOutcomes ?? []).map((outcome) => [
+      outcome.index,
+      outcome,
+    ]),
+  );
+  const recovered =
+    [...outcomes.values()].filter((outcome) => outcome.state === "recovered")
+      .length;
+  const retrying =
+    [...outcomes.values()].filter((outcome) =>
+      outcome.state === "retrying" || outcome.state === "pending"
+    ).length;
+  const needsAttention =
+    [...outcomes.values()].filter((outcome) =>
+      outcome.state === "needs_attention"
+    ).length;
+  const allRecovered = outcomes.size === errors.length &&
+    recovered === errors.length;
+
+  return (
+    <div className="space-y-3">
+      <div
+        className={`rounded-lg border p-3 text-sm ${
+          allRecovered
+            ? "border-green-500/30 bg-green-500/5"
+            : needsAttention > 0
+            ? "border-red-500/30 bg-red-500/5"
+            : "border-amber-500/30 bg-amber-500/5"
+        }`}
+      >
+        <div className="flex items-start gap-2">
+          {allRecovered
+            ? <Check className="mt-0.5 h-4 w-4 shrink-0 text-green-500" />
+            : (
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            )}
+          <div>
+            <div className="font-medium">
+              {allRecovered
+                ? `Automatic recovery completed for all ${errors.length} sequences`
+                : needsAttention > 0
+                ? `${needsAttention} sequence${
+                  needsAttention === 1 ? "" : "s"
+                } need attention`
+                : `${retrying || errors.length} sequence${
+                  (retrying || errors.length) === 1 ? "" : "s"
+                } queued for automatic recovery`}
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              {allRecovered
+                ? "The errors belong to this historical attempt; every affected audio chunk was diarized by a later job. No manual rerun is needed."
+                : needsAttention > 0
+                ? "Automatic retries were exhausted for at least one sequence. Review the affected range and provider details below."
+                : "The successful work from this batch was kept. Only the affected audio ranges are retried."}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-2 lg:grid-cols-2">
+        {errors.map((error: any, index: number) => {
+          const outcome = outcomes.get(index);
+          const start = error.start ? new Date(error.start) : null;
+          const end = error.end ? new Date(error.end) : null;
+          const outcomeLabel = outcome?.state === "recovered"
+            ? "Recovered"
+            : outcome?.state === "retrying"
+            ? "Retry scheduled"
+            : outcome?.state === "needs_attention"
+            ? "Needs attention"
+            : outcome?.state === "pending"
+            ? "Pending"
+            : "Outcome unknown";
+          const badgeClass = outcome?.state === "recovered"
+            ? "border-green-500/30 bg-green-500/10 text-green-500"
+            : outcome?.state === "needs_attention"
+            ? "border-red-500/30 bg-red-500/10 text-red-500"
+            : "border-amber-500/30 bg-amber-500/10 text-amber-500";
+
+          return (
+            <div key={index} className="rounded-lg border p-3 text-xs">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="font-medium">
+                  {error.category ?? error.type ?? "Diarization error"}
+                  {error.httpStatus ? ` · HTTP ${error.httpStatus}` : ""}
+                </div>
+                <Badge variant="outline" className={badgeClass}>
+                  {outcomeLabel}
+                </Badge>
+              </div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {describeDiarizationError(error)}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                {error.route && (
+                  <span className="font-mono">{error.route}</span>
+                )}
+                {error.attempt && <span>attempt {error.attempt}/3</span>}
+                {outcome && outcome.matchedChunks > 0 && (
+                  <span>
+                    {outcome.diarizedChunks}/{outcome.matchedChunks}{" "}
+                    chunks recovered
+                  </span>
+                )}
+                {outcome?.recoveredAt && (
+                  <span>
+                    recovered {format(new Date(outcome.recoveredAt), "PPpp")}
+                  </span>
+                )}
+                {outcome?.currentFailure?.retryAt && (
+                  <span>
+                    next retry {format(
+                      new Date(outcome.currentFailure.retryAt),
+                      "PPpp",
+                    )}
+                  </span>
+                )}
+                {start && end && !Number.isNaN(start.getTime()) &&
+                  !Number.isNaN(end.getTime()) && (
+                  <Link
+                    className="text-primary hover:underline"
+                    to={`/timeline?start=${start.getTime()}&end=${
+                      end.getTime() + 60_000
+                    }`}
+                  >
+                    Open audio range
+                  </Link>
+                )}
+              </div>
+              <details className="mt-2 text-muted-foreground">
+                <summary className="cursor-pointer select-none">
+                  Raw provider message
+                </summary>
+                <div className="mt-1 break-words font-mono">
+                  {error.message || "No provider message recorded"}
+                </div>
+              </details>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -707,24 +930,31 @@ export default function JobDetailPage() {
 
   const jobListHref = `/jobs?type=${encodeURIComponent(job.type)}`;
   const relatedLinks = getJobRelatedLinks(job.type);
+  const resultErrorCount = getResultErrorCount(job.result);
+  const allDiarizationErrorsRecovered = job.type === "diarization" &&
+    resultErrorCount > 0 &&
+    job.diarizationErrorOutcomes?.length === resultErrorCount &&
+    job.diarizationErrorOutcomes.every((outcome) =>
+      outcome.state === "recovered"
+    );
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+    <div className="container mx-auto space-y-4 p-4 sm:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
           <Link to={jobListHref} aria-label={`Back to ${job.type} jobs`}>
             <Button variant="ghost" size="icon">
               <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Job Details</h1>
-            <p className="text-muted-foreground mt-1">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold tracking-tight">Job Details</h1>
+            <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
               {job.id}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           <Button
             variant="outline"
             size="sm"
@@ -908,232 +1138,154 @@ export default function JobDetailPage() {
         );
       })()}
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Status</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">State</div>
-              {job.state === "completed" &&
-                  (job.result?.success === false ||
-                    (job.result?.errorCount ??
-                        (Array.isArray(job.result?.errors)
-                          ? job.result.errors.length
-                          : job.result?.errors ?? 0)) > 0)
-                ? (
-                  <Badge className="bg-amber-500/15 text-amber-500 border-amber-500/30">
-                    completed · {job.result?.errorCount ??
-                      (Array.isArray(job.result?.errors)
-                        ? job.result.errors.length
-                        : job.result?.errors ?? 0)}{" "}
-                    error{(job.result?.errorCount ??
-                        (Array.isArray(job.result?.errors)
-                          ? job.result.errors.length
-                          : job.result?.errors ?? 0)) === 1
-                      ? ""
-                      : "s"}
-                  </Badge>
-                )
-                : (
-                  <Badge className={getStatusColor(job.state)}>
-                    {job.state}
-                  </Badge>
-                )}
-            </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">
-                Queue state
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="outline">
-                  {job.queueAdmission?.state ===
-                      "waiting_for_diarizator_slot"
-                    ? "waiting for diarizator slot"
-                    : job.queuePresent
-                    ? (job.queueState || "unknown")
-                    : "not present"}
+      <Card>
+        <CardHeader className="pb-4">
+          <CardTitle>Status</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">State</div>
+            {job.state === "completed" &&
+                (job.result?.success === false ||
+                  resultErrorCount > 0)
+              ? (
+                <Badge
+                  className={allDiarizationErrorsRecovered
+                    ? "border-green-500/30 bg-green-500/10 text-green-500"
+                    : "border-amber-500/30 bg-amber-500/15 text-amber-500"}
+                >
+                  {allDiarizationErrorsRecovered
+                    ? `completed · ${resultErrorCount} recovered`
+                    : `completed · ${resultErrorCount || "reported"} issue${
+                      resultErrorCount === 1 ? "" : "s"
+                    }`}
                 </Badge>
-                {job.state === "active" && job.queueState !== "active" && (
-                  <span className="text-xs text-amber-500">
-                    Database and queue states do not match
-                  </span>
-                )}
-              </div>
-              {job.queueAdmission?.state ===
-                  "waiting_for_diarizator_slot" && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Priority P{job.queueAdmission.priority ?? "?"}. It will start
-                  automatically at the next safe batch boundary; no running
-                  diarization request is interrupted.
-                </p>
+              )
+              : (
+                <Badge className={getStatusColor(job.state)}>
+                  {job.state}
+                </Badge>
+              )}
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">
+              Queue state
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">
+                {job.queueAdmission?.state ===
+                    "waiting_for_diarizator_slot"
+                  ? "waiting for diarizator slot"
+                  : job.queuePresent
+                  ? (job.queueState || "unknown")
+                  : "not present"}
+              </Badge>
+              {job.state === "active" && job.queueState !== "active" && (
+                <span className="text-xs text-amber-500">
+                  Database and queue states do not match
+                </span>
               )}
             </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Type</div>
-              <div className="font-medium">{job.type}</div>
-            </div>
-            {(() => {
-              const route = getDiarizationJobRoute(job);
-              return route
-                ? (
-                  <div>
-                    <div className="text-sm text-muted-foreground mb-1">
-                      Diarizator service
-                    </div>
-                    <div className="font-medium">{route.name}</div>
-                    {route.url && (
-                      <div className="break-all font-mono text-xs text-muted-foreground">
-                        {route.url}
-                      </div>
-                    )}
-                    {(route.modelId || route.modelVersion) && (
-                      <div className="mt-2 space-y-1 text-xs">
-                        {route.modelId && (
-                          <div>
-                            <span className="text-muted-foreground">
-                              Model:
-                            </span>{" "}
-                            <span className="font-mono">{route.modelId}</span>
-                          </div>
-                        )}
-                        {route.modelVersion && (
-                          <div className="break-all">
-                            <span className="text-muted-foreground">
-                              Version:
-                            </span>{" "}
-                            <span className="font-mono">
-                              {route.modelVersion}
-                            </span>
-                          </div>
-                        )}
-                        {route.embeddingSpaceId && (
-                          <div className="break-all">
-                            <span className="text-muted-foreground">
-                              Embedding space:
-                            </span>{" "}
-                            <span className="font-mono">
-                              {route.embeddingSpaceId}
-                            </span>
-                          </div>
-                        )}
-                        {route.runtimeProvenanceSource && (
-                          <Badge variant="outline" className="font-normal">
-                            {route.runtimeProvenanceSource ===
-                                "historical_backfill_0069"
-                              ? "historical backfill"
-                              : "verified at admission"}
-                          </Badge>
-                        )}
-                      </div>
-                    )}
+            {job.queueAdmission?.state ===
+                "waiting_for_diarizator_slot" && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Priority P{job.queueAdmission.priority ?? "?"}. It will start
+                automatically at the next safe batch boundary; no running
+                diarization request is interrupted.
+              </p>
+            )}
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">Type</div>
+            <div className="font-medium">{job.type}</div>
+          </div>
+          {(() => {
+            const route = getDiarizationJobRoute(job);
+            return route
+              ? (
+                <div className="sm:col-span-2">
+                  <div className="text-sm text-muted-foreground mb-1">
+                    Diarizator service
                   </div>
-                )
-                : null;
-            })()}
-            {job.trigger && (
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">
-                  Trigger
-                </div>
-                <div className="flex flex-col gap-1">
-                  <Badge variant="outline" className="w-fit">
-                    {job.trigger.type}
-                  </Badge>
-                  {job.trigger.reason && (
-                    <div className="text-sm text-muted-foreground italic">
-                      {job.trigger.reason}
+                  <div className="font-medium">{route.name}</div>
+                  {route.url && (
+                    <div className="break-all font-mono text-xs text-muted-foreground">
+                      {route.url}
+                    </div>
+                  )}
+                  {route.modelId && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                      {route.modelId && (
+                        <span>
+                          <span className="text-muted-foreground">
+                            Model:
+                          </span>{" "}
+                          <span className="font-mono">{route.modelId}</span>
+                        </span>
+                      )}
+                      {route.runtimeProvenanceSource && (
+                        <Badge variant="outline" className="font-normal">
+                          {route.runtimeProvenanceSource ===
+                              "historical_backfill_0069"
+                            ? "historical backfill"
+                            : "verified at admission"}
+                        </Badge>
+                      )}
                     </div>
                   )}
                 </div>
+              )
+              : null;
+          })()}
+          {job.trigger && (
+            <div className="sm:col-span-2">
+              <div className="text-sm text-muted-foreground mb-1">
+                Trigger
               </div>
-            )}
-            {job.result && (
-              <>
-                {typeof job.result === "object"
-                  ? (
-                    // Artifacts have their own structured section below.
-                    <FieldDisplay
-                      fields={flattenNestedFields(job.result).filter(([key]) =>
-                        key !== "artifacts"
-                      )}
-                    />
-                  )
-                  : <div className="font-medium">{String(job.result)}</div>}
-
-                {job.type === "summarization" && job.result?.objectId && (
-                  <Link to={`/objects/${job.result.objectId}`}>
-                    <Button className="mt-4">
-                      Go to Conversation
-                    </Button>
-                  </Link>
+              <div className="flex flex-col gap-1">
+                <Badge variant="outline" className="w-fit">
+                  {job.trigger.type}
+                </Badge>
+                {job.trigger.reason && (
+                  <div className="text-sm text-muted-foreground italic">
+                    {job.trigger.reason}
+                  </div>
                 )}
-              </>
-            )}
-
-            {job.failedReason && (
-              <JobErrorPanel failedReason={job.failedReason} />
-            )}
-
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Created</div>
-              <div className="text-sm">
-                {job.timestamp ? format(new Date(job.timestamp), "PPpp") : "-"}
               </div>
             </div>
-            {job.processedOn && (
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">
-                  Started Processing
-                </div>
-                <div className="text-sm">
-                  {format(new Date(job.processedOn), "PPpp")}
-                </div>
-              </div>
-            )}
-            {job.finishedOn && (
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">
-                  Finished
-                </div>
-                <div className="text-sm">
-                  {format(new Date(job.finishedOn), "PPpp")}
-                </div>
-              </div>
-            )}
-            {job.updatedOn && (
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">
-                  Last state update
-                </div>
-                <div className="text-sm">
-                  {format(new Date(job.updatedOn), "PPpp")}
-                </div>
-              </div>
-            )}
+          )}
+          {job.failedReason && (
+            <div className="sm:col-span-2 lg:col-span-4">
+              <JobErrorPanel failedReason={job.failedReason} />
+            </div>
+          )}
+
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">Created</div>
+            <div className="text-sm">
+              {job.timestamp ? format(new Date(job.timestamp), "PPpp") : "-"}
+            </div>
+          </div>
+          {job.finishedOn && (
             <div>
               <div className="text-sm text-muted-foreground mb-1">
-                Duration
+                Finished
               </div>
               <div className="text-sm">
-                {formatDuration(job.processedOn, job.finishedOn)}
+                {format(new Date(job.finishedOn), "PPpp")}
               </div>
             </div>
-          </CardContent>
-        </Card>
-
-        {job.data && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Job Data</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <FieldDisplay fields={flattenNestedFields(job.data)} />
-            </CardContent>
-          </Card>
-        )}
-      </div>
+          )}
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">
+              Duration
+            </div>
+            <div className="text-sm">
+              {formatDuration(job.processedOn, job.finishedOn)}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {job.type === "conversation_extractor" && job.modelProvenance && (
         <ModelProvenanceDetails entries={job.modelProvenance} />
@@ -1656,6 +1808,11 @@ export default function JobDetailPage() {
                   value: r.sequences_processed ?? 0,
                 },
                 {
+                  icon: Check,
+                  label: "Successful Sequences",
+                  value: r.successfulSequences ?? 0,
+                },
+                {
                   icon: Hash,
                   label: "Chunks Processed",
                   value: r.chunks_processed ?? 0,
@@ -1674,14 +1831,28 @@ export default function JobDetailPage() {
                     } chunks/min`,
                   }]
                   : []),
+                ...(r.audioSecondsProcessed != null
+                  ? [{
+                    icon: Clock as LucideIcon,
+                    label: "Audio Processed",
+                    value: `${Number(r.audioSecondsProcessed).toFixed(1)}s`,
+                  }]
+                  : []),
                 ...((r.errorCount ??
                     (Array.isArray(r.errors) ? r.errors.length : r.errors) ??
                     0) > 0
                   ? [{
                     icon: AlertTriangle as LucideIcon,
-                    label: "Errors",
+                    label: "Errors This Attempt",
                     value: r.errorCount ??
                       (Array.isArray(r.errors) ? r.errors.length : r.errors),
+                  }]
+                  : []),
+                ...((r.skippedSequences ?? 0) > 0
+                  ? [{
+                    icon: Layers as LucideIcon,
+                    label: "Skipped / Claimed",
+                    value: r.skippedSequences,
                   }]
                   : []),
               ],
@@ -1886,6 +2057,9 @@ export default function JobDetailPage() {
                     />
                   ))}
                 </div>
+                {job.type === "diarization" && (
+                  <DiarizationErrorsPanel job={job} />
+                )}
                 {job.type === "summarization" &&
                   Array.isArray(r.skips) && r.skips.length > 0 && (
                   <div>
@@ -2102,6 +2276,20 @@ export default function JobDetailPage() {
                               {chunk.promptChars != null && (
                                 <span>{chunk.promptChars} prompt chars</span>
                               )}
+                              {chunk.promptWindowCount != null && (
+                                <span>
+                                  {chunk.promptWindowCount} extraction window(s)
+                                  {chunk.maxPromptChars != null
+                                    ? ` ≤ ${chunk.maxPromptChars} chars`
+                                    : ""}
+                                </span>
+                              )}
+                              {chunk.adaptiveSplitCount > 0 && (
+                                <span>
+                                  {chunk.adaptiveSplitCount}{" "}
+                                  adaptive split(s) after truncation
+                                </span>
+                              )}
                               {chunk.responseChars != null && (
                                 <span>
                                   {chunk.responseChars} response chars
@@ -2122,6 +2310,21 @@ export default function JobDetailPage() {
                           {chunk.error && (
                             <div className="mt-2 text-xs text-red-400">
                               {chunk.error}
+                            </div>
+                          )}
+                          {Array.isArray(chunk.windows) &&
+                            chunk.windows.length > 1 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                              {chunk.windows.map((window: any) => (
+                                <Badge
+                                  key={window.index}
+                                  variant="outline"
+                                >
+                                  {window.index}: {window.promptChars} chars,
+                                  {" "}
+                                  {window.boundaryReason}
+                                </Badge>
+                              ))}
                             </div>
                           )}
                           {Array.isArray(chunk.segments) &&
@@ -2155,6 +2358,11 @@ export default function JobDetailPage() {
                                       </span>
                                     )}
                                   <div className="flex flex-wrap gap-1.5">
+                                    {seg.windowIndex != null && (
+                                      <Badge variant="outline">
+                                        window {seg.windowIndex}
+                                      </Badge>
+                                    )}
                                     <Badge
                                       variant={seg.boundaryResolved
                                         ? "secondary"
@@ -2445,115 +2653,178 @@ export default function JobDetailPage() {
           );
         })()}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Logs</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLogsLoading
-            ? <Skeleton className="h-48 w-full" />
-            : jobLogs.length === 0
-            ? <div className="text-sm text-muted-foreground">No logs yet</div>
-            : (
-              <div className="max-h-96 overflow-auto space-y-2 font-mono text-xs">
-                {jobLogs.map((log, index) => {
-                  const timestampDate = log.timestamp
-                    ? new Date(log.timestamp)
-                    : null;
-                  const timestamp =
-                    timestampDate && !isNaN(timestampDate.getTime())
-                      ? format(timestampDate, "PPpp")
-                      : "-";
-                  const isLegacyProgress = log.text.startsWith("__PROGRESS__:");
-                  const displayStream = isLegacyProgress
-                    ? "progress"
-                    : log.stream;
-                  const streamStyle = displayStream === "stderr"
-                    ? "text-red-500"
-                    : displayStream === "progress"
-                    ? "text-blue-500"
-                    : "text-muted-foreground";
-                  return (
-                    <div
-                      key={log._id ?? `${log.timestamp}-${index}`}
-                      className="flex flex-col gap-1 border-b border-border/50 pb-2 last:border-b-0"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{displayStream}</Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {timestamp}
-                        </span>
-                      </div>
-                      <div
-                        className={`whitespace-pre-wrap break-words ${streamStyle}`}
-                      >
-                        {log.text}
-                      </div>
-                    </div>
-                  );
-                })}
+      {(job.data || job.result) && (
+        <CollapsibleCard
+          title="Technical payload"
+          summary="Raw input, lifecycle timestamps, provenance IDs, and complete worker result"
+        >
+          <div className="space-y-6">
+            <div>
+              <h3 className="mb-3 text-sm font-medium">Lifecycle</h3>
+              <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <div className="text-xs text-muted-foreground">Created</div>
+                  <div>{format(new Date(job.timestamp), "PPpp")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Started</div>
+                  <div>
+                    {job.processedOn
+                      ? format(new Date(job.processedOn), "PPpp")
+                      : "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Updated</div>
+                  <div>
+                    {job.updatedOn
+                      ? format(new Date(job.updatedOn), "PPpp")
+                      : "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Queue</div>
+                  <div>{job.queueState || "not present"}</div>
+                </div>
+              </div>
+            </div>
+            {job.data && (
+              <div>
+                <h3 className="mb-3 text-sm font-medium">Job input</h3>
+                <div className="grid gap-3 rounded-lg border bg-muted/10 p-3 sm:grid-cols-2">
+                  <FieldDisplay fields={flattenNestedFields(job.data)} />
+                </div>
               </div>
             )}
-        </CardContent>
-      </Card>
+            {job.result && (
+              <div>
+                <h3 className="mb-3 text-sm font-medium">Raw worker result</h3>
+                <div className="grid gap-3 rounded-lg border bg-muted/10 p-3 sm:grid-cols-2">
+                  {typeof job.result === "object"
+                    ? (
+                      <FieldDisplay
+                        fields={flattenNestedFields(job.result).filter(
+                          ([key]) => key !== "artifacts",
+                        )}
+                      />
+                    )
+                    : <div>{String(job.result)}</div>}
+                </div>
+              </div>
+            )}
+          </div>
+        </CollapsibleCard>
+      )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Access Logs</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isAccessLogsLoading
-            ? <Skeleton className="h-48 w-full" />
-            : accessLogs.length === 0
-            ? (
-              <div className="text-sm text-muted-foreground">
-                No access logs yet
-              </div>
-            )
-            : (
-              <div className="max-h-96 overflow-auto space-y-3">
-                {accessLogs.map((log) => {
-                  const timestampDate = log.timestamp
-                    ? new Date(log.timestamp)
-                    : null;
-                  const timestamp =
-                    timestampDate && !isNaN(timestampDate.getTime())
-                      ? format(timestampDate, "PPpp")
-                      : "-";
-                  return (
-                    <div
-                      key={log._id}
-                      className="border-b border-border/50 pb-3 last:border-b-0"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline">{log.resource}</Badge>
-                        </div>
-                        <span className="text-xs text-muted-foreground">
-                          {timestamp}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {log.actions.map((action, idx) => (
-                          <div
-                            key={idx}
-                            className="text-xs bg-muted rounded px-2 py-1"
-                          >
-                            <span className="font-mono">
-                              {action.path.join(".")}
-                            </span>
-                            <span className="mx-1">:</span>
-                            <span>{action.actions.join(", ")}</span>
-                          </div>
-                        ))}
-                      </div>
+      <CollapsibleCard
+        title="Worker logs"
+        summary={`${jobLogs.length} entr${
+          jobLogs.length === 1 ? "y" : "ies"
+        }; open for raw worker output`}
+      >
+        {isLogsLoading
+          ? <Skeleton className="h-48 w-full" />
+          : jobLogs.length === 0
+          ? <div className="text-sm text-muted-foreground">No logs yet</div>
+          : (
+            <div className="max-h-96 overflow-auto space-y-2 font-mono text-xs">
+              {jobLogs.map((log, index) => {
+                const timestampDate = log.timestamp
+                  ? new Date(log.timestamp)
+                  : null;
+                const timestamp =
+                  timestampDate && !isNaN(timestampDate.getTime())
+                    ? format(timestampDate, "PPpp")
+                    : "-";
+                const isLegacyProgress = log.text.startsWith("__PROGRESS__:");
+                const displayStream = isLegacyProgress
+                  ? "progress"
+                  : log.stream;
+                const streamStyle = displayStream === "stderr"
+                  ? "text-red-500"
+                  : displayStream === "progress"
+                  ? "text-blue-500"
+                  : "text-muted-foreground";
+                return (
+                  <div
+                    key={log._id ?? `${log.timestamp}-${index}`}
+                    className="flex flex-col gap-1 border-b border-border/50 pb-2 last:border-b-0"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">{displayStream}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {timestamp}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-        </CardContent>
-      </Card>
+                    <div
+                      className={`whitespace-pre-wrap break-words ${streamStyle}`}
+                    >
+                      {log.text}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        title="Access audit"
+        summary={`${accessLogs.length} resource access entr${
+          accessLogs.length === 1 ? "y" : "ies"
+        }; useful for debugging permissions and database operations`}
+      >
+        {isAccessLogsLoading
+          ? <Skeleton className="h-48 w-full" />
+          : accessLogs.length === 0
+          ? (
+            <div className="text-sm text-muted-foreground">
+              No access logs yet
+            </div>
+          )
+          : (
+            <div className="max-h-96 overflow-auto space-y-3">
+              {accessLogs.map((log) => {
+                const timestampDate = log.timestamp
+                  ? new Date(log.timestamp)
+                  : null;
+                const timestamp =
+                  timestampDate && !isNaN(timestampDate.getTime())
+                    ? format(timestampDate, "PPpp")
+                    : "-";
+                return (
+                  <div
+                    key={log._id}
+                    className="border-b border-border/50 pb-3 last:border-b-0"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{log.resource}</Badge>
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        {timestamp}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {log.actions.map((action, idx) => (
+                        <div
+                          key={idx}
+                          className="text-xs bg-muted rounded px-2 py-1"
+                        >
+                          <span className="font-mono">
+                            {action.path.join(".")}
+                          </span>
+                          <span className="mx-1">:</span>
+                          <span>{action.actions.join(", ")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+      </CollapsibleCard>
     </div>
   );
 }

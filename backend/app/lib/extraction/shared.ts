@@ -32,6 +32,29 @@ export interface TranscriptionInput {
   }>;
 }
 
+export const DEFAULT_EXTRACTION_MAX_PROMPT_CHARS = 32_000;
+
+export type PromptTranscriptionInput = TranscriptionInput & {
+  _id?: unknown;
+  original?: unknown;
+};
+
+export type PromptWindow<T extends PromptTranscriptionInput> = {
+  transcriptions: T[];
+  utterances: Utterance[];
+  prompt: string;
+  start: Date;
+  end: Date;
+  promptChars: number;
+  sourceKey: string;
+  boundaryReason:
+    | "initial"
+    | "source_change"
+    | "prompt_limit"
+    | "segment_limit"
+    | "adaptive_truncation";
+};
+
 export interface Segment {
   title: string;
   start: Date;
@@ -221,6 +244,253 @@ export function formatChunkAsPrompt(
     start: new Date(sorted[0].start),
     end: latest,
   };
+}
+
+function sourceKeyForTranscription(
+  transcription: PromptTranscriptionInput,
+): string {
+  return transcription.original == null
+    ? "__none__"
+    : String(transcription.original);
+}
+
+function promptWindow<T extends PromptTranscriptionInput>(
+  transcriptions: T[],
+  utterances: Utterance[],
+  sourceKey: string,
+  boundaryReason: PromptWindow<T>["boundaryReason"],
+): PromptWindow<T> {
+  const formatted = formatChunkAsPrompt(utterances);
+  return {
+    transcriptions,
+    utterances,
+    prompt: formatted.prompt,
+    start: formatted.start,
+    end: formatted.end,
+    promptChars: formatted.prompt.length,
+    sourceKey,
+    boundaryReason,
+  };
+}
+
+function partitionOversizedTranscription<T extends PromptTranscriptionInput>(
+  transcription: T,
+  utterances: Utterance[],
+  maxPromptChars: number,
+  sourceKey: string,
+): PromptWindow<T>[] {
+  const windows: PromptWindow<T>[] = [];
+  let current: Utterance[] = [];
+
+  for (const utterance of utterances) {
+    const candidate = [...current, utterance];
+    const candidateChars = formatChunkAsPrompt(candidate).prompt.length;
+
+    if (current.length > 0 && candidateChars > maxPromptChars) {
+      windows.push(
+        promptWindow(
+          [transcription],
+          current,
+          sourceKey,
+          windows.length === 0 ? "prompt_limit" : "segment_limit",
+        ),
+      );
+      current = [];
+    }
+
+    const singleChars = formatChunkAsPrompt([utterance]).prompt.length;
+    if (singleChars > maxPromptChars) {
+      throw new Error(
+        `EXTRACTION_PROMPT_UNIT_TOO_LARGE: one utterance requires ${singleChars} characters (maxPromptChars=${maxPromptChars})`,
+      );
+    }
+    current.push(utterance);
+  }
+
+  if (current.length > 0) {
+    windows.push(
+      promptWindow(
+        [transcription],
+        current,
+        sourceKey,
+        windows.length === 0 ? "prompt_limit" : "segment_limit",
+      ),
+    );
+  }
+
+  return windows;
+}
+
+/**
+ * Partition complete transcription documents into deterministic extraction
+ * windows. Source-file changes are always hard boundaries. Whole
+ * transcription documents stay together unless one document alone exceeds
+ * the cap, in which case its STT utterances are divided without modifying the
+ * canonical transcription record.
+ */
+export function partitionTranscriptionsForPrompt<
+  T extends PromptTranscriptionInput,
+>(
+  transcriptions: T[],
+  maxPromptChars = DEFAULT_EXTRACTION_MAX_PROMPT_CHARS,
+): PromptWindow<T>[] {
+  if (!Number.isFinite(maxPromptChars) || maxPromptChars <= 0) {
+    throw new Error("maxPromptChars must be a positive finite number");
+  }
+
+  const sorted = [...transcriptions].sort((a, b) => {
+    const byStart = new Date(a.start).getTime() - new Date(b.start).getTime();
+    if (byStart !== 0) return byStart;
+    return String(a._id ?? "").localeCompare(String(b._id ?? ""));
+  });
+  const windows: PromptWindow<T>[] = [];
+  let currentTranscriptions: T[] = [];
+  let currentUtterances: Utterance[] = [];
+  let currentSourceKey = "__none__";
+  let nextBoundaryReason: PromptWindow<T>["boundaryReason"] = "initial";
+
+  const flush = () => {
+    if (currentUtterances.length === 0) return;
+    windows.push(
+      promptWindow(
+        currentTranscriptions,
+        currentUtterances,
+        currentSourceKey,
+        nextBoundaryReason,
+      ),
+    );
+    currentTranscriptions = [];
+    currentUtterances = [];
+  };
+
+  for (const transcription of sorted) {
+    const utterances = transcriptionToUtterances(transcription);
+    if (utterances.length === 0) continue;
+    const sourceKey = sourceKeyForTranscription(transcription);
+
+    if (
+      currentUtterances.length > 0 && sourceKey !== currentSourceKey
+    ) {
+      flush();
+      nextBoundaryReason = "source_change";
+    }
+
+    const transcriptionChars = formatChunkAsPrompt(utterances).prompt.length;
+    if (transcriptionChars > maxPromptChars) {
+      flush();
+      windows.push(
+        ...partitionOversizedTranscription(
+          transcription,
+          utterances,
+          maxPromptChars,
+          sourceKey,
+        ),
+      );
+      nextBoundaryReason = "prompt_limit";
+      currentSourceKey = sourceKey;
+      continue;
+    }
+
+    const candidateUtterances = [...currentUtterances, ...utterances];
+    if (
+      currentUtterances.length > 0 &&
+      formatChunkAsPrompt(candidateUtterances).prompt.length > maxPromptChars
+    ) {
+      flush();
+      nextBoundaryReason = "prompt_limit";
+    }
+
+    if (currentUtterances.length === 0) currentSourceKey = sourceKey;
+    currentTranscriptions.push(transcription);
+    currentUtterances.push(...utterances);
+  }
+
+  flush();
+  return windows;
+}
+
+/**
+ * Bisect an already materialized prompt window after the provider exhausted
+ * its output-token budget. This operates on the window's actual utterances,
+ * so it is safe even when the window is already a subset of one oversized
+ * transcription. The split point minimizes the larger child prompt.
+ */
+export function bisectPromptWindow<T extends PromptTranscriptionInput>(
+  window: PromptWindow<T>,
+): [PromptWindow<T>, PromptWindow<T>] | null {
+  if (window.utterances.length === 1) {
+    const utterance = window.utterances[0];
+    const text = utterance.text.trim();
+    if (text.length < 2) return null;
+
+    const midpoint = Math.floor(text.length / 2);
+    const before = text.lastIndexOf(" ", midpoint);
+    const after = text.indexOf(" ", midpoint);
+    const candidates = [before, after].filter((index) =>
+      index > 0 && index < text.length - 1
+    );
+    const splitIndex = candidates.length > 0
+      ? candidates.reduce((best, index) =>
+        Math.abs(index - midpoint) < Math.abs(best - midpoint) ? index : best
+      )
+      : midpoint;
+    const leftText = text.slice(0, splitIndex).trimEnd();
+    const rightText = text.slice(splitIndex).trimStart();
+    if (!leftText || !rightText) return null;
+
+    const startMs = utterance.start.getTime();
+    const endMs = utterance.end.getTime();
+    const boundary = new Date(
+      startMs + (endMs - startMs) * (splitIndex / text.length),
+    );
+    return [
+      promptWindow(
+        window.transcriptions,
+        [{ ...utterance, end: boundary, text: leftText }],
+        window.sourceKey,
+        window.boundaryReason,
+      ),
+      promptWindow(
+        window.transcriptions,
+        [{ ...utterance, start: boundary, text: rightText }],
+        window.sourceKey,
+        "adaptive_truncation",
+      ),
+    ];
+  }
+
+  if (window.utterances.length < 2) return null;
+
+  let bestIndex = 1;
+  let bestLargestChild = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < window.utterances.length; index++) {
+    const leftChars = formatChunkAsPrompt(
+      window.utterances.slice(0, index),
+    ).prompt.length;
+    const rightChars = formatChunkAsPrompt(
+      window.utterances.slice(index),
+    ).prompt.length;
+    const largestChild = Math.max(leftChars, rightChars);
+    if (largestChild < bestLargestChild) {
+      bestLargestChild = largestChild;
+      bestIndex = index;
+    }
+  }
+
+  return [
+    promptWindow(
+      window.transcriptions,
+      window.utterances.slice(0, bestIndex),
+      window.sourceKey,
+      window.boundaryReason,
+    ),
+    promptWindow(
+      window.transcriptions,
+      window.utterances.slice(bestIndex),
+      window.sourceKey,
+      "adaptive_truncation",
+    ),
+  ];
 }
 
 /**

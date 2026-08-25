@@ -160,6 +160,7 @@ Groups transcriptions into logical conversation chunks for summarization and pro
 - `end`: Date - End timestamp
 - `transcriptionIds`: Array[ObjectId] - References to `transcriptions._id`
 - `totalTextLength`: Number - Total character count
+- `promptChars`: Number - Exact formatted transcript size for size-bounded chunks
 - `transcriptionCount`: Number - Number of transcriptions
 - `state`: String - State ("open", "ready", "processing", "completed", "error", "empty")
 - `lastActivityAt`: Date - Last time a transcription was added
@@ -167,6 +168,7 @@ Groups transcriptions into logical conversation chunks for summarization and pro
 - `summaryPromptId`: ObjectId - Reference to `prompts._id` used for summarization
 - `createdAt`: Date
 - `updatedAt`: Date
+- `splitReason`: String - Boundary that finalized the chunk (`source_change`, `prompt_limit`, or `gap`), when applicable
 
 **Indexes:**
 - `state_last_activity`: Composite index for finding stale open chunks

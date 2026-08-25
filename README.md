@@ -76,8 +76,9 @@ your own words.
   advanced controls.
 - Persistent manual snapshots for exact backlog, incremental run history, and
   Timeline integrity; refresh failures retain the last successful values.
-- Durable, pausable Timeline density rebuild campaigns with bounded batches,
-  progress, missing-successor recovery, and explicit final verification.
+- Durable, pausable Timeline density repair campaigns for exact affected dates
+  or a selected period, with bounded batches, progress, missing-successor
+  recovery, and explicit final verification.
 - Lightweight live diarization campaign, five-minute rolling throughput, queue,
   and dynamic route-capacity status, with corpus-wide pipeline and identity
   counts available through explicit calculate buttons instead of dashboard
@@ -177,9 +178,9 @@ checker reports only key names and line numbers; it never prints values:
 
 The main stack, standalone diarizator, and remote GPU stack intentionally use
 separate templates. `--all` checks `.env`, `diarizator/.env`, and `gpu/.env`
-when present; an absent optional deployment is reported as not configured.
-Use `--fix --prune-undocumented` only after reviewing the listed key names: it
-backs up the selected file and removes keys that its template no longer owns.
+when present; an absent optional deployment is reported as not configured. Use
+`--fix --prune-undocumented` only after reviewing the listed key names: it backs
+up the selected file and removes keys that its template no longer owns.
 
 > **Note**: For local development, Mycelia uses a self-signed certificate. You
 > may need to click "Advanced" and "Proceed" in your browser. See
@@ -440,8 +441,8 @@ To change it, for example to `large-v3-turbo`:
    In the repository's `gpu/docker-compose.portainer.yml`, the two service
    entries use `${ASR_MODEL:-large-v3-turbo}`. They are references to one
    Portainer variable, not three independent settings, so normally you change
-   only the `ASR_MODEL` value under **Environment variables**.
-   This compose is intentionally STT-only. Remote diarization is deployed from
+   only the `ASR_MODEL` value under **Environment variables**. This compose is
+   intentionally STT-only. Remote diarization is deployed from
    `diarizator/compose.portainer.yml`, which is the canonical one-to-six process
    pool definition.
 3. Choose **Update the stack** and confirm the redeploy. Both

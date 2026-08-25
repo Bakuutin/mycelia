@@ -1,6 +1,6 @@
 # Conversation extraction: verification and historical backfill
 
-> **Note (2026-08):** the legacy two-call `conversation_extractor` worker was removed; `conversation_extractor_merged` (one LLM call per chunk) is the only extractor. Job-launch examples below apply to it; chunk states and verification steps are unchanged.
+> **Note (2026-08):** the legacy two-call `conversation_extractor` worker was removed; `conversation_extractor_merged` is the only extractor. It makes one composite LLM call per size-bounded extraction window; normal chunks still use one call. Job-launch examples below apply to it.
 
 This runbook covers `conversation_extractor` v2: what it creates, how to verify
 the result, and how to safely rebuild one historical chunk whose metadata is
@@ -38,6 +38,82 @@ New jobs expose these totals in both Job List and Job Detail, including zeros:
 | `relationshipsCreated` | Entity links successfully stored |
 | `relationshipErrors` | Entity links that failed |
 | `artifacts` | Per-conversation title, emoji, entity names, agreement flag, and link counts |
+| `llmCalls` | Number of size-bounded extraction-window calls |
+| `singleCallPerChunk` | `true` when every processed chunk fit one window |
+
+## Size-bounded extraction
+
+Conversation extraction keeps `maxTokens=8192` by default and limits the
+transcript sent to one LLM call with `maxPromptChars=32000`.
+
+- `conversation_chunk_creator` separates source files and finalizes new chunks
+  before appending a transcription that would exceed the prompt cap.
+- `conversation_extractor_merged` applies the same cap again. This safely
+  handles legacy chunks and a single transcription that is larger than the
+  cap by dividing it at STT utterance boundaries.
+- If a bounded call still returns `finish_reason=length`, the worker bisects
+  that exact window by utterance and retries the smaller children. A single
+  long utterance can be divided by text with an interpolated timestamp. The
+  adaptive path is capped at eight splits per chunk, so it cannot retry
+  forever if a model loops independently of input size.
+- All LLM windows for a chunk must finish before conversation objects are
+  written. A failed window therefore leaves no partial new extraction.
+- Job Detail reports the original prompt size, window count, per-window size,
+  boundary reason, adaptive split count, and LLM-call count. `llmCalls`
+  includes truncated attempts that were successfully recovered by splitting.
+
+`LLM_TRUNCATED_RESPONSE` only reaches the failed job after the window cannot be
+divided further or the eight-split safety limit is exhausted. In that case,
+lower `maxPromptChars` for the recovery run and inspect the adaptive diagnostics.
+Increase `maxTokens` only when the expected structured output itself is known
+to need more than 8192 tokens.
+
+## Parallelism and provider capacity
+
+Automatic extraction uses one atomically claimed conversation chunk per job.
+When pending work exists, the trigger fills the worker's configured runtime
+concurrency instead of forcing a single continuation chain. Concurrent jobs
+therefore claim different chunks; a sibling cannot select the same newest
+chunk and turn the second job into a `not_claimed` no-op.
+
+Worker concurrency and inference-route concurrency are separate limits:
+
+- **Jobs → Workers → Advanced columns → Conversation extractor →
+  Concurrency** controls the maximum number of extractor jobs in BullMQ.
+- **Settings → Inference → LLM profiles → Concurrency** controls each
+  provider's in-flight completion budget. The shared LLM limiter applies this
+  independently to a one-slot local server, OpenRouter, and any other enabled
+  profile, and can route unpinned alias requests across compatible profiles.
+- Effective inference parallelism cannot exceed either limit. A local profile
+  must advertise its real server slot count; configuring four requests against
+  a server whose `/slots` endpoint reports one only creates an internal queue.
+- The current worker range is 1–8. Keep it at 1 for a one-slot local server;
+  raise it deliberately for an OpenRouter profile whose tested concurrency is
+  higher. Provider limits above 8 remain useful to other LLM consumers, but do
+  not make this extractor run more than eight jobs at once.
+
+Do not add chunks to one extractor job merely to simulate parallelism: chunks
+inside a job are processed sequentially. Keep `limit=1` for automatic work and
+use runtime concurrency for parallel providers.
+
+### Deferred RTX 4090 two-slot experiment
+
+No inference-server change is required for the queue fix above. The following
+server work is intentionally deferred:
+
+1. Record the one-slot baseline from `/props`, `/slots`, `/metrics`, GPU VRAM,
+   and 50–100 representative extractor jobs.
+2. Prepare a reversible server configuration with two slots and about 32k
+   context per slot (initial llama.cpp candidate: `--parallel 2 --ctx-size
+   65536 --cont-batching --flash-attn on`).
+3. Restart only the inference service, confirm `/slots` reports two slots, and
+   run a synthetic non-private load check before any transcript pilot.
+4. If VRAM remains safe, run a confirmed 50–100 chunk pilot and compare
+   chunks/min, p50/p90 latency, deferred requests, OOMs, extraction errors, and
+   summary backlog with the saved baseline.
+5. Only after that validation, change the local LLM profile and extractor
+   worker concurrency from 1 to 2. Roll back both values and the server flags
+   together if aggregate throughput does not improve materially.
 
 Legacy jobs that predate these counters say `Legacy: unavailable`; do not
 interpret an unavailable counter as zero. The corresponding conversation

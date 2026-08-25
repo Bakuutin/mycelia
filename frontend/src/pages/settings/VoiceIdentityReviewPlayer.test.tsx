@@ -45,6 +45,7 @@ function renderPlayer(overrides: Record<string, unknown> = {}) {
       { id: "66b000000000000000000010", name: "Sky" },
       { id: "66b000000000000000000020", name: "Belka" },
       { id: "66b000000000000000000030", name: "david bowie" },
+      { id: "66b000000000000000000040", name: "Andrew" },
     ],
     position: 1,
     remaining: 12,
@@ -61,6 +62,7 @@ function renderPlayer(overrides: Record<string, unknown> = {}) {
     alternateProfiles: [
       { id: "66b000000000000000000020", name: "Belka" },
       { id: "66b000000000000000000030", name: "david bowie" },
+      { id: "66b000000000000000000040", name: "Andrew" },
     ],
     onDecision: vi.fn(),
     onAssignProfile: vi.fn(),
@@ -154,6 +156,16 @@ describe("VoiceIdentityReviewPlayer", () => {
     expect(props.onDecision).not.toHaveBeenCalled();
   });
 
+  it("does not capture shortcuts behind another open review editor", () => {
+    const { props } = renderPlayer({ shortcutsEnabled: false });
+
+    document.body.focus();
+    fireEvent.keyDown(window, { key: "1" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(props.onAssignProfile).not.toHaveBeenCalled();
+    expect(props.onDecision).not.toHaveBeenCalled();
+  });
+
   it("keeps Skip available while editing and exposes a separate cancel action", () => {
     const { props } = renderPlayer({ editingLabel: "Andrew Kislov" });
 
@@ -166,24 +178,35 @@ describe("VoiceIdentityReviewPlayer", () => {
   it("assigns visible alternate profiles by button or numbered shortcut", () => {
     const { props } = renderPlayer({ canEdit: true });
 
+    const firstQuickProfile = screen.getByRole("button", { name: /1 Belka/ });
+    expect(firstQuickProfile).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /david bowie/ }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Andrew/ })).toBeInTheDocument();
+
+    fireEvent.click(firstQuickProfile);
+    expect(props.onAssignProfile).toHaveBeenNthCalledWith(
+      1,
+      "66b000000000000000000020",
+    );
+
     fireEvent.change(screen.getByLabelText("Assign another profile"), {
       target: { value: "66b000000000000000000030" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Assign profile" }));
     expect(props.onAssignProfile).toHaveBeenNthCalledWith(
-      1,
+      2,
       "66b000000000000000000030",
     );
 
-    document.body.focus();
+    screen.getByRole("button", { name: "Assign profile" }).focus();
     fireEvent.keyDown(window, { key: "1" });
     expect(props.onAssignProfile).toHaveBeenNthCalledWith(
-      2,
+      3,
       "66b000000000000000000020",
     );
-    fireEvent.keyDown(window, { key: "e" });
-    expect(props.onEdit).toHaveBeenCalledOnce();
     expect(getReviewShortcut("2")).toEqual({ type: "profile", index: 1 });
+    expect(getReviewShortcut("4")).toBeNull();
   });
 
   it("creates and assigns a new speaker without requiring an existing profile", async () => {

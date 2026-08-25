@@ -69,8 +69,8 @@ statistics, missing required keys, optional keys, undocumented keys, duplicate
 definitions, blank values, malformed assignments, and formatting issues. The
 command exits non-zero when the files need attention, so `--json` can be used in
 CI or other automation. `--all` treats the root contract as required and the
-standalone diarizator/GPU deployments as optional; missing optional `.env`
-files are reported without failing the audit.
+standalone diarizator/GPU deployments as optional; missing optional `.env` files
+are reported without failing the audit.
 
 Apply only safe automatic repairs with:
 
@@ -229,6 +229,12 @@ links that interval to Timeline without querying `audio_chunks` again.
 Older/manual jobs fall back to their requested `data.start`/`data.end`; a job
 with neither field has no range rendered rather than an inferred one.
 
+The Job Detail page keeps a batch's recorded diarization errors as historical
+evidence, but resolves each affected range against current `audio_chunks` so it
+can distinguish recovered retries, pending retries, and exhausted failures.
+Raw job payloads, worker logs, and access-audit rows remain available in closed
+technical sections instead of expanding the page by default.
+
 Deploy changes to this path by pausing only the diarization worker, draining its
 active jobs, recreating `backend` and `python-worker`, and then resuming the
 same worker. Do not clear waiting or delayed jobs, and do not restart MongoDB or
@@ -240,13 +246,13 @@ batches leave no application cursor registered in the backend, and expired
 Archive-wide `diarization` jobs in `missing` mode use route affinity as a
 preference, not a hard constraint. A continuation keeps its previous route when
 that slot is free, otherwise admission may select another healthy route only
-when `modelId`, `modelVersion`, and `embeddingSpaceId` match exactly. Enrollment,
-profile re-enrollment, targeted diarization, and generation builds retain hard
-route affinity. Every newly routed job snapshots this runtime contract from the
-route readiness payload, and the Python worker checks the inference response
-again before it persists diarizations or profile embeddings. Legacy or unknown
-fingerprints never qualify for compatible fallback.
-On every diarizator terminal event, the backend first drains persisted work in
+when `modelId`, `modelVersion`, and `embeddingSpaceId` match exactly.
+Enrollment, profile re-enrollment, targeted diarization, and generation builds
+retain hard route affinity. Every newly routed job snapshots this runtime
+contract from the route readiness payload, and the Python worker checks the
+inference response again before it persists diarizations or profile embeddings.
+Legacy or unknown fingerprints never qualify for compatible fallback. On every
+diarizator terminal event, the backend first drains persisted work in
 priority/FIFO order and then immediately fills any remaining provider capacity
 with archive-wide missing work. This refill uses live BullMQ reservations and
 healthy route slots; Mongo waiting rows are history/admission state and must not
@@ -272,35 +278,62 @@ provider capacity and BullMQ worker concurrency.
 Jobs → Workers uses the backend worker catalog shared with Settings. Worker
 descriptions, availability, queue state, and history stay visible by default;
 Concurrency, Batch, and Schedule are available through **Advanced columns**.
-Diarization route health and slots stay in External services & routing, so
-there is no second live-slots dashboard.
+Rows are grouped as **Pipeline**, **Maintenance**, and **Diagnostics**. In each
+external-service card, the worker action reads **Resume workers** whenever any
+routed worker is paused; otherwise it reads **Pause workers**. Diarization route
+health and slots stay in External services & routing, so there is no second
+live-slots dashboard.
+
+Conversation extraction fills its configured runtime concurrency with atomically
+distinct chunk claims. Provider concurrency remains a separate inference limit:
+keep a one-slot local LLM profile and the extractor worker at 1, while a tested
+OpenRouter profile may use a higher worker value (currently up to 8). The
+provider-specific tuning contract and the deferred RTX 4090 two-slot experiment
+are documented in `docs/CONVERSATION_EXTRACTION_TROUBLESHOOTING.md`.
 
 #### Timeline density rebuild recovery
 
-Timeline density rebuilds affect only derived audio/transcription histogram
-buckets. They never rewrite raw audio, transcript text, terminal transcription
-markers, or speaker identity. Speaker identity reads active speaker segments
-directly, so diarizations are not part of histogram audit totals or rebuilds.
+Timeline density repairs affect only derived audio/transcription density buckets
+(the bars historically called histograms). They never rewrite raw audio,
+transcript text, transcription completion markers, or speaker identity. Speaker
+identity reads active speaker segments directly, so diarizations are not part of
+density totals or repairs.
 
-A full rebuild creates a durable `timeline_rebuild_campaigns` row before its
-first 31-day batch. `histRecalculation` runs at concurrency one and reports its
-delete, 5-minute, hourly, daily, and weekly phases. The backend reconciles an
-explicitly started, unpaused campaign every 30 seconds and restores a missing
-successor. A legacy campaign remains `paused_legacy` until an operator confirms
-**Resume**; page load or deployment never starts it. Pause/Resume and campaign
-links are available from Jobs, and the job list filters by `campaignId`.
+The manual exact check compares UTC-day raw counts with daily density totals. If
+they differ, Jobs proposes only the mismatched days, merges adjacent days, and
+starts one sparse durable campaign for those ranges. A known continuous period
+can also be selected manually. Rebuilding all history is reserved for a density
+schema change or widespread corruption that cannot be localized. New imports do
+not automatically start `histRecalculation`; run **Check now** after a large or
+historical import.
+
+Every repair creates a durable `timeline_rebuild_campaigns` row before its first
+bounded job. Long continuous periods split into 31-day jobs; disjoint affected
+dates remain disjoint. `histRecalculation` runs at concurrency one and reports
+its delete, 5-minute, hourly, daily, and weekly phases. The backend reconciles
+an explicitly started, unpaused campaign every 30 seconds and restores the next
+selected range. A legacy campaign remains `paused_legacy` until an operator
+confirms **Resume**; page load or deployment never starts it. Pause/Resume and
+campaign links are available from Jobs, and the job list filters by
+`campaignId`.
 
 Campaign completion requires a manual exact Timeline audit after all planned
-batches finish. Jobs -> Timeline integrity & recovery shows **Run exact
+batches finish. Jobs -> Timeline density integrity shows **Run exact
 verification** while the campaign is `verifying`, and polls every two seconds
 while the audit runs. This manual audit scans date-bearing raw rows for exact
 counts; maintained collection metadata is used only for fast campaign range
 planning because it can lag behind recent bulk ingestion. Matching source and
-histogram totals closes the campaign as `completed`; remaining differences
-close it as `completed_with_errors`, release the rebuild control, and require a
-new bounded campaign over the current source range. Stale buckets use **Update
-stale ranges**.
-Terminal-marker repair is a separate Preview then Apply workflow.
+density totals closes the campaign as `completed`; remaining differences close
+it as `completed_with_errors`, release the rebuild control, and require a new
+bounded campaign over the affected dates. Stale buckets use **Update stale
+ranges**. Transcription completion-marker repair is separate: **Check markers**
+is read-only, and **Repair markers** is needed only when the check finds chunks
+whose completed/empty sequence still has `transcribed_at=null`. It never creates
+or changes transcript text.
+
+The Jobs summary keeps Timeline density integrity in a compact two-row card
+above **Work ready now**. **Details** opens the full recovery controls in a
+centered modal on the same page.
 
 Recent source-file metadata loads independently once and is ordered by
 `source_files.updatedAt`, `start`, and `_id`; it is not described as downstream
@@ -363,10 +396,10 @@ Keep live service availability separate from corpus-wide statistics:
 
 Migration `0056_pipeline_dashboard_indexes.ts` adds the partial Jobs index used
 for recent completed transcription batch history and the compound Map index for
-conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds
-the dashboard cursor/rollup indexes, durable snapshot and campaign collections,
-the unique campaign/batch constraint, and the partial entity-typing marker
-index. Apply pending migrations before relying on the new query hints.
+conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds the
+dashboard cursor/rollup indexes, durable snapshot and campaign collections, the
+unique campaign/batch constraint, and the partial entity-typing marker index.
+Apply pending migrations before relying on the new query hints.
 
 Mongo's Compose health check is an exec-form, one-row native `mongostat` probe
 every 30 seconds, with 1.5-second connection/server/socket deadlines and a
@@ -823,6 +856,15 @@ the automatic cursor to the full history:
    active claim, delayed retry, or terminal failure. Repeating automatic jobs
    with `processed:0` while eligible pending work remains is a contract
    violation, not an idle state.
+
+Conversation extraction has a second safety boundary in addition to queue
+retries. New conversation chunks are finalized at source-file changes or before
+their formatted transcript would exceed `maxPromptChars` (32,000 by default),
+and the merged extractor partitions legacy oversized chunks into the same
+bounded windows before inference. If a bounded window still ends with
+`finish_reason=length`, it is adaptively bisected by utterance and retried, up
+to eight splits per chunk. Do not raise the default `maxTokens=8192` solely for
+a large source chunk; inspect Job Detail window diagnostics first.
 
 ### FFmpeg Import Errors
 

@@ -28,6 +28,21 @@ export type CalibrationThresholds = {
   negativeDecisionMode: NegativeDecisionMode;
 };
 
+export type CalibrationDecision = "identified" | "rejected" | "uncertain";
+
+export function classifyCalibrationScore(
+  score: number,
+  positiveThreshold: number,
+  negativeThreshold: number,
+  negativeDecisionMode: NegativeDecisionMode = "calibrated",
+): CalibrationDecision {
+  if (score >= positiveThreshold) return "identified";
+  if (
+    negativeDecisionMode === "calibrated" && score <= negativeThreshold
+  ) return "rejected";
+  return "uncertain";
+}
+
 export type PositiveThresholdSelection = {
   thresholds: CalibrationThresholds | null;
   recommendedPositiveThreshold: number | null;
@@ -63,13 +78,16 @@ export function evaluateCalibration(
   let falseNegative = 0;
   let uncertain = 0;
   for (const example of examples) {
-    if (example.score >= positiveThreshold) {
+    const decision = classifyCalibrationScore(
+      example.score,
+      positiveThreshold,
+      negativeThreshold,
+      negativeDecisionMode,
+    );
+    if (decision === "identified") {
       if (example.label === "positive") truePositive += 1;
       else falsePositive += 1;
-    } else if (
-      negativeDecisionMode === "calibrated" &&
-      example.score <= negativeThreshold
-    ) {
+    } else if (decision === "rejected") {
       if (example.label === "negative") trueNegative += 1;
       else falseNegative += 1;
     } else {

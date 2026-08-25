@@ -41,6 +41,26 @@ export type JobInfo = {
     queuedAt?: string;
     admittedAt?: string;
   };
+  diarizationErrorOutcomes?: Array<{
+    index: number;
+    state:
+      | "recovered"
+      | "retrying"
+      | "needs_attention"
+      | "pending"
+      | "unknown";
+    matchedChunks: number;
+    diarizedChunks: number;
+    recoveredAt?: string;
+    currentFailure?: {
+      status?: string;
+      category?: string;
+      message?: string;
+      route?: string;
+      attempt?: number;
+      retryAt?: string;
+    };
+  }>;
   modelProvenance?: Array<{
     stage: string;
     requestedModel?: string;

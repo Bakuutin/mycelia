@@ -53,7 +53,7 @@ describe("TimelineRecoveryStatus", () => {
     );
 
     expect(
-      await screen.findByText(/Full histogram rebuild is recommended/),
+      await screen.findByText(/Timeline density repair is recommended/),
     ).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "Recovery controls" }).getAttribute(

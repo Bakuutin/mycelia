@@ -8,7 +8,7 @@ describe("parseJobError truncation", () => {
     );
     expect(parsed?.label).toBe("Output truncated");
     expect(parsed?.detail).toContain("maxTokens=300");
-    expect(parsed?.detail).toContain("Raise the worker's maxTokens");
+    expect(parsed?.detail).toContain("lower maxPromptChars");
   });
 
   it("classifies truncation without a recorded cap", () => {

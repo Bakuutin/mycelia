@@ -241,12 +241,31 @@ type CalibrationPreview = {
   } | null;
   calibrationMetrics: CalibrationMetrics | null;
   validationMetrics: CalibrationMetrics | null;
+  validationIssues?: {
+    falsePositive: CalibrationIssue[];
+    missedPositive: CalibrationIssue[];
+  };
   targetPrecision?: number;
   negativeDecisionMode?: "calibrated" | "uncertain_only";
   recommendedPositiveThreshold?: number | null;
   positiveThresholdSource?: "automatic" | "operator_stricter";
   blockers: string[];
   canValidate: boolean;
+};
+
+type CalibrationIssue = {
+  kind: "false_positive" | "missed_positive";
+  segmentId: string;
+  recordingId: string;
+  decisionId: string | null;
+  sessionId: string | null;
+  assignedProfileId: string | null;
+  excludedProfileIds: string[];
+  updatedAt: Date | string | null;
+  label: "positive" | "negative";
+  score: number;
+  decision: "identified" | "rejected" | "uncertain";
+  segment: VoiceIdentityReviewSegment;
 };
 
 type CalibrationMetrics = {
@@ -446,6 +465,9 @@ export default function VoiceIdentityReviewPage() {
     useState(0);
   const [newWindowSize, setNewWindowSize] = useState<5 | 10 | 20>(10);
   const [showReviewHistory, setShowReviewHistory] = useState(false);
+  const [historyRecordingId, setHistoryRecordingId] = useState<string | null>(
+    null,
+  );
   const [historyFilter, setHistoryFilter] = useState<
     "all" | "assigned" | "skipped"
   >("all");
@@ -455,6 +477,19 @@ export default function VoiceIdentityReviewPage() {
   const [historyEditingItem, setHistoryEditingItem] = useState<
     ReviewHistoryItem | null
   >(null);
+  const [showCalibrationProblems, setShowCalibrationProblems] = useState(
+    false,
+  );
+  const [calibrationProblemKind, setCalibrationProblemKind] = useState<
+    "falsePositive" | "missedPositive"
+  >("falsePositive");
+  const [calibrationProblemRecordingId, setCalibrationProblemRecordingId] =
+    useState<string | null>(null);
+  const [calibrationEditingItem, setCalibrationEditingItem] = useState<
+    ReviewHistoryItem | null
+  >(null);
+  const [calibrationEditingPlayOnMount, setCalibrationEditingPlayOnMount] =
+    useState(false);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [autoPlayNext, setAutoPlayNext] = useState(() => {
@@ -469,6 +504,8 @@ export default function VoiceIdentityReviewPage() {
     readRecentVoiceProfileIds,
   );
   const calibrationSectionRef = useRef<HTMLDivElement>(null);
+  const reviewSetupRef = useRef<HTMLDivElement>(null);
+  const reviewHistoryRef = useRef<HTMLDivElement>(null);
   const automaticWindowAdvanceRef = useRef(false);
   const timelineSourceAppliedRef = useRef("");
 
@@ -648,6 +685,7 @@ export default function VoiceIdentityReviewPage() {
   const reviewHistoryQueryKey = [
     "speaker-review-history",
     reviewProfileId,
+    showReviewHistory ? "all" : "latest",
   ] as const;
   const {
     data: reviewHistory,
@@ -655,12 +693,12 @@ export default function VoiceIdentityReviewPage() {
     isFetching: reviewHistoryFetching,
   } = useQuery<ReviewHistoryResponse>({
     queryKey: reviewHistoryQueryKey,
-    enabled: Boolean(reviewProfileId && showReviewHistory),
+    enabled: Boolean(reviewProfileId),
     queryFn: () =>
       callResource("speaker-segments", {
         action: "list-review-history",
         profileId: reviewProfileId,
-        limit: 200,
+        limit: showReviewHistory ? 200 : 1,
       }) as Promise<ReviewHistoryResponse>,
   });
 
@@ -959,6 +997,8 @@ export default function VoiceIdentityReviewPage() {
     onSuccess: (response) => {
       queryClient.setQueryData(reviewHistoryQueryKey, response);
       setHistoryEditingItem(null);
+      setCalibrationEditingItem(null);
+      setCalibrationEditingPlayOnMount(false);
       void refetch();
       void refetchIdentityStatus();
       void queryClient.invalidateQueries({
@@ -1377,7 +1417,7 @@ export default function VoiceIdentityReviewPage() {
     : !labelGateReady
     ? "Need labels"
     : calibrationPreview?.blockers.length
-    ? "Split blocked"
+    ? "Check needs attention"
     : "Minimum reached";
   const hasWeakRecordingDiversity = labelGateReady &&
     calibrationLabelCounts.recordings <= 3;
@@ -1412,9 +1452,15 @@ export default function VoiceIdentityReviewPage() {
     if (sessionItemFilter === "short") return durationForItem(item) < 1;
     return item.status === sessionItemFilter;
   });
-  const visibleReviewHistory = (reviewHistory?.items ?? []).filter((item) =>
-    historyFilter === "all" || item.outcome === historyFilter
-  );
+  const visibleReviewHistory = (reviewHistory?.items ?? []).filter((item) => {
+    const matchesOutcome = historyFilter === "all" ||
+      item.outcome === historyFilter;
+    const originalId = normalizeObjectId(
+      item.segment.original_id ?? item.segment.original,
+    );
+    return matchesOutcome &&
+      (!historyRecordingId || originalId === historyRecordingId);
+  });
   const reviewHistoryLabel = (item: ReviewHistoryItem) => {
     if (item.outcome === "skipped") return "Skipped / noise";
     if (item.assignedProfileName) return item.assignedProfileName;
@@ -1422,6 +1468,69 @@ export default function VoiceIdentityReviewPage() {
       return `Not ${reviewProfile?.name ?? "target"}`;
     }
     return "Manual label";
+  };
+  const calibrationIssueToHistoryItem = (
+    issue: CalibrationIssue,
+  ): ReviewHistoryItem => ({
+    decisionId: issue.decisionId ?? "",
+    outcome: "assigned",
+    assignedProfileId: issue.assignedProfileId,
+    assignedProfileName: issue.assignedProfileId
+      ? allProfileOptions.find((profile) =>
+        profile.id === issue.assignedProfileId
+      )?.name ?? "Other speaker"
+      : null,
+    excludedProfileIds: issue.excludedProfileIds,
+    excludedProfileNames: issue.excludedProfileIds.map((id) =>
+      allProfileOptions.find((profile) => profile.id === id)?.name ?? id
+    ),
+    updatedAt: issue.updatedAt,
+    sessionId: issue.sessionId,
+    sessionName: "Calibration check",
+    sessionStatus: null,
+    segment: issue.segment,
+  });
+  const latestReviewHistoryItem = reviewHistory?.items?.[0] ?? null;
+  const olderVisibleReviewHistory = visibleReviewHistory.filter((item) =>
+    item.decisionId !== latestReviewHistoryItem?.decisionId
+  );
+  const falsePositiveIssues = calibrationPreview?.validationIssues
+    ?.falsePositive ?? [];
+  const missedPositiveIssues = calibrationPreview?.validationIssues
+    ?.missedPositive ?? [];
+  const calibrationIssuesForKind = calibrationProblemKind === "falsePositive"
+    ? falsePositiveIssues
+    : missedPositiveIssues;
+  const visibleCalibrationIssues = calibrationIssuesForKind.filter((issue) =>
+    !calibrationProblemRecordingId ||
+    issue.recordingId === calibrationProblemRecordingId
+  );
+  const calibrationIssueCountsByRecording = [
+    ...falsePositiveIssues,
+    ...missedPositiveIssues,
+  ].reduce((counts, issue) => {
+    const current = counts.get(issue.recordingId) ?? {
+      falsePositive: 0,
+      missedPositive: 0,
+    };
+    current[
+      issue.kind === "false_positive" ? "falsePositive" : "missedPositive"
+    ] += 1;
+    counts.set(issue.recordingId, current);
+    return counts;
+  }, new Map<string, { falsePositive: number; missedPositive: number }>());
+  const calibrationEditingIndex = calibrationEditingItem
+    ? visibleCalibrationIssues.findIndex((issue) =>
+      issue.decisionId === calibrationEditingItem.decisionId &&
+      issue.segmentId === normalizeObjectId(calibrationEditingItem.segment._id)
+    )
+    : -1;
+  const openCalibrationIssueAt = (index: number) => {
+    const issue = visibleCalibrationIssues[index];
+    if (!issue?.decisionId) return;
+    useAudioPlaybackStore.getState().stopActive();
+    setCalibrationEditingPlayOnMount(true);
+    setCalibrationEditingItem(calibrationIssueToHistoryItem(issue));
   };
   const activeId = normalizeObjectId(reviewSession?.activeSegmentId) ??
     normalizeObjectId(
@@ -1507,6 +1616,19 @@ export default function VoiceIdentityReviewPage() {
     completeSession.isPending || loadNextWindow.isPending;
   const autoAdvanceWindow =
     reviewSession?.preferences?.autoAdvanceWindow !== false;
+  const sessionAnsweredCount = (reviewSession?.reviewedCount ?? 0) +
+    (reviewSession?.skippedCount ?? 0);
+  const sessionEstimatedTotal = Math.max(
+    sessionAnsweredCount,
+    reviewSession?.backlogEstimate ?? 0,
+  );
+  const sessionRemainingEstimate = Math.max(
+    0,
+    sessionEstimatedTotal - sessionAnsweredCount,
+  );
+  const sessionProgressPercent = sessionEstimatedTotal > 0
+    ? Math.min(100, sessionAnsweredCount / sessionEstimatedTotal * 100)
+    : 0;
   const pendingInWindow = windowItems.some((item) => item.status === "pending");
   useEffect(() => {
     if (
@@ -1542,6 +1664,27 @@ export default function VoiceIdentityReviewPage() {
         preferences: { autoAdvanceWindow: enabled },
       });
     }
+  };
+  const openReviewSetup = () => {
+    setShowNewSession(true);
+    globalThis.requestAnimationFrame(() => {
+      reviewSetupRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
+  const openHistoryForRecording = (recordingId: string) => {
+    setHistoryRecordingId(recordingId);
+    setShowReviewHistory(true);
+    setHistoryEditingItem(null);
+    useAudioPlaybackStore.getState().stopActive();
+    globalThis.requestAnimationFrame(() => {
+      reviewHistoryRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   };
   const moveReview = (direction: -1 | 1) => {
     if (!reviewSession || reviewPending || windowItems.length === 0) return;
@@ -1676,8 +1819,7 @@ export default function VoiceIdentityReviewPage() {
         <div>
           <h2 className="text-2xl font-bold">Voice Identity review</h2>
           <p className="text-muted-foreground">
-            Review the uncertain band first, then lock thresholds on separate
-            validation recordings.
+            Label voices → check accuracy → classify existing recordings.
           </p>
         </div>
         <div className="max-w-md space-y-1 text-right">
@@ -1796,7 +1938,7 @@ export default function VoiceIdentityReviewPage() {
         <Card
           className={latestCalibration
             ? "border-green-500/30"
-            : readinessState === "Split blocked" ||
+            : readinessState === "Check needs attention" ||
                 readinessState === "Calibration stale"
             ? "border-amber-500/30"
             : "border-muted"}
@@ -1806,8 +1948,7 @@ export default function VoiceIdentityReviewPage() {
               3. Validate and classify
             </CardTitle>
             <CardDescription>
-              Lock thresholds on separate recordings, then classify stored
-              embeddings.
+              Verify accuracy on separate recordings, then classify history.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
@@ -1853,14 +1994,19 @@ export default function VoiceIdentityReviewPage() {
             )}
             {labelGateReady && !latestCalibration && (
               <div className="space-y-2">
-                {calibrationPreview?.blockers.map((blocker) => (
-                  <p key={blocker} className="text-xs text-amber-600">
-                    {blocker}
+                {calibrationPreview?.validationMetrics && (
+                  <p className="text-xs text-amber-600">
+                    Independent accuracy{" "}
+                    {(calibrationPreview.validationMetrics.positivePrecision *
+                      100).toFixed(1)}% · target{" "}
+                    {Math.round(calibrationTargetPrecision * 100)}% ·{" "}
+                    {calibrationPreview.validationMetrics.falsePositive}{" "}
+                    wrong Sky results
                   </p>
-                ))}
+                )}
                 {canValidate && (
                   <p className="text-xs text-muted-foreground">
-                    Fit/Check split is ready for validation.
+                    Independent check passed. Save the calibration below.
                   </p>
                 )}
                 <Button
@@ -1871,7 +2017,7 @@ export default function VoiceIdentityReviewPage() {
                       behavior: "smooth",
                     })}
                 >
-                  Review validation details
+                  See result and next step
                 </Button>
               </div>
             )}
@@ -1890,23 +2036,27 @@ export default function VoiceIdentityReviewPage() {
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle>2. Review voice segments</CardTitle>
+              <CardTitle>2. Review voices</CardTitle>
               <CardDescription>
-                Saved sessions resume on any device. Short neighboring segments
-                from the same diarized speaker are grouped safely.
+                One continuous stream. The app keeps a small audio buffer ready
+                and loads the next clips automatically.
               </CardDescription>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowNewSession((value) => !value)}
-            >
-              <Plus className="mr-1 h-4 w-4" />New session
-            </Button>
+            {sessions.length > 0 && !showNewSession &&
+              reviewSession?.status === "active" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={openReviewSetup}
+              >
+                <Plus className="mr-1 h-4 w-4" />
+                Start another stream
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="sticky top-2 z-10 grid gap-2 rounded-lg border bg-background/95 p-3 shadow-sm backdrop-blur md:grid-cols-[11rem_minmax(12rem,1fr)_auto_auto_auto_auto]">
+          <div className="sticky top-2 z-10 grid gap-2 rounded-lg border bg-background/95 p-3 shadow-sm backdrop-blur md:grid-cols-[11rem_minmax(12rem,1fr)_minmax(15rem,1fr)_auto_auto]">
             <label className="text-xs text-muted-foreground">
               Profile being reviewed
               <select
@@ -1958,7 +2108,8 @@ export default function VoiceIdentityReviewPage() {
                       {session.querySnapshot?.candidateMode === "auto_matched"
                         ? "Auto-match audit · "
                         : "Review queue · "}
-                      {session.name}
+                      {session.name} · {session.reviewedCount} labeled ·{" "}
+                      {session.skippedCount} skipped
                     </option>
                   );
                 })}
@@ -1967,71 +2118,95 @@ export default function VoiceIdentityReviewPage() {
             <div className="flex min-w-48 items-end gap-2 text-xs">
               <div className="flex-1">
                 <div className="flex justify-between text-muted-foreground">
-                  <span>Window</span>
+                  <span>Current stream</span>
                   <span>
-                    {reviewSession?.windowReviewedCount ??
-                      reviewSession?.reviewedCount ?? 0} reviewed ·{" "}
-                    {reviewSession?.windowSkippedCount ??
-                      reviewSession?.skippedCount ?? 0} skipped
+                    {reviewSession?.reviewedCount ?? 0} labeled ·{" "}
+                    {reviewSession?.skippedCount ?? 0} skipped
                   </span>
                 </div>
                 <Progress
                   className="mt-2 h-2"
-                  value={reviewSession?.loadedCount
-                    ? (((reviewSession.windowReviewedCount ??
-                      reviewSession.reviewedCount) +
-                      (reviewSession.windowSkippedCount ??
-                        reviewSession.skippedCount)) /
-                      reviewSession.loadedCount) * 100
-                    : 0}
+                  value={sessionProgressPercent}
                 />
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {reviewSession
+                    ? `${sessionRemainingEstimate.toLocaleString()} estimated remaining`
+                    : "Choose or start a stream"}
+                </p>
               </div>
             </div>
-            <Button
-              size="sm"
-              variant={groupMode ? "secondary" : "outline"}
-              className="self-end"
-              disabled={!reviewSession || reviewPending}
-              onClick={() =>
-                updatePosition.mutate({
-                  preferences: { groupMode: !groupMode },
-                })}
-            >
-              Group short: {groupMode ? "on" : "off"}
-            </Button>
-            <label className="flex items-center gap-2 self-end rounded-md border px-2 py-2 text-xs">
-              <Switch
-                checked={autoAdvanceWindow}
-                disabled={!reviewSession || reviewPending}
-                onCheckedChange={setAutoAdvanceWindowPreference}
-                aria-label="Load review windows automatically"
-              />
-              Rolling
-            </label>
-            <Button
-              size="sm"
-              variant="outline"
-              className="self-end"
-              disabled={!reviewSession || reviewSession.status !== "active" ||
-                reviewPending}
-              onClick={() => completeSession.mutate()}
-            >
-              <CheckCircle2 className="mr-1 h-4 w-4" />End session
-            </Button>
+            {reviewSession?.status === "active"
+              ? (
+                <>
+                  <label className="flex items-center gap-2 self-end rounded-md border px-2 py-2 text-xs">
+                    <Switch
+                      checked={autoAdvanceWindow}
+                      disabled={reviewPending}
+                      onCheckedChange={setAutoAdvanceWindowPreference}
+                      aria-label="Load review windows automatically"
+                    />
+                    <span>
+                      <strong className="block">Continuous</strong>
+                      <span className="text-[10px] text-muted-foreground">
+                        load next automatically
+                      </span>
+                    </span>
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="self-end"
+                    disabled={reviewPending}
+                    onClick={() => completeSession.mutate()}
+                  >
+                    <CheckCircle2 className="mr-1 h-4 w-4" />Finish stream
+                  </Button>
+                </>
+              )
+              : (
+                <div className="self-end rounded-md border px-3 py-2 text-xs text-muted-foreground md:col-span-2">
+                  Finished · saved answers remain in calibration
+                </div>
+              )}
           </div>
 
           <p className="text-xs text-muted-foreground">
             “Me” and “Not me” refer to{" "}
             <strong className="text-foreground">
               {reviewProfile?.name ?? "the selected profile"}
-            </strong>. Change the selector to review another person. Ending a
-            session is safe: saved labels count immediately, and unanswered
-            segments can appear in a later session.
+            </strong>. Calibration progress above counts all saved streams:{" "}
+            <strong className="text-foreground">
+              {calibrationLabelCounts.total} usable labels
+            </strong>. The buffer size below is only a loading detail, not a
+            target you must finish.
           </p>
 
-          {(showNewSession || (!sessionsLoading && sessions.length === 0)) && (
-            <div className="space-y-3 rounded-lg border border-dashed p-3">
-              <div className="grid gap-2 md:grid-cols-5">
+          {(showNewSession || (!sessionsLoading && sessions.length === 0) ||
+            Boolean(reviewSession && reviewSession.status !== "active")) && (
+            <div
+              ref={reviewSetupRef}
+              className="scroll-mt-4 space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-3"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-medium">Start continuous review</p>
+                  <p className="text-xs text-muted-foreground">
+                    Choose the source once. Clips then keep flowing until the
+                    source is exhausted or you press Finish stream.
+                  </p>
+                </div>
+                {showNewSession && sessions.length > 0 &&
+                  reviewSession?.status === "active" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowNewSession(false)}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+              <div className="grid gap-2 md:grid-cols-4">
                 <label className="text-xs text-muted-foreground">
                   Source
                   <select
@@ -2105,21 +2280,6 @@ export default function VoiceIdentityReviewPage() {
                     <option value="all">All fragments · diagnostic</option>
                   </select>
                 </label>
-                <label className="text-xs text-muted-foreground">
-                  Rolling window
-                  <select
-                    className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
-                    value={newWindowSize}
-                    onChange={(event) =>
-                      setNewWindowSize(
-                        Number(event.target.value) as typeof newWindowSize,
-                      )}
-                  >
-                    <option value={5}>5 clips</option>
-                    <option value={10}>10 clips</option>
-                    <option value={20}>20 clips</option>
-                  </select>
-                </label>
                 {(newSourceMode === "all_matching" ||
                   newSourceMode === "selected_recordings") && (
                   <label className="text-xs text-muted-foreground">
@@ -2140,6 +2300,31 @@ export default function VoiceIdentityReviewPage() {
                   </label>
                 )}
               </div>
+
+              <details className="rounded-md border bg-background px-3 py-2 text-xs">
+                <summary className="cursor-pointer font-medium">
+                  Advanced loading settings
+                </summary>
+                <label className="mt-2 block max-w-xs text-muted-foreground">
+                  Preload buffer
+                  <select
+                    className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                    value={newWindowSize}
+                    onChange={(event) =>
+                      setNewWindowSize(
+                        Number(event.target.value) as typeof newWindowSize,
+                      )}
+                  >
+                    <option value={5}>5 clips</option>
+                    <option value={10}>10 clips · recommended</option>
+                    <option value={20}>20 clips</option>
+                  </select>
+                  <span className="mt-1 block">
+                    This affects preloading only. With Continuous enabled, the
+                    next buffer arrives automatically.
+                  </span>
+                </label>
+              </details>
 
               {newSourceMode === "diarization_generation" && (
                 <label className="block text-xs text-muted-foreground">
@@ -2191,59 +2376,78 @@ export default function VoiceIdentityReviewPage() {
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={startSourcePreview}
-                  disabled={!reviewProfileId ||
-                    previewReviewSource.isPending}
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="rounded-md border p-3">
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    1 · Find clips
+                  </p>
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={startSourcePreview}
+                    disabled={!reviewProfileId ||
+                      previewReviewSource.isPending}
+                  >
+                    {previewReviewSource.isPending
+                      ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Checking… {sourcePreviewElapsedSeconds}s
+                        </>
+                      )
+                      : sourcePreviewDirty
+                      ? "Check available audio"
+                      : "Check again"}
+                  </Button>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {previewReviewSource.isPending
+                      ? "Scanning up to 5,000 stored segments; this can take about a minute."
+                      : sourcePreview && !sourcePreviewDirty
+                      ? `${
+                        sourcePreview.counts.capped ? "At least " : ""
+                      }${sourcePreview.counts.eligibleSegments.toLocaleString()} clips in ${sourcePreview.counts.recordings.toLocaleString()} recordings are ready.`
+                      : "Required once after changing the source or date range."}
+                  </p>
+                </div>
+                <div
+                  className={`rounded-md border p-3 ${
+                    sourcePreview && !sourcePreviewDirty
+                      ? "border-sky-500/40 bg-sky-500/5"
+                      : "bg-muted/20"
+                  }`}
                 >
-                  {previewReviewSource.isPending
-                    ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Counting and sampling… {sourcePreviewElapsedSeconds}s
-                      </>
-                    )
-                    : "Preview source"}
-                </Button>
-                {previewReviewSource.isPending && (
-                  <span className="text-xs text-muted-foreground">
-                    Bounded scan of up to 5,000 segments. It can take about a
-                    minute while diarization is using Mongo.
-                  </span>
-                )}
-                {sourcePreview && (
-                  <span className="text-sm font-medium">
-                    {sourcePreview.counts.capped ? "At least " : ""}
-                    {sourcePreview.counts.eligibleSegments.toLocaleString()}
-                    {" "}
-                    matching segments in{" "}
-                    {sourcePreview.counts.recordings.toLocaleString()}{" "}
-                    {sourcePreview.counts.recordings === 1
-                      ? "recording"
-                      : "recordings"}
-                  </span>
-                )}
-                {sourcePreviewDirty && sourcePreview && (
-                  <span className="text-xs text-amber-600">
-                    Source changed · preview again
-                  </span>
-                )}
-                <Button
-                  className="ml-auto"
-                  onClick={() => createSession.mutate()}
-                  disabled={!reviewProfileId || createSession.isPending ||
-                    sourcePreviewDirty || !sourcePreview ||
-                    !previewedSourcePayload ||
-                    sourcePreview.counts.eligibleSegments === 0 ||
-                    (newSourceMode === "selected_recordings" &&
-                      selectedRecordingIds.length === 0)}
-                >
-                  {createSession.isPending ? "Creating…" : "Start review"}
-                </Button>
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    2 · Start the stream
+                  </p>
+                  <Button
+                    className="w-full"
+                    onClick={() => createSession.mutate()}
+                    disabled={!reviewProfileId || createSession.isPending ||
+                      sourcePreviewDirty || !sourcePreview ||
+                      !previewedSourcePayload ||
+                      sourcePreview.counts.eligibleSegments === 0 ||
+                      (newSourceMode === "selected_recordings" &&
+                        selectedRecordingIds.length === 0)}
+                  >
+                    {createSession.isPending
+                      ? "Starting…"
+                      : sourcePreview && !sourcePreviewDirty
+                      ? `Start review · ${sourcePreview.counts.eligibleSegments.toLocaleString()} available`
+                      : "Start review"}
+                  </Button>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {sourcePreview && !sourcePreviewDirty
+                      ? "Ready. The next clips will load automatically."
+                      : "Unlocks after step 1. There is no 10-clip batch to finish."}
+                  </p>
+                </div>
               </div>
+
+              {sourcePreviewDirty && sourcePreview && (
+                <p className="text-xs text-amber-600">
+                  Source changed · run step 1 again.
+                </p>
+              )}
 
               {previewReviewSource.isError && (
                 <p className="text-xs text-destructive">
@@ -2273,6 +2477,11 @@ export default function VoiceIdentityReviewPage() {
                       <span>Run: {sourcePreview.runIds.join(", ")}</span>
                     )}
                   </div>
+                  <p className="text-xs font-medium text-foreground">
+                    Ready to start. Audio will load {newWindowSize}{" "}
+                    clips ahead and continue automatically; there is no
+                    batch-complete button to press.
+                  </p>
                   {newSourceMode === "selected_recordings" &&
                     sourcePreview.recordings.length > 9 && (
                     <Input
@@ -2430,7 +2639,22 @@ export default function VoiceIdentityReviewPage() {
               coverage on Timeline.
             </div>
           )}
-          {reviewSession && reviewSession.loadedCount > 0 && (
+          {reviewSession && reviewSession.status !== "active" && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+              <div>
+                <p className="font-medium">This saved stream is finished</p>
+                <p className="text-xs text-muted-foreground">
+                  Its labels are already counted above. Pending rows are only
+                  the old preload buffer; start a new stream to keep reviewing.
+                </p>
+              </div>
+              <Button size="sm" onClick={openReviewSetup}>
+                Continue reviewing
+              </Button>
+            </div>
+          )}
+          {reviewSession && reviewSession.status === "active" &&
+            reviewSession.loadedCount > 0 && (
             <>
               {reviewSession.loadedCount > 20 && (
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
@@ -2466,6 +2690,18 @@ export default function VoiceIdentityReviewPage() {
                     ? "Saving/refreshing…"
                     : `Saved · revision ${reviewSession.revision}`}
                 </span>
+                <Button
+                  size="sm"
+                  variant={groupMode ? "secondary" : "outline"}
+                  className="h-7"
+                  disabled={reviewPending}
+                  onClick={() =>
+                    updatePosition.mutate({
+                      preferences: { groupMode: !groupMode },
+                    })}
+                >
+                  Group short clips: {groupMode ? "on" : "off"}
+                </Button>
               </div>
               <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 Label only a clear target voice. Use{" "}
@@ -2495,7 +2731,8 @@ export default function VoiceIdentityReviewPage() {
                         ? (
                           <span className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Loader2 className="h-4 w-4 animate-spin" />
-                            Loading next {reviewSession.windowSize ?? 10}…
+                            Continuing automatically · loading next{" "}
+                            {reviewSession.windowSize ?? 10}…
                           </span>
                         )
                         : (
@@ -2512,7 +2749,7 @@ export default function VoiceIdentityReviewPage() {
                     )
                     : (
                       <span className="text-xs text-muted-foreground">
-                        No more known items · End the session when ready
+                        Source exhausted · press Finish stream when ready
                       </span>
                     )}
                 </div>
@@ -2544,12 +2781,17 @@ export default function VoiceIdentityReviewPage() {
                   remaining={windowItems.filter((item) =>
                     item.status === "pending"
                   ).length}
-                  sessionAnswered={(reviewSession.windowReviewedCount ?? 0) +
-                    (reviewSession.windowSkippedCount ?? 0)}
+                  sessionAnswered={(reviewSession.windowReviewedCount ??
+                    reviewSession.reviewedCount ?? 0) +
+                    (reviewSession.windowSkippedCount ??
+                      reviewSession.skippedCount ?? 0)}
                   sessionTotal={reviewSession.loadedCount}
                   pending={reviewPending || decisionSegmentIds.length === 0 ||
                     (reviewSession.status !== "active" && !editingSegmentId) ||
-                    Boolean(historyEditingItem)}
+                    Boolean(historyEditingItem) ||
+                    Boolean(calibrationEditingItem)}
+                  shortcutsEnabled={!historyEditingItem &&
+                    !calibrationEditingItem}
                   autoPlayNext={autoPlayNext}
                   playOnMount={playOnMount}
                   canPrevious={!editingSegmentId && activeIndex > 0}
@@ -2631,7 +2873,7 @@ export default function VoiceIdentityReviewPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-medium">
-                    Current window · all {windowItems.length} items
+                    Loaded buffer · all {windowItems.length} items
                   </p>
                   <p className="text-xs text-muted-foreground">
                     Edit works for labels and skips. Previous windows are in
@@ -2805,15 +3047,17 @@ export default function VoiceIdentityReviewPage() {
               </div>
             </>
           )}
-          <div className="rounded-lg border">
-            <div className="flex flex-wrap items-center justify-between gap-2 p-3">
+          <div
+            ref={reviewHistoryRef}
+            className="scroll-mt-4 rounded-lg border"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
               <div>
                 <p className="text-sm font-medium">
-                  Reviewed history · all saved sessions
+                  Latest saved label
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Reopen any previous answer, listen again, and change the
-                  speaker or mark it as noise.
+                  Every answer is saved immediately and can be corrected.
                 </p>
               </div>
               <Button
@@ -2821,41 +3065,101 @@ export default function VoiceIdentityReviewPage() {
                 variant="outline"
                 onClick={() => {
                   setShowReviewHistory((value) => !value);
+                  setHistoryRecordingId(null);
                   setHistoryEditingItem(null);
                   useAudioPlaybackStore.getState().stopActive();
                 }}
               >
-                {showReviewHistory ? "Hide history" : "Open history"}
+                {showReviewHistory ? "Hide older labels" : "Show history"}
               </Button>
             </div>
+            {reviewHistoryLoading
+              ? (
+                <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />Loading latest
+                  label…
+                </div>
+              )
+              : latestReviewHistoryItem
+              ? (() => {
+                const item = latestReviewHistoryItem;
+                const duration = Math.max(
+                  0,
+                  (new Date(item.segment.end).getTime() -
+                    new Date(item.segment.start).getTime()) / 1_000,
+                );
+                return (
+                  <div className="flex flex-wrap items-center gap-3 bg-muted/20 px-3 py-2 text-sm">
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left hover:text-primary"
+                      onClick={() => {
+                        useAudioPlaybackStore.getState().stopActive();
+                        setShowReviewHistory(true);
+                        setHistoryEditingItem(item);
+                      }}
+                    >
+                      <span className="block font-medium">
+                        {reviewHistoryLabel(item)}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {new Date(item.segment.start).toLocaleString()} ·{" "}
+                        {duration.toFixed(1)}s ·{" "}
+                        {item.segment.speaker ?? "speaker unknown"}
+                      </span>
+                    </button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        useAudioPlaybackStore.getState().stopActive();
+                        setShowReviewHistory(true);
+                        setHistoryEditingItem(item);
+                      }}
+                    >
+                      Listen / edit
+                    </Button>
+                  </div>
+                );
+              })()
+              : (
+                <p className="p-3 text-sm text-muted-foreground">
+                  No saved labels yet.
+                </p>
+              )}
             {showReviewHistory && (
               <div className="space-y-3 border-t p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <select
-                    className="h-9 rounded-md border bg-background px-2 text-sm"
-                    value={historyFilter}
-                    onChange={(event) =>
-                      setHistoryFilter(
-                        event.target.value as typeof historyFilter,
-                      )}
-                    aria-label="Filter reviewed history"
-                  >
-                    <option value="all">All previous answers</option>
-                    <option value="assigned">Speaker labels</option>
-                    <option value="skipped">Skipped / noise</option>
-                  </select>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="h-9 rounded-md border bg-background px-2 text-sm"
+                      value={historyFilter}
+                      onChange={(event) =>
+                        setHistoryFilter(
+                          event.target.value as typeof historyFilter,
+                        )}
+                      aria-label="Filter reviewed history"
+                    >
+                      <option value="all">All previous answers</option>
+                      <option value="assigned">Speaker labels</option>
+                      <option value="skipped">Skipped / noise</option>
+                    </select>
+                    {historyRecordingId && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setHistoryRecordingId(null)}
+                      >
+                        One calibration recording · clear filter
+                      </Button>
+                    )}
+                  </div>
                   <span className="text-xs text-muted-foreground">
                     {reviewHistoryFetching
                       ? "Refreshing…"
-                      : visibleReviewHistory.length + " recent segments"}
+                      : olderVisibleReviewHistory.length + " older labels"}
                   </span>
                 </div>
-                {reviewHistoryLoading && (
-                  <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading review history…
-                  </div>
-                )}
                 {historyEditingItem && (
                   <VoiceIdentityReviewPlayer
                     key={"history-" + historyEditingItem.decisionId}
@@ -2946,7 +3250,7 @@ export default function VoiceIdentityReviewPage() {
                     className="max-h-[24rem] overflow-y-auto rounded-md border"
                     aria-label="Reviewed history items"
                   >
-                    {visibleReviewHistory.map((item) => {
+                    {olderVisibleReviewHistory.map((item) => {
                       const duration = Math.max(
                         0,
                         (new Date(item.segment.end).getTime() -
@@ -2958,22 +3262,30 @@ export default function VoiceIdentityReviewPage() {
                         <div
                           key={item.decisionId + "-" +
                             normalizeObjectId(item.segment._id)}
-                          className="grid min-w-[46rem] grid-cols-[10rem_4rem_minmax(8rem,1fr)_10rem_auto_auto] items-center gap-2 border-b px-3 py-2 text-xs last:border-b-0"
+                          className={`grid gap-2 border-b px-3 py-2 text-xs last:border-b-0 sm:grid-cols-[minmax(12rem,1fr)_8rem_auto_auto] sm:items-center ${
+                            historyEditingItem?.decisionId === item.decisionId
+                              ? "bg-sky-500/10"
+                              : "hover:bg-muted/40"
+                          }`}
                         >
-                          <span>
-                            {new Date(item.segment.start).toLocaleString()}
-                          </span>
-                          <span
-                            className={duration < 1
-                              ? "font-medium text-amber-600"
-                              : ""}
+                          <button
+                            type="button"
+                            className="min-w-0 text-left"
+                            onClick={() => {
+                              useAudioPlaybackStore.getState().stopActive();
+                              setHistoryEditingItem(item);
+                            }}
                           >
-                            {duration.toFixed(1)}s
-                          </span>
-                          <span className="truncate text-muted-foreground">
-                            {item.sessionName} ·{" "}
-                            {item.segment.speaker ?? "speaker unknown"}
-                          </span>
+                            <span className="block truncate font-medium">
+                              {new Date(item.segment.start).toLocaleString()} ·
+                              {" "}
+                              {duration.toFixed(1)}s
+                            </span>
+                            <span className="block truncate text-muted-foreground">
+                              {item.sessionName} ·{" "}
+                              {item.segment.speaker ?? "speaker unknown"}
+                            </span>
+                          </button>
                           <span
                             className={item.outcome === "skipped"
                               ? "text-amber-600"
@@ -2996,14 +3308,14 @@ export default function VoiceIdentityReviewPage() {
                               setHistoryEditingItem(item);
                             }}
                           >
-                            Listen / edit
+                            Select
                           </Button>
                         </div>
                       );
                     })}
-                    {visibleReviewHistory.length === 0 && (
+                    {olderVisibleReviewHistory.length === 0 && (
                       <div className="p-6 text-center text-sm text-muted-foreground">
-                        No saved answers match this filter.
+                        No older saved labels match this filter.
                       </div>
                     )}
                   </div>
@@ -3024,12 +3336,11 @@ export default function VoiceIdentityReviewPage() {
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <CardTitle>
-                3. Validate {primary?.name ?? "primary voice"} calibration
+                3. Check whether {primary?.name ?? "the primary voice"} is ready
               </CardTitle>
               <CardDescription>
-                Choose the required precision. The server computes the actual Me
-                / uncertain / Not me similarity thresholds on Fit audio, then
-                measures them on separate Check recordings.
+                The label count is only the first gate. This check learns a
+                boundary on some recordings and tests it on different audio.
               </CardDescription>
             </div>
             <Button
@@ -3045,7 +3356,7 @@ export default function VoiceIdentityReviewPage() {
               />
               {calibrationPreviewFetching
                 ? "Recalculating on server…"
-                : "Recalculate preview"}
+                : "Refresh result"}
             </Button>
           </div>
         </CardHeader>
@@ -3080,43 +3391,80 @@ export default function VoiceIdentityReviewPage() {
               </div>
             )}
           </div>
-          <div className="grid gap-2 text-sm md:grid-cols-3">
-            <div className="rounded-md border p-3">
-              <strong>1. Labels</strong>
-              <p className="text-xs text-muted-foreground">
-                Only clear reviewed speech with a compatible embedding is used.
-              </p>
+
+          {calibrationPreview && (
+            <div
+              className={`rounded-lg border p-4 ${
+                canValidate
+                  ? "border-green-500/40 bg-green-500/5"
+                  : labelGateReady
+                  ? "border-amber-500/40 bg-amber-500/5"
+                  : "bg-muted/20"
+              }`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold">
+                    {canValidate
+                      ? "Ready to save and classify"
+                      : !labelGateReady
+                      ? "More clear labels are needed"
+                      : calibrationPreview.validationMetrics
+                      ? `Not ready yet: ${
+                        (calibrationPreview.validationMetrics
+                          .positivePrecision * 100).toFixed(1)
+                      }% verified accuracy, ${
+                        Math.round(calibrationTargetPrecision * 100)
+                      }% required`
+                      : "Choose separate Learn and Check recordings"}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {canValidate
+                      ? `The independent Check set passed. Save this calibration, then run speakerIdentity for 24 hours.`
+                      : labelGateReady &&
+                          calibrationPreview.validationMetrics
+                      ? `${calibrationPreview.validationMetrics.falsePositive} of ${calibrationPreview.validationMetrics.identified} automatic “${
+                        primary?.name ?? "Me"
+                      }” results were false on unseen recordings. Review labels in the Check recordings or try a bounded pilot below.`
+                      : `Keep reviewing clear speech until the label and recording requirements below are complete.`}
+                  </p>
+                </div>
+                <div className="text-right text-xs text-muted-foreground">
+                  <strong className="block text-foreground">
+                    {calibrationPreview.counts.total} usable labels ·{" "}
+                    {calibrationPreview.counts.recordings} recordings
+                  </strong>
+                  Refresh uses saved embeddings. It does not classify history or
+                  save anything.
+                </div>
+              </div>
             </div>
-            <div className="rounded-md border p-3">
-              <strong>2. Fit thresholds</strong>
-              <p className="text-xs text-muted-foreground">
-                One recording set chooses the safest Me / uncertain / Not me
-                borders. If a safe not-Me border cannot be proven, only the Me
-                border is used.
-              </p>
-            </div>
-            <div className="rounded-md border p-3">
-              <strong>3. Validate on held-out audio</strong>
-              <p className="text-xs text-muted-foreground">
-                A different recording set checks the frozen thresholds and must
-                independently reach the precision target selected below.
-              </p>
-            </div>
+          )}
+
+          <div className="rounded-md border bg-muted/20 p-3 text-sm">
+            <strong>How this check works</strong>
+            <p className="mt-1 text-xs text-muted-foreground">
+              <strong className="text-foreground">Learn</strong>{" "}
+              recordings choose the similarity boundary →{" "}
+              <strong className="text-foreground">Check</strong>{" "}
+              recordings test that frozen boundary on unseen audio → Save only
+              when the selected accuracy target passes. Changing a recording
+              role recalculates automatically; Refresh simply repeats the same
+              test with the latest saved labels.
+            </p>
           </div>
 
           <div className="space-y-3 rounded-md border bg-muted/20 p-3">
             <div>
               <p className="text-sm font-medium">
-                Required auto-{primary?.name ?? "speaker"} precision
+                Accuracy target
               </p>
               <p className="text-xs text-muted-foreground">
-                This is the minimum share of automatic “Me” matches that must be
-                correct on held-out audio. It is not a cosine threshold; the
-                server calculates the positive threshold and, when the data
-                supports it, a conservative negative threshold.
+                98% enables full history. Lower targets are limited to a
+                risk-acknowledged 24-hour pilot.
               </p>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2 sm:grid-cols-3">
               {CALIBRATION_PRECISION_PRESETS.map((preset) => (
                 <Button
                   key={preset.value}
@@ -3140,39 +3488,40 @@ export default function VoiceIdentityReviewPage() {
                   </span>
                 </Button>
               ))}
-              <label className="rounded-md border px-3 py-2">
-                <span className="block text-xs text-muted-foreground">
-                  Custom precision
-                </span>
-                <span className="flex items-center gap-1">
-                  <Input
-                    className="h-7 border-0 p-0 text-base font-semibold shadow-none focus-visible:ring-0"
-                    type="number"
-                    min={90}
-                    max={100}
-                    step={0.5}
-                    value={Number(
-                      (calibrationTargetPrecision * 100).toFixed(1),
-                    )}
-                    onChange={(event) => {
-                      const percent = Number(event.target.value);
-                      if (
-                        !Number.isFinite(percent) || percent < 90 ||
-                        percent > 100
-                      ) return;
-                      setCalibrationTargetPrecision(
-                        Number((percent / 100).toFixed(3)),
-                      );
-                      setAcceptLowerPrecisionRisk(false);
-                      resetPositiveThresholdOverride();
-                      setCalibrationRefreshResult(null);
-                    }}
-                    aria-label="Custom required precision percent"
-                  />
-                  <span className="font-semibold">%</span>
-                </span>
-              </label>
             </div>
+            <details className="rounded-md border bg-background px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">
+                Advanced: custom accuracy target
+              </summary>
+              <label className="mt-2 flex max-w-xs items-center gap-2 text-muted-foreground">
+                Required precision
+                <Input
+                  className="h-8 w-24"
+                  type="number"
+                  min={90}
+                  max={100}
+                  step={0.5}
+                  value={Number(
+                    (calibrationTargetPrecision * 100).toFixed(1),
+                  )}
+                  onChange={(event) => {
+                    const percent = Number(event.target.value);
+                    if (
+                      !Number.isFinite(percent) || percent < 90 ||
+                      percent > 100
+                    ) return;
+                    setCalibrationTargetPrecision(
+                      Number((percent / 100).toFixed(3)),
+                    );
+                    setAcceptLowerPrecisionRisk(false);
+                    resetPositiveThresholdOverride();
+                    setCalibrationRefreshResult(null);
+                  }}
+                  aria-label="Custom required precision percent"
+                />
+                <span>%</span>
+              </label>
+            </details>
             {lowerPrecisionPilot
               ? (
                 <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs">
@@ -3202,10 +3551,8 @@ export default function VoiceIdentityReviewPage() {
               )
               : (
                 <p className="text-xs text-muted-foreground">
-                  Recommended for automatic classification and historical
-                  backfill. If it cannot pass, first inspect false positives and
-                  the Fit / Check split; use a lower target only for a bounded
-                  experiment.
+                  Production mode: the server chooses the safest threshold from
+                  Learn audio and requires the independent Check set to pass.
                 </p>
               )}
           </div>
@@ -3220,7 +3567,7 @@ export default function VoiceIdentityReviewPage() {
             {calibrationPreviewFetching
               ? "Recalculating scores and thresholds on the server…"
               : calibrationRefreshResult?.message ??
-                "Recalculate updates this preview only. Save below creates the validated calibration used by jobs."}
+                "Refresh repeats the current Learn/Check calculation. Save below creates the calibration used by jobs."}
           </div>
 
           {calibrationPreviewLoading && (
@@ -3240,58 +3587,10 @@ export default function VoiceIdentityReviewPage() {
 
           {calibrationPreview && (
             <>
-              <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
-                <div className="rounded-md border p-3">
-                  <strong>{calibrationPreview.counts.positive}</strong>
-                  <br />compatible Sky labels
-                </div>
-                <div className="rounded-md border p-3">
-                  <strong>{calibrationPreview.counts.negative}</strong>
-                  <br />compatible not-Sky labels
-                </div>
-                <div className="rounded-md border p-3">
-                  <strong>{calibrationPreview.counts.recordings}</strong>
-                  <br />source recordings
-                </div>
-                <div className="rounded-md border p-3">
-                  <strong>{calibrationPreview.counts.incompatible}</strong>
-                  <br />excluded: old/missing embedding
-                </div>
-              </div>
-
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-md border bg-muted/20 p-3 text-sm">
                   <span className="text-xs text-muted-foreground">
-                    Auto “Sky” at
-                  </span>
-                  <p className="text-xl font-semibold tabular-nums">
-                    {calibrationPreview.thresholds?.positiveThreshold.toFixed(
-                      3,
-                    ) ?? "—"}
-                  </p>
-                </div>
-                <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                  {previewNegativeDecisionMode === "uncertain_only"
-                    ? (
-                      <p className="text-sm font-semibold text-amber-600">
-                        Auto not-Sky off · remains uncertain
-                      </p>
-                    )
-                    : (
-                      <>
-                        <span className="text-xs text-muted-foreground">
-                          Auto “not Sky” at
-                        </span>
-                        <p className="text-xl font-semibold tabular-nums">
-                          {calibrationPreview.thresholds?.negativeThreshold
-                            .toFixed(3) ?? "—"}
-                        </p>
-                      </>
-                    )}
-                </div>
-                <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                  <span className="text-xs text-muted-foreground">
-                    Validation precision
+                    Independent accuracy
                   </span>
                   <p
                     className={`text-xl font-semibold tabular-nums ${
@@ -3312,7 +3611,7 @@ export default function VoiceIdentityReviewPage() {
                 </div>
                 <div className="rounded-md border bg-muted/20 p-3 text-sm">
                   <span className="text-xs text-muted-foreground">
-                    Validation coverage
+                    Automatic results
                   </span>
                   <p className="text-xl font-semibold tabular-nums">
                     {calibrationPreview.validationMetrics
@@ -3322,7 +3621,7 @@ export default function VoiceIdentityReviewPage() {
                 </div>
                 <div className="rounded-md border bg-muted/20 p-3 text-sm">
                   <span className="text-xs text-muted-foreground">
-                    False “Me” matches
+                    Wrong “{primary?.name ?? "Me"}” results
                   </span>
                   <p
                     className={`text-xl font-semibold tabular-nums ${
@@ -3334,10 +3633,25 @@ export default function VoiceIdentityReviewPage() {
                   >
                     {calibrationPreview.validationMetrics?.falsePositive ?? "—"}
                   </p>
+                  {falsePositiveIssues.length > 0 && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="link"
+                      className="h-auto px-0 py-1 text-xs"
+                      onClick={() => {
+                        setCalibrationProblemKind("falsePositive");
+                        setCalibrationProblemRecordingId(null);
+                        setShowCalibrationProblems(true);
+                      }}
+                    >
+                      Review {falsePositiveIssues.length} problem clips
+                    </Button>
+                  )}
                 </div>
                 <div className="rounded-md border bg-muted/20 p-3 text-sm">
                   <span className="text-xs text-muted-foreground">
-                    “Me” recall
+                    Found “{primary?.name ?? "Me"}” speech
                   </span>
                   <p className="text-xl font-semibold tabular-nums">
                     {calibrationPreview.validationMetrics
@@ -3350,10 +3664,367 @@ export default function VoiceIdentityReviewPage() {
                 </div>
               </div>
 
-              <div className="rounded-md border bg-muted/10 p-3 text-sm">
+              {(falsePositiveIssues.length > 0 ||
+                missedPositiveIssues.length > 0) && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium">
+                        Clips that failed the independent check
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Listen before changing anything. If your saved label is
+                        wrong, correct it here; if the label is right, keep it —
+                        the matcher threshold needs to improve instead.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setShowCalibrationProblems((value) => !value);
+                        setCalibrationProblemRecordingId(null);
+                        setCalibrationEditingItem(null);
+                        setCalibrationEditingPlayOnMount(false);
+                        useAudioPlaybackStore.getState().stopActive();
+                      }}
+                    >
+                      {showCalibrationProblems
+                        ? "Hide problem clips"
+                        : "Review problem clips"}
+                    </Button>
+                  </div>
+                  {labelGateReady && !canValidate && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/20 bg-background/70 px-3 py-2 text-xs">
+                      <p className="max-w-3xl text-muted-foreground">
+                        <strong className="text-foreground">
+                          {calibrationLabelCounts.total}{" "}
+                          labels are enough to diagnose this result.
+                        </strong>{" "}
+                        If the problem labels are correct, audit the{" "}
+                        {primary?.sample_count ?? 0}{" "}
+                        saved Sky samples for a second speaker, overlap, noise,
+                        or long silence. Sky is currently one averaged profile
+                        embedding, so one outlier can move every score. Replace
+                        only bad samples, rebuild Sky, then refresh this check;
+                        your labels stay saved.
+                      </p>
+                      <Button asChild type="button" size="sm" variant="outline">
+                        <Link to="/settings/voice-profiles">
+                          Audit Sky samples
+                        </Link>
+                      </Button>
+                    </div>
+                  )}
+                  {showCalibrationProblems && (
+                    <div className="mt-3 space-y-3 border-t border-amber-500/20 pt-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={calibrationProblemKind === "falsePositive"
+                            ? "default"
+                            : "outline"}
+                          onClick={() => {
+                            setCalibrationProblemKind("falsePositive");
+                            setCalibrationProblemRecordingId(null);
+                            setCalibrationEditingItem(null);
+                            setCalibrationEditingPlayOnMount(false);
+                          }}
+                        >
+                          Wrong “{primary?.name ?? "Me"}” ·{" "}
+                          {falsePositiveIssues.length}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={calibrationProblemKind === "missedPositive"
+                            ? "default"
+                            : "outline"}
+                          onClick={() => {
+                            setCalibrationProblemKind("missedPositive");
+                            setCalibrationProblemRecordingId(null);
+                            setCalibrationEditingItem(null);
+                            setCalibrationEditingPlayOnMount(false);
+                          }}
+                        >
+                          Missed “{primary?.name ?? "Me"}” ·{" "}
+                          {missedPositiveIssues.length}
+                        </Button>
+                        {calibrationProblemRecordingId && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              setCalibrationProblemRecordingId(null)}
+                          >
+                            One recording · show all
+                          </Button>
+                        )}
+                      </div>
+
+                      {calibrationEditingItem && (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-2">
+                            <span className="text-sm font-medium">
+                              Problem {calibrationEditingIndex + 1} of{" "}
+                              {visibleCalibrationIssues.length}
+                            </span>
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={calibrationEditingIndex <= 0 ||
+                                  reviseHistory.isPending}
+                                onClick={() =>
+                                  openCalibrationIssueAt(
+                                    calibrationEditingIndex - 1,
+                                  )}
+                              >
+                                Previous problem
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={calibrationEditingIndex < 0 ||
+                                  calibrationEditingIndex >=
+                                    visibleCalibrationIssues.length - 1 ||
+                                  reviseHistory.isPending}
+                                onClick={() =>
+                                  openCalibrationIssueAt(
+                                    calibrationEditingIndex + 1,
+                                  )}
+                              >
+                                Next problem · autoplay
+                              </Button>
+                            </div>
+                          </div>
+                          <VoiceIdentityReviewPlayer
+                            key={"calibration-" +
+                              calibrationEditingItem.decisionId}
+                            segment={calibrationEditingItem.segment}
+                            profileName={reviewProfile?.name ??
+                              "target profile"}
+                            profileOptions={allProfileOptions}
+                            position={calibrationEditingIndex + 1}
+                            remaining={Math.max(
+                              0,
+                              visibleCalibrationIssues.length -
+                                calibrationEditingIndex - 1,
+                            )}
+                            sessionAnswered={calibrationEditingIndex + 1}
+                            sessionTotal={visibleCalibrationIssues.length}
+                            pending={reviseHistory.isPending ||
+                              createReviewProfile.isPending}
+                            autoPlayNext={false}
+                            playOnMount={calibrationEditingPlayOnMount}
+                            canPrevious={calibrationEditingIndex > 0}
+                            canNext={calibrationEditingIndex >= 0 &&
+                              calibrationEditingIndex <
+                                visibleCalibrationIssues.length - 1}
+                            canUndo={false}
+                            canEdit={false}
+                            editingLabel={reviewHistoryLabel(
+                              calibrationEditingItem,
+                            )}
+                            alternateProfiles={alternateProfiles}
+                            creatingProfile={createReviewProfile.isPending}
+                            onDecision={(state) => {
+                              if (!reviewProfileId) return;
+                              if (state === "skip") {
+                                reviseHistory.mutate({
+                                  item: calibrationEditingItem,
+                                  outcome: "skipped",
+                                });
+                              } else if (state === "me") {
+                                reviseHistory.mutate({
+                                  item: calibrationEditingItem,
+                                  outcome: "assigned",
+                                  assignedProfileId: reviewProfileId,
+                                });
+                              } else {
+                                reviseHistory.mutate({
+                                  item: calibrationEditingItem,
+                                  outcome: "assigned",
+                                  excludedProfileIds: [reviewProfileId],
+                                });
+                              }
+                            }}
+                            onAssignProfile={(assignedProfileId) => {
+                              if (!reviewProfileId) return;
+                              rememberAssignedProfile(assignedProfileId);
+                              reviseHistory.mutate({
+                                item: calibrationEditingItem,
+                                outcome: "assigned",
+                                assignedProfileId,
+                                excludedProfileIds: [reviewProfileId],
+                              });
+                            }}
+                            onCreateProfile={async (name) => {
+                              if (!reviewProfileId) return;
+                              const segmentId = normalizeObjectId(
+                                calibrationEditingItem.segment._id,
+                              );
+                              if (!segmentId) {
+                                throw new Error("Segment is unavailable");
+                              }
+                              const created = await createReviewProfile
+                                .mutateAsync({ name, segmentIds: [segmentId] });
+                              const assignedProfileId = normalizeObjectId(
+                                created._id,
+                              );
+                              if (!assignedProfileId) {
+                                throw new Error(
+                                  "New speaker profile has no valid ID",
+                                );
+                              }
+                              rememberAssignedProfile(assignedProfileId);
+                              await reviseHistory.mutateAsync({
+                                item: calibrationEditingItem,
+                                outcome: "assigned",
+                                assignedProfileId,
+                                excludedProfileIds: [reviewProfileId],
+                              });
+                            }}
+                            onPrevious={() =>
+                              openCalibrationIssueAt(
+                                calibrationEditingIndex - 1,
+                              )}
+                            onNext={() =>
+                              openCalibrationIssueAt(
+                                calibrationEditingIndex + 1,
+                              )}
+                            onUndo={() => {}}
+                            onEdit={() => {}}
+                            onCancelEdit={() => {
+                              useAudioPlaybackStore.getState().stopActive();
+                              setCalibrationEditingItem(null);
+                              setCalibrationEditingPlayOnMount(false);
+                            }}
+                            onAutoPlayChange={() => {}}
+                          />
+                        </div>
+                      )}
+
+                      <div className="max-h-[24rem] overflow-y-auto rounded-md border bg-background">
+                        {visibleCalibrationIssues.map((issue, issueIndex) => {
+                          const duration = Math.max(
+                            0,
+                            (new Date(issue.segment.end).getTime() -
+                              new Date(issue.segment.start).getTime()) / 1_000,
+                          );
+                          const startMs = new Date(issue.segment.start)
+                            .getTime();
+                          const endMs = new Date(issue.segment.end).getTime();
+                          return (
+                            <div
+                              key={issue.kind + "-" + issue.segmentId}
+                              className={`grid gap-2 border-b px-3 py-2 text-xs last:border-b-0 sm:grid-cols-[minmax(14rem,1fr)_7rem_auto_auto] sm:items-center ${
+                                calibrationEditingItem?.decisionId ===
+                                    issue.decisionId
+                                  ? "bg-sky-500/10"
+                                  : ""
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                className="min-w-0 text-left"
+                                disabled={!issue.decisionId}
+                                onClick={() =>
+                                  openCalibrationIssueAt(issueIndex)}
+                              >
+                                <span className="block truncate font-medium">
+                                  {new Date(issue.segment.start)
+                                    .toLocaleString()} · {duration.toFixed(1)}s
+                                </span>
+                                <span className="block truncate text-muted-foreground">
+                                  {issue.kind === "false_positive"
+                                    ? `Labeled Not ${
+                                      primary?.name ?? "Me"
+                                    }, matcher predicted ${
+                                      primary?.name ?? "Me"
+                                    }`
+                                    : `Labeled ${
+                                      primary?.name ?? "Me"
+                                    }, matcher left it ${issue.decision}`}
+                                </span>
+                              </button>
+                              <span className="tabular-nums text-muted-foreground">
+                                similarity {Math.round(issue.score * 100)}%
+                              </span>
+                              <Link
+                                className="text-primary hover:underline"
+                                to={`/timeline?start=${startMs - 5_000}&end=${
+                                  endMs + 5_000
+                                }`}
+                              >
+                                Timeline
+                              </Link>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                disabled={!issue.decisionId}
+                                onClick={() =>
+                                  openCalibrationIssueAt(issueIndex)}
+                              >
+                                Listen / fix
+                              </Button>
+                            </div>
+                          );
+                        })}
+                        {visibleCalibrationIssues.length === 0 && (
+                          <p className="p-4 text-sm text-muted-foreground">
+                            No clips in this problem category.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <details className="rounded-md border bg-muted/10 p-3 text-sm">
+                <summary className="cursor-pointer font-medium">
+                  Advanced threshold diagnostics
+                </summary>
+                <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                  <span>
+                    Learned Sky threshold{" "}
+                    <strong>
+                      {calibrationPreview.thresholds?.positiveThreshold
+                        .toFixed(3) ?? "—"}
+                    </strong>
+                  </span>
+                  <span>
+                    Not-Sky mode{" "}
+                    <strong>
+                      {previewNegativeDecisionMode === "uncertain_only"
+                        ? "off · remains uncertain"
+                        : calibrationPreview.thresholds?.negativeThreshold
+                          .toFixed(3) ?? "—"}
+                    </strong>
+                  </span>
+                  <span>
+                    Compatible labels{" "}
+                    <strong>
+                      {calibrationPreview.counts.positive} Sky ·{" "}
+                      {calibrationPreview.counts.negative} not-Sky
+                    </strong>
+                  </span>
+                  <span>
+                    Excluded old embeddings{" "}
+                    <strong>{calibrationPreview.counts.incompatible}</strong>
+                  </span>
+                </div>
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <strong>Advanced · stricter automatic Sky matching</strong>
+                    <strong className="mt-3 block">
+                      Stricter automatic Sky matching
+                    </strong>
                     <p className="mt-1 text-xs text-muted-foreground">
                       Raising the positive cosine threshold produces fewer
                       automatic Sky matches. Coverage and recall usually fall;
@@ -3499,32 +4170,28 @@ export default function VoiceIdentityReviewPage() {
                       </p>
                     </div>
                   )}
-              </div>
+              </details>
 
               {previewNegativeDecisionMode === "uncertain_only" && (
                 <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-sm">
-                  <strong>Safe Sky-first mode</strong>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    The reviewed data supports automatic Sky matches, but not a
-                    reliable automatic not-Sky boundary. The worker will not
-                    reject those voices automatically: every score below the Sky
-                    threshold remains uncertain until review. This is a
-                    conservative calibration mode, not a failed calibration.
-                    Manual not-Sky labels are preserved.
-                  </p>
+                  <strong>Safe mode:</strong>{" "}
+                  <span className="text-muted-foreground">
+                    automatic Sky matches are allowed; everything else remains
+                    uncertain instead of being marked not-Sky.
+                  </span>
                 </div>
               )}
 
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <p className="text-sm font-medium">Recording split</p>
+                    <p className="text-sm font-medium">
+                      Choose recording roles
+                    </p>
                     <p className="text-xs text-muted-foreground">
-                      Dates and label mix identify each source; the raw ID is
-                      only a secondary reference.
                       {calibrationPreview.automaticSplit
-                        ? " The recommended split below was balanced automatically."
-                        : " You changed the automatic split."}
+                        ? "A balanced split is selected automatically. Change it only when a recording contains questionable labels or unusually similar voices."
+                        : "Custom split active. Each recording must be in exactly one role."}
                     </p>
                   </div>
                   {!calibrationPreview.automaticSplit && (
@@ -3538,32 +4205,36 @@ export default function VoiceIdentityReviewPage() {
                         setCalibrationRefreshResult(null);
                       }}
                     >
-                      Use recommended automatic split
+                      Restore recommended split
                     </Button>
                   )}
                 </div>
                 <div className="grid gap-2 md:grid-cols-3">
-                  <div className="rounded-md border p-3 text-xs">
-                    <strong>Fit thresholds</strong>
+                  <div className="rounded-md border border-sky-500/30 bg-sky-500/5 p-3 text-xs">
+                    <strong>Learn</strong>
                     <p className="mt-1 text-muted-foreground">
                       {fitRecordingSummary.recordings} recordings ·{" "}
                       {fitRecordingSummary.sky} Sky ·{" "}
                       {fitRecordingSummary.notSky} not-Sky
                     </p>
+                    <p className="mt-1">Chooses the similarity boundary.</p>
                   </div>
-                  <div className="rounded-md border p-3 text-xs">
-                    <strong>Validate on held-out audio</strong>
+                  <div className="rounded-md border border-green-500/30 bg-green-500/5 p-3 text-xs">
+                    <strong>Independent check</strong>
                     <p className="mt-1 text-muted-foreground">
                       {validationRecordingSummary.recordings} recordings ·{" "}
                       {validationRecordingSummary.sky} Sky ·{" "}
                       {validationRecordingSummary.notSky} not-Sky
                     </p>
+                    <p className="mt-1">
+                      Measures accuracy on audio Learn never saw.
+                    </p>
                   </div>
                   <div className="rounded-md border p-3 text-xs">
-                    <strong>Exclude from this calibration</strong>
+                    <strong>Not used</strong>
                     <p className="mt-1 text-muted-foreground">
-                      Labels remain saved and can be used in another split
-                      later.
+                      Ignored by this calculation. Labels stay saved and can be
+                      used later.
                     </p>
                   </div>
                 </div>
@@ -3581,50 +4252,96 @@ export default function VoiceIdentityReviewPage() {
                         : effectiveValidationIds.includes(recording.id)
                         ? "validation"
                         : "unused";
+                    const recordingIssues = calibrationIssueCountsByRecording
+                      .get(recording.id);
+                    const recordingIssueTotal = recordingIssues
+                      ? recordingIssues.falsePositive +
+                        recordingIssues.missedPositive
+                      : 0;
                     return (
                       <div
                         key={recording.id}
-                        className="grid gap-2 rounded-md border p-3 text-sm md:grid-cols-[minmax(14rem,1fr)_auto_auto] md:items-center"
+                        title={`Recording ${recording.id}`}
+                        className="grid gap-2 rounded-md border p-3 text-sm md:grid-cols-[minmax(14rem,1fr)_auto_minmax(13rem,auto)] md:items-center"
                       >
                         <div className="min-w-0">
-                          <Link
-                            className="font-medium text-primary hover:underline"
-                            to={`/timeline?start=${
-                              new Date(recording.start).getTime()
-                            }&end=${new Date(recording.end).getTime()}`}
-                          >
-                            {new Date(recording.start).toLocaleString()} —{" "}
-                            {new Date(recording.end).toLocaleTimeString()}
-                          </Link>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {recording.id}
-                          </p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Link
+                              className="font-medium text-primary hover:underline"
+                              to={`/timeline?start=${
+                                new Date(recording.start).getTime()
+                              }&end=${new Date(recording.end).getTime()}`}
+                            >
+                              {new Date(recording.start).toLocaleString()} —
+                              {" "}
+                              {new Date(recording.end).toLocaleTimeString()}
+                            </Link>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7"
+                              onClick={() =>
+                                openHistoryForRecording(recording.id)}
+                            >
+                              Review saved labels
+                            </Button>
+                            {recordingIssueTotal > 0 && (
+                              <Button
+                                size="sm"
+                                variant="link"
+                                className="h-7 px-0 text-amber-700 dark:text-amber-400"
+                                onClick={() => {
+                                  setCalibrationProblemKind(
+                                    (recordingIssues?.falsePositive ?? 0) > 0
+                                      ? "falsePositive"
+                                      : "missedPositive",
+                                  );
+                                  setCalibrationProblemRecordingId(
+                                    recording.id,
+                                  );
+                                  setShowCalibrationProblems(true);
+                                  setCalibrationEditingItem(null);
+                                  setCalibrationEditingPlayOnMount(false);
+                                }}
+                              >
+                                {recordingIssueTotal}{" "}
+                                check problem{recordingIssueTotal === 1
+                                  ? ""
+                                  : "s"}
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         <span className="text-xs text-muted-foreground">
                           {recording.positive} Sky · {recording.negative}{" "}
                           not-Sky · {recording.total} total
                         </span>
-                        <div className="flex gap-1">
-                          {(["calibration", "validation", "unused"] as const)
-                            .map((target) => (
-                              <Button
-                                key={target}
-                                type="button"
-                                size="sm"
-                                variant={selected === target
-                                  ? "default"
-                                  : "outline"}
-                                onClick={() =>
-                                  chooseRecordingSet(recording.id, target)}
-                              >
-                                {target === "calibration"
-                                  ? "Fit thresholds"
-                                  : target === "validation"
-                                  ? "Validate held-out"
-                                  : "Exclude"}
-                              </Button>
-                            ))}
-                        </div>
+                        <label className="text-xs text-muted-foreground">
+                          Role in this calibration
+                          <select
+                            className="mt-1 block h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                            value={selected}
+                            aria-label={`Calibration role for ${recording.id}`}
+                            onChange={(event) =>
+                              chooseRecordingSet(
+                                recording.id,
+                                event.target.value as
+                                  | "calibration"
+                                  | "validation"
+                                  | "unused",
+                              )}
+                          >
+                            <option value="calibration">
+                              Learn — choose threshold
+                            </option>
+                            <option value="validation">
+                              Check — test unseen audio
+                            </option>
+                            <option value="unused">
+                              Not used — ignore for now
+                            </option>
+                          </select>
+                        </label>
                       </div>
                     );
                   })}
@@ -3633,12 +4350,28 @@ export default function VoiceIdentityReviewPage() {
               {calibrationPreview.blockers.length > 0 && (
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
                   <div className="flex items-center gap-2 font-medium">
-                    <AlertCircle className="h-4 w-4 text-amber-600" />What is
-                    still needed
+                    <AlertCircle className="h-4 w-4 text-amber-600" />Next
+                    action
                   </div>
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
                     {calibrationPreview.blockers.map((blocker) => (
-                      <li key={blocker}>{blocker}</li>
+                      <li key={blocker}>
+                        {/Validation auto-match precision is below/i.test(
+                            blocker,
+                          )
+                          ? `Independent accuracy is below ${
+                            Math.round(calibrationTargetPrecision * 100)
+                          }%. Review the saved labels in Check recordings, then refresh the result.`
+                          : /Calibration set needs both/i.test(blocker)
+                          ? "Learn needs both Sky and not-Sky examples. Move a mixed recording to Learn."
+                          : /Validation set needs both/i.test(blocker)
+                          ? "Check needs both Sky and not-Sky examples. Move a different mixed recording to Check."
+                          : /at least two different source recordings/i.test(
+                              blocker,
+                            )
+                          ? "Use at least two different recordings: one for Learn and another for Check."
+                          : blocker}
+                      </li>
                     ))}
                   </ul>
                   {calibrationPreview.blockers.some((blocker) =>
@@ -3647,13 +4380,9 @@ export default function VoiceIdentityReviewPage() {
                     )
                   ) && (
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Next: open the Fit recordings, correct ambiguous or
-                      overlapping labels, keep only clear single-speaker clips,
-                      then try the recommended split or move a different mixed
-                      recording into Fit. If the recommended 98% production
-                      target still cannot pass, use 95% or 90% only for a
-                      bounded pilot and review its false matches before
-                      expanding.
+                      More random labels are not automatically better. Correct
+                      ambiguous labels in Check, restore the recommended split,
+                      or use 95%/90% only for a bounded 24-hour pilot.
                     </p>
                   )}
                 </div>
@@ -3677,9 +4406,8 @@ export default function VoiceIdentityReviewPage() {
                   : "Save validated calibration (98%) for full-range classification"}
               </Button>
               <p className="text-center text-xs text-muted-foreground">
-                The backend recalculates the split metrics during save; the
-                selected target and calculated thresholds are stored with the
-                calibration. A sub-98% pilot never unlocks historical backfill.
+                Save verifies the result again. A sub-98% pilot never unlocks
+                historical backfill.
               </p>
             </>
           )}
@@ -3875,11 +4603,11 @@ export default function VoiceIdentityReviewPage() {
               </div>
             </div>
           )}
-          <div className="rounded-lg border bg-muted/20 p-4 text-sm">
-            <p className="font-medium">
-              How much review is enough?
-            </p>
-            <ol className="mt-2 grid gap-2 text-muted-foreground md:grid-cols-5">
+          <details className="rounded-lg border bg-muted/20 p-4 text-sm">
+            <summary className="cursor-pointer font-medium">
+              Workflow after calibration
+            </summary>
+            <ol className="mt-3 grid gap-2 text-muted-foreground md:grid-cols-5">
               <li>
                 <strong className="text-foreground">1.</strong> Split recordings
               </li>
@@ -3910,7 +4638,7 @@ export default function VoiceIdentityReviewPage() {
               incremental after classification, especially for uncertain results
               and new profiles.
             </p>
-          </div>
+          </details>
         </CardContent>
       </Card>
     </div>

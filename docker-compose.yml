@@ -141,7 +141,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
+          cpus: "3.0"
           memory: 4G
         reservations:
           cpus: "0.2"
@@ -180,7 +180,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
+          cpus: "4.0"
           memory: 4G
         reservations:
           cpus: "0.5"
