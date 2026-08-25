@@ -29,6 +29,89 @@ export type CalibrationThresholds = {
 };
 
 export type CalibrationDecision = "identified" | "rejected" | "uncertain";
+export type ProfileScoringStrategy =
+  | "centroid"
+  | "max_prototype"
+  | "top2_prototype_mean";
+
+export type EmbeddingCalibrationExample<T = unknown> = {
+  label: "positive" | "negative";
+  embedding: number[];
+  value: T;
+};
+
+export type ScoringStrategySelection<T = unknown> = {
+  strategy: ProfileScoringStrategy;
+  thresholds: CalibrationThresholds;
+  metrics: CalibrationMetrics;
+  examples: Array<CalibrationExample & { value: T }>;
+};
+
+export type EnrollmentSourceIsolation<T> = {
+  examples: T[];
+  enrollmentRecordingIds: string[];
+  excludedRecordingIds: string[];
+  excludedExampleCount: number;
+  unknownTimelinePrototypeCount: number;
+};
+
+const TIMELINE_SAMPLE_SOURCES = new Set([
+  "timeline_selection",
+  "review_selection",
+]);
+
+export function isolateEnrollmentSourceRecordings<
+  T extends { recordingId: string },
+>(examples: T[], rawPrototypes: unknown[]): EnrollmentSourceIsolation<T> {
+  const enrollmentRecordingIds = new Set<string>();
+  let unknownTimelinePrototypeCount = 0;
+  for (const rawPrototype of rawPrototypes) {
+    if (!rawPrototype || typeof rawPrototype !== "object") continue;
+    const prototype = rawPrototype as Record<string, unknown>;
+    if (
+      !Array.isArray(prototype.embedding) || prototype.embedding.length === 0
+    ) continue;
+    const provenance = prototype.provenance &&
+        typeof prototype.provenance === "object"
+      ? prototype.provenance as Record<string, unknown>
+      : {};
+    const source = String(provenance.source ?? prototype.source ?? "");
+    if (!TIMELINE_SAMPLE_SOURCES.has(source)) continue;
+    const interval = provenance.interval &&
+        typeof provenance.interval === "object"
+      ? provenance.interval as Record<string, unknown>
+      : {};
+    const originalId = String(
+      provenance.originalId ?? prototype.originalId ?? "",
+    ).trim();
+    const start = Date.parse(
+      String(interval.start ?? prototype.sourceStart ?? ""),
+    );
+    const end = Date.parse(String(interval.end ?? prototype.sourceEnd ?? ""));
+    if (
+      !originalId || !Number.isFinite(start) || !Number.isFinite(end) ||
+      end <= start
+    ) {
+      unknownTimelinePrototypeCount += 1;
+      continue;
+    }
+    enrollmentRecordingIds.add(originalId);
+  }
+
+  const excludedRecordingIds = new Set<string>();
+  const eligibleExamples = examples.filter((example) => {
+    if (!enrollmentRecordingIds.has(example.recordingId)) return true;
+    excludedRecordingIds.add(example.recordingId);
+    return false;
+  });
+  return {
+    examples: eligibleExamples,
+    enrollmentRecordingIds: [...enrollmentRecordingIds].sort(),
+    excludedRecordingIds: [...excludedRecordingIds].sort(),
+    excludedExampleCount: examples.length - eligibleExamples.length,
+    unknownTimelinePrototypeCount,
+  };
+}
 
 export function classifyCalibrationScore(
   score: number,
@@ -64,6 +147,68 @@ export function cosineSimilarity(a: number[], b: number[]): number {
     bb += b[index] * b[index];
   }
   return aa && bb ? dot / Math.sqrt(aa * bb) : -1;
+}
+
+export function scoreProfileEmbedding(
+  embedding: number[],
+  centroid: number[],
+  prototypes: number[][],
+  strategy: ProfileScoringStrategy,
+): number {
+  if (strategy === "centroid" || prototypes.length === 0) {
+    return cosineSimilarity(centroid, embedding);
+  }
+  const scores = prototypes.map((prototype) =>
+    cosineSimilarity(prototype, embedding)
+  ).sort((a, b) => b - a);
+  if (strategy === "max_prototype") return scores[0];
+  return scores.length === 1 ? scores[0] : (scores[0] + scores[1]) / 2;
+}
+
+export function selectProfileScoringStrategy<T>(
+  examples: EmbeddingCalibrationExample<T>[],
+  centroid: number[],
+  prototypes: number[][],
+  targetPrecision: number,
+): ScoringStrategySelection<T> | null {
+  const strategies: ProfileScoringStrategy[] = prototypes.length > 0
+    ? ["centroid", "max_prototype", "top2_prototype_mean"]
+    : ["centroid"];
+  const selections = strategies.flatMap((strategy) => {
+    const scored = examples.map((example) => ({
+      label: example.label,
+      score: scoreProfileEmbedding(
+        example.embedding,
+        centroid,
+        prototypes,
+        strategy,
+      ),
+      value: example.value,
+    }));
+    const thresholds = chooseCalibrationThresholds(scored, targetPrecision);
+    if (!thresholds) return [];
+    return [{
+      strategy,
+      thresholds,
+      examples: scored,
+      metrics: evaluateCalibration(
+        scored,
+        thresholds.positiveThreshold,
+        thresholds.negativeThreshold,
+        thresholds.negativeDecisionMode,
+      ),
+    }];
+  });
+  const order: Record<ProfileScoringStrategy, number> = {
+    centroid: 0,
+    max_prototype: 1,
+    top2_prototype_mean: 2,
+  };
+  return selections.sort((a, b) =>
+    b.metrics.positiveRecall - a.metrics.positiveRecall ||
+    b.metrics.identified - a.metrics.identified ||
+    order[a.strategy] - order[b.strategy]
+  )[0] ?? null;
 }
 
 export function evaluateCalibration(
@@ -111,6 +256,27 @@ export function evaluateCalibration(
     positiveRecall: ratio(truePositive, positives),
     negativePrecision: ratio(trueNegative, trueNegative + falseNegative),
     negativeRecall: ratio(trueNegative, negatives),
+  };
+}
+
+export function applyHeldOutNegativeSafety(
+  thresholds: CalibrationThresholds,
+  validationMetrics: CalibrationMetrics | null,
+  targetPrecision: number,
+  minimumRejected: number,
+): CalibrationThresholds {
+  if (
+    thresholds.negativeDecisionMode !== "calibrated" ||
+    (validationMetrics !== null &&
+      validationMetrics.rejected >= minimumRejected &&
+      validationMetrics.negativePrecision >= targetPrecision)
+  ) {
+    return thresholds;
+  }
+  return {
+    positiveThreshold: thresholds.positiveThreshold,
+    negativeThreshold: -1,
+    negativeDecisionMode: "uncertain_only",
   };
 }
 

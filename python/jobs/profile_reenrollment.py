@@ -14,6 +14,31 @@ from lib.diarization_runtime import extract_diarizator_runtime_provenance
 from lib.resources import call_resource
 from speaker_identification.profiles import get_profile_by_id
 
+TIMELINE_SAMPLE_SOURCES = {"timeline_selection", "review_selection"}
+
+
+def _sample_provenance(sample: dict[str, Any]) -> dict[str, Any]:
+    raw_metadata = sample.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    raw_saved = metadata.get("provenance")
+    saved = raw_saved if isinstance(raw_saved, dict) else {}
+    raw_source = saved.get("source") or metadata.get("source") or "saved_voice_sample"
+    source = raw_source if isinstance(raw_source, str) else "saved_voice_sample"
+    if source not in TIMELINE_SAMPLE_SOURCES:
+        return {"kind": "saved_voice_sample", "source": source}
+
+    raw_interval = saved.get("interval")
+    interval = raw_interval if isinstance(raw_interval, dict) else {}
+    return {
+        "kind": "timeline_interval",
+        "source": source,
+        "originalId": saved.get("originalId") or metadata.get("source_original_id"),
+        "interval": {
+            "start": interval.get("start") or metadata.get("source_start"),
+            "end": interval.get("end") or metadata.get("source_end"),
+        },
+    }
+
 
 class ProfileReenrollmentJobData(BaseModel):
     profileId: str
@@ -29,12 +54,18 @@ def process_profile_reenrollment_job(
     profile = get_profile_by_id(data.profileId)
     if not profile:
         raise ValueError(f"Profile not found: {data.profileId}")
-    samples = call_resource("mongo", {
-        "action": "find",
-        "collection": "voice_samples.files",
-        "query": {"metadata.profile_id": data.profileId},
-        "options": {"sort": {"uploadDate": 1}},
-    }) or []
+    samples = (
+        call_resource(
+            "mongo",
+            {
+                "action": "find",
+                "collection": "voice_samples.files",
+                "query": {"metadata.profile_id": data.profileId},
+                "options": {"sort": {"uploadDate": 1}},
+            },
+        )
+        or []
+    )
     if not samples:
         raise ValueError("Profile has no saved samples to re-enroll")
 
@@ -47,19 +78,29 @@ def process_profile_reenrollment_job(
             _get_audio_from_gridfs(str(sample["_id"])),
             server_url=data.diarizationServerUrl,
         )
-        embeddings.append(np.asarray(result["embedding"], dtype=np.float32))
+        embedding = np.asarray(result["embedding"], dtype=np.float32)
+        embedding_norm = float(np.linalg.norm(embedding))
+        if embedding_norm == 0:
+            raise ValueError(f"Sample {sample['_id']} produced a zero embedding")
+        embeddings.append(embedding / embedding_norm)
         durations.append(float(result["duration"]))
         spaces.add(result.get("embeddingSpaceId", "legacy-unknown"))
         runtime = extract_diarizator_runtime_provenance(result)
         if runtime:
-            runtimes.add((
-                runtime["modelId"],
-                runtime["modelVersion"],
-                runtime["embeddingSpaceId"],
-            ))
-        progress_callback({"stage": "reenrollment", "processed": index + 1, "total": len(samples)})
+            runtimes.add(
+                (
+                    runtime["modelId"],
+                    runtime["modelVersion"],
+                    runtime["embeddingSpaceId"],
+                )
+            )
+        progress_callback(
+            {"stage": "reenrollment", "processed": index + 1, "total": len(samples)}
+        )
     if len(spaces) != 1:
-        raise ValueError(f"Diarizator changed embedding space during re-enrollment: {sorted(spaces)}")
+        raise ValueError(
+            f"Diarizator changed embedding space during re-enrollment: {sorted(spaces)}"
+        )
     if len(runtimes) > 1:
         raise ValueError("Diarizator runtime changed during re-enrollment")
 
@@ -68,6 +109,20 @@ def process_profile_reenrollment_job(
     if norm == 0:
         raise ValueError("Re-enrollment produced a zero embedding")
     merged /= norm
+    embedding_prototypes = []
+    for sample, embedding, duration in zip(samples, embeddings, durations):
+        similarity = float(np.dot(merged, embedding))
+        embedding_prototypes.append(
+            {
+                "sampleId": sample["_id"],
+                "embedding": embedding.tolist(),
+                "duration": duration,
+                "similarityToCentroid": round(similarity, 6),
+                "isOutlier": similarity < 0.6,
+                "source": (sample.get("metadata") or {}).get("source"),
+                "provenance": _sample_provenance(sample),
+            }
+        )
     embedding_space_id = spaces.pop()
     runtime_provenance = None
     if runtimes:
@@ -90,6 +145,12 @@ def process_profile_reenrollment_job(
     now = datetime.now(UTC)
     update = {
         "embedding": merged.tolist(),
+        "embeddingPrototypes": embedding_prototypes,
+        "availableScoringStrategies": [
+            "centroid",
+            "max_prototype",
+            "top2_prototype_mean",
+        ],
         "embeddingSpaceId": embedding_space_id,
         "revision": revision,
         "sample_count": len(samples),
@@ -103,19 +164,21 @@ def process_profile_reenrollment_job(
             "rebuiltAt": now,
             **(runtime_provenance or {}),
         },
-        **(
-            {"runtimeProvenance": runtime_provenance}
-            if runtime_provenance
-            else {}
-        ),
+        **({"runtimeProvenance": runtime_provenance} if runtime_provenance else {}),
         "updated_at": now,
     }
-    result = call_resource("mongo", {
-        "action": "updateOne",
-        "collection": "speaker_profiles",
-        "query": {"_id": ObjectId(data.profileId), "revision": profile.get("revision", 1)},
-        "update": {"$set": update},
-    })
+    result = call_resource(
+        "mongo",
+        {
+            "action": "updateOne",
+            "collection": "speaker_profiles",
+            "query": {
+                "_id": ObjectId(data.profileId),
+                "revision": profile.get("revision", 1),
+            },
+            "update": {"$set": update},
+        },
+    )
     if (result or {}).get("matchedCount", 0) != 1:
         raise RuntimeError("Profile changed while it was being re-enrolled")
     return {
@@ -124,5 +187,7 @@ def process_profile_reenrollment_job(
         "profileRevision": revision,
         "embeddingSpaceId": embedding_space_id,
         "runtimeProvenance": runtime_provenance,
+        "prototypeCount": len(embedding_prototypes),
+        "sampleOutliers": sum(1 for item in embedding_prototypes if item["isOutlier"]),
         "hasMore": False,
     }
