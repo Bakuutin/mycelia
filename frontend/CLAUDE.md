@@ -154,7 +154,8 @@ const form = useForm({
 - Use `DateRangePicker` from `@/components/DateRangePicker` whenever a user
   chooses a start/end range. It provides one combined calendar selection,
   month/year dropdowns, optional minute/second precision, configured-timezone
-  conversion, validation, and optional audio-density fine tuning.
+  conversion, validation, explicit Start/End boundary editing, a scroll-contained
+  dialog, and optional audio-density fine tuning.
 - Use `DateTimePicker` from `@/components/ui/datetime-picker` only for a single
   instant.
 - Never assemble range controls from separate native `date`, `time`, or

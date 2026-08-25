@@ -624,8 +624,10 @@ import type { TimelineItem } from "@/types/timeline";
 Use `DateRangePicker` from `frontend/src/components/DateRangePicker.tsx` for
 start/end ranges throughout the app. It keeps the date range in one calendar,
 provides month and year dropdowns, defaults to minute precision, and can add the
-audio-density timeline with `showAudioTimeline`. Use `precision="date"` for
-date-only filters and opt into `precision="second"` only when the workflow
+audio-density timeline with `showAudioTimeline`. The picker opens in a
+viewport-contained, internally scrolling dialog; users explicitly select the
+Start or End boundary before editing its date or time. Use `precision="date"`
+for date-only filters and opt into `precision="second"` only when the workflow
 requires exact seconds.
 
 Use `DateTimePicker` from

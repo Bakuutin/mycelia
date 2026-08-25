@@ -1,21 +1,25 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { DateRange } from "react-day-picker";
 import { CalendarRange, Check, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import {
   calendarDateInTimeZone,
   type DatePickerPrecision,
   type DateRangeValue,
+  formatPickerDateTime,
   formatPickerDuration,
   formatPickerRange,
   isValidPickerDate,
@@ -44,6 +48,8 @@ type DateRangePickerProps = {
   showAudioTimeline?: boolean;
   className?: string;
 };
+
+type ActiveBoundary = "start" | "end";
 
 function useDesktopCalendar(): boolean {
   const [desktop, setDesktop] = useState(() =>
@@ -199,6 +205,7 @@ export function DateRangePicker({
   const defaultTimeZone = useSettingsStore((state) => state.defaultTimeZone);
   const timeZone = requestedTimeZone ?? resolveDefaultTimeZone(defaultTimeZone);
   const [open, setOpen] = useState(false);
+  const [activeBoundary, setActiveBoundary] = useState<ActiveBoundary>("start");
   const [draft, setDraft] = useState<DateRangeValue>(() =>
     value ?? {
       start: new Date(Date.now() - 86_400_000),
@@ -212,11 +219,18 @@ export function DateRangePicker({
     } | null
   >(value?.end ? { start: value.start, end: value.end } : null);
   const desktopCalendar = useDesktopCalendar();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const id = useId();
 
   useEffect(() => {
     if (!open && value) setDraft(value);
   }, [open, value]);
+
+  useEffect(() => {
+    if (open && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+  }, [open]);
 
   const selected: DateRange = {
     from: isValidPickerDate(draft.start)
@@ -253,29 +267,41 @@ export function DateRangePicker({
       setTimelineDomain(
         nextDraft.end ? { start: nextDraft.start, end: nextDraft.end } : null,
       );
+      setActiveBoundary("start");
     }
     setOpen(nextOpen);
   };
 
-  const handleCalendarSelect = (next: DateRange | undefined) => {
-    if (!next?.from) return;
-    const nextStart = replaceZonedCalendarDate(
-      draft.start ?? new Date(),
-      next.from,
+  const handleCalendarDayClick = (calendarDate: Date) => {
+    const boundaryValue = activeBoundary === "start"
+      ? draft.start
+      : draft.end ?? draft.start;
+    const nextBoundary = replaceZonedCalendarDate(
+      boundaryValue,
+      calendarDate,
       timeZone,
       precision,
     );
-    const nextEnd = next.to
-      ? replaceZonedCalendarDate(
-        draft.end ?? draft.start ?? new Date(),
-        next.to,
-        timeZone,
-        precision,
-      )
-      : undefined;
-    const nextDraft = { start: nextStart, end: nextEnd };
+    const nextDraft = activeBoundary === "start"
+      ? {
+        start: nextBoundary,
+        end: draft.end && (precision === "date"
+            ? draft.end.getTime() >= nextBoundary.getTime()
+            : draft.end.getTime() > nextBoundary.getTime())
+          ? draft.end
+          : undefined,
+      }
+      : { ...draft, end: nextBoundary };
     setDraft(nextDraft);
-    if (nextEnd) setTimelineDomain({ start: nextStart, end: nextEnd });
+    if (
+      nextDraft.end &&
+      (precision === "date"
+        ? nextDraft.end.getTime() >= nextDraft.start.getTime()
+        : nextDraft.end.getTime() > nextDraft.start.getTime())
+    ) {
+      setTimelineDomain({ start: nextDraft.start, end: nextDraft.end });
+    }
+    if (activeBoundary === "start") setActiveBoundary("end");
   };
 
   const apply = () => {
@@ -291,8 +317,8 @@ export function DateRangePicker({
   return (
     <div className={cn("space-y-2", className)}>
       {label && <Label htmlFor={`${id}-trigger`}>{label}</Label>}
-      <Popover open={open} onOpenChange={handleOpenChange}>
-        <PopoverTrigger asChild>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogTrigger asChild>
           <Button
             id={`${id}-trigger`}
             type="button"
@@ -308,16 +334,68 @@ export function DateRangePicker({
               </span>
             )}
           </Button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          className="max-h-[var(--radix-popover-content-available-height)] w-[min(calc(100vw-2rem),44rem)] overflow-y-auto p-0"
+        </DialogTrigger>
+        <DialogContent
+          showCloseButton={false}
+          className="flex !max-h-[calc(100dvh-2rem)] !w-[calc(100%-2rem)] !max-w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:!max-w-[48rem]"
         >
-          <div className="space-y-3 p-3">
+          <DialogHeader className="shrink-0 border-b px-4 py-3 pr-12">
+            <DialogTitle>{label ?? "Choose date range"}</DialogTitle>
+            <DialogDescription>
+              Select Start or End, then choose its date and time.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div
+            ref={scrollContainerRef}
+            data-slot="date-range-picker-scroll"
+            className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4"
+          >
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                aria-pressed={activeBoundary === "start"}
+                className={cn(
+                  "rounded-lg border p-3 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+                  activeBoundary === "start"
+                    ? "border-primary bg-primary/15 ring-1 ring-primary"
+                    : "border-border bg-card",
+                )}
+                onClick={() => setActiveBoundary("start")}
+              >
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Start
+                </span>
+                <span className="mt-1 block text-sm font-medium text-foreground">
+                  {formatPickerDateTime(draft.start, timeZone, precision)}
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={activeBoundary === "end"}
+                className={cn(
+                  "rounded-lg border p-3 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+                  activeBoundary === "end"
+                    ? "border-primary bg-primary/15 ring-1 ring-primary"
+                    : "border-border bg-card",
+                )}
+                onClick={() => setActiveBoundary("end")}
+              >
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  End
+                </span>
+                <span className="mt-1 block text-sm font-medium text-foreground">
+                  {draft.end
+                    ? formatPickerDateTime(draft.end, timeZone, precision)
+                    : "Choose finish"}
+                </span>
+              </button>
+            </div>
+
             <Calendar
               mode="range"
               selected={selected}
-              onSelect={handleCalendarSelect}
+              onDayClick={handleCalendarDayClick}
               numberOfMonths={desktopCalendar ? 2 : 1}
               captionLayout="dropdown"
               defaultMonth={selected.from}
@@ -337,6 +415,15 @@ export function DateRangePicker({
                   : "relative flex flex-col gap-4",
                 month: "flex min-w-0 flex-1 flex-col gap-4",
               }}
+              modifiers={{
+                activeBoundary: activeBoundary === "start"
+                  ? selected.from
+                  : selected.to,
+              }}
+              modifiersClassNames={{
+                activeBoundary:
+                  "relative z-20 rounded-md ring-2 ring-primary ring-offset-1 ring-offset-background",
+              }}
               className="mx-auto [--cell-size:2.25rem]"
             />
 
@@ -344,7 +431,15 @@ export function DateRangePicker({
               <div className="space-y-2 border-t pt-3">
                 <Label>Exact time</Label>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <label className="grid gap-1 text-xs text-muted-foreground">
+                  <label
+                    className={cn(
+                      "grid gap-1 rounded-md border p-2 text-xs text-muted-foreground",
+                      activeBoundary === "start"
+                        ? "border-primary bg-primary/10"
+                        : "border-border",
+                    )}
+                    onClick={() => setActiveBoundary("start")}
+                  >
                     Start
                     <Input
                       type="time"
@@ -367,7 +462,15 @@ export function DateRangePicker({
                       }}
                     />
                   </label>
-                  <label className="grid gap-1 text-xs text-muted-foreground">
+                  <label
+                    className={cn(
+                      "grid gap-1 rounded-md border p-2 text-xs text-muted-foreground",
+                      activeBoundary === "end"
+                        ? "border-primary bg-primary/10"
+                        : "border-border",
+                    )}
+                    onClick={() => setActiveBoundary("end")}
+                  >
                     End
                     <Input
                       type="time"
@@ -406,8 +509,16 @@ export function DateRangePicker({
                 timeZone={timeZone}
               />
             )}
+          </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+          <div
+            data-slot="date-range-picker-footer"
+            className="shrink-0 space-y-2 border-t bg-background px-4 py-3"
+          >
+            {draftError && (
+              <p className="text-xs text-destructive">{draftError}</p>
+            )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">
                 {pickerTimeZoneLabel(draft.start, timeZone)}
               </span>
@@ -417,8 +528,10 @@ export function DateRangePicker({
                     type="button"
                     size="sm"
                     variant="ghost"
-                    onClick={() =>
-                      setDraft((current) => ({ ...current, end: undefined }))}
+                    onClick={() => {
+                      setDraft((current) => ({ ...current, end: undefined }));
+                      setActiveBoundary("end");
+                    }}
                   >
                     <X className="mr-1 h-3.5 w-3.5" />
                     No finish
@@ -443,12 +556,9 @@ export function DateRangePicker({
                 </Button>
               </div>
             </div>
-            {draftError && (
-              <p className="text-xs text-destructive">{draftError}</p>
-            )}
           </div>
-        </PopoverContent>
-      </Popover>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
