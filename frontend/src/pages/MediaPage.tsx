@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Eye,
   FileImage,
@@ -18,8 +19,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { AuthenticatedMediaImage } from "@/components/media/AuthenticatedMediaImage";
+import { MediaEventsPanel } from "@/components/media/MediaEventsPanel";
+import { MediaBatchPanel } from "@/components/media/MediaBatchPanel";
 
 type RecognitionTask =
   | "visual-understanding"
@@ -50,9 +62,186 @@ const taskCopy: Record<RecognitionTask, { title: string; detail: string }> = {
   },
 };
 
+const MAX_MANAGED_UPLOAD_FILES = 50;
+const MAX_MANAGED_UPLOAD_TOTAL_BYTES = 48_000_000;
+
+type InventoryFilter =
+  | "all"
+  | "unprocessed"
+  | "processing"
+  | "ready"
+  | "errors";
+
+function mediaMetadataSummary(asset: any) {
+  const metadata = asset?.metadata ?? {};
+  const exif = metadata.exif ?? {};
+  const stream = Array.isArray(metadata.streams)
+    ? metadata.streams[0] ?? {}
+    : {};
+  const make = String(exif.Make ?? "").trim();
+  const model = String(exif.Model ?? "").trim();
+  const camera =
+    model && make && model.toLowerCase().startsWith(make.toLowerCase())
+      ? model
+      : [make, model].filter(Boolean).join(" ") || "—";
+  const width = Number(
+    asset?.preview?.width ?? stream.width ?? exif.ImageWidth,
+  );
+  const height = Number(
+    asset?.preview?.height ?? stream.height ?? exif.ImageHeight,
+  );
+  return {
+    camera,
+    dimensions: width > 0 && height > 0 ? `${width} × ${height}` : "—",
+    captured: asset?.capturedAt
+      ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "medium",
+      }).format(new Date(asset.capturedAt))
+      : "No reliable capture time",
+    location: asset?.location
+      ? `${Number(asset.location.latitude).toFixed(5)}, ${
+        Number(asset.location.longitude).toFixed(5)
+      }`
+      : "—",
+  };
+}
+
+function mountedPathError(value: string): string | undefined {
+  const path = value.trim();
+  if (!path) return "Enter a path relative to the mounted media folder";
+  if (
+    path.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(path) ||
+    path.split(/[\\/]+/).includes("..")
+  ) {
+    return 'Use "." or a relative path such as "2026/photos"; host paths are configured outside the browser';
+  }
+}
+
+function MediaPlacementEditor({
+  asset,
+  onSaved,
+}: {
+  asset: any;
+  onSaved: () => Promise<void>;
+}) {
+  const [capturedAt, setCapturedAt] = useState(
+    asset.capturedAt
+      ? new Date(asset.capturedAt).toISOString().slice(0, 16)
+      : "",
+  );
+  const [timeZone, setTimeZone] = useState(asset.capturedAtTimeZone ?? "");
+  const [latitude, setLatitude] = useState(
+    asset.location?.latitude != null ? String(asset.location.latitude) : "",
+  );
+  const [longitude, setLongitude] = useState(
+    asset.location?.longitude != null ? String(asset.location.longitude) : "",
+  );
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    const hasLat = latitude.trim() !== "";
+    const hasLng = longitude.trim() !== "";
+    if (hasLat !== hasLng) {
+      toast.error("Enter both latitude and longitude, or leave both empty");
+      return;
+    }
+    setSaving(true);
+    try {
+      await callResource("media-library", {
+        action: "updatePlacement",
+        assetId: String(asset._id),
+        expectedRevision: Number(asset.placementRevision ?? 0),
+        capturedAt: capturedAt
+          ? new Date(`${capturedAt}:00Z`).toISOString()
+          : null,
+        timeZone: timeZone.trim() || null,
+        location: hasLat && hasLng
+          ? { latitude: Number(latitude), longitude: Number(longitude) }
+          : null,
+      });
+      toast.success("Photo time and location saved locally with audit history");
+      await onSaved();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Placement update failed",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div>
+        <div className="font-medium">Manual Timeline / Map placement</div>
+        <p className="text-xs text-muted-foreground">
+          Local edit only; Google is not called. Time is entered as a UTC
+          instant.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <Label htmlFor={`captured-${asset._id}`}>Capture time (UTC)</Label>
+          <Input
+            id={`captured-${asset._id}`}
+            type="datetime-local"
+            value={capturedAt}
+            onChange={(event) => setCapturedAt(event.target.value)}
+          />
+        </div>
+        <div>
+          <Label htmlFor={`timezone-${asset._id}`}>Timezone / offset</Label>
+          <Input
+            id={`timezone-${asset._id}`}
+            value={timeZone}
+            onChange={(event) => setTimeZone(event.target.value)}
+            placeholder="+04:00 or Asia/Yerevan"
+          />
+        </div>
+        <div>
+          <Label htmlFor={`latitude-${asset._id}`}>Latitude</Label>
+          <Input
+            id={`latitude-${asset._id}`}
+            inputMode="decimal"
+            value={latitude}
+            onChange={(event) => setLatitude(event.target.value)}
+          />
+        </div>
+        <div>
+          <Label htmlFor={`longitude-${asset._id}`}>Longitude</Label>
+          <Input
+            id={`longitude-${asset._id}`}
+            inputMode="decimal"
+            value={longitude}
+            onChange={(event) => setLongitude(event.target.value)}
+          />
+        </div>
+      </div>
+      <Button onClick={save} disabled={saving} variant="outline">
+        {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        Save local placement
+      </Button>
+    </div>
+  );
+}
+
 export default function MediaPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [status, setStatus] = useState<any>();
   const [assets, setAssets] = useState<any[]>([]);
+  const [assetTotal, setAssetTotal] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [placementFilter, setPlacementFilter] = useState<
+    "all" | "missing_time" | "missing_location"
+  >((searchParams.get("placement") as any) ?? "all");
+  const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>(
+    "all",
+  );
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState<string[]>(
+    [],
+  );
   const [path, setPath] = useState(".");
   const [profileId, setProfileId] = useState("");
   const [selectedTasks, setSelectedTasks] = useState<RecognitionTask[]>([
@@ -67,17 +256,52 @@ export default function MediaPage() {
   const [detail, setDetail] = useState<any>();
   const [deletionPreview, setDeletionPreview] = useState<any>();
 
-  const load = async () => {
+  const load = async (options: { append?: boolean } = {}) => {
     try {
+      const backendFilter = inventoryFilter === "errors"
+        ? "needs_attention"
+        : inventoryFilter;
       const [nextStatus, nextAssets] = await Promise.all([
         callResource("media", { action: "status" }),
-        callResource("media", { action: "listAssets", limit: 50 }),
+        callResource("media", {
+          action: "listAssets",
+          limit: 100,
+          inventoryFilter: backendFilter,
+          placement: placementFilter,
+          ...(options.append && nextCursor ? { cursor: nextCursor } : {}),
+        }),
       ]);
       setStatus(nextStatus);
-      setAssets(nextAssets.assets ?? []);
-      setProfileId((current) =>
-        nextStatus.enabled ? current || nextStatus.activeProfileId || "" : ""
-      );
+      setAssets((current) => {
+        if (!options.append) return nextAssets.assets ?? [];
+        const byId = new Map(
+          [...current, ...(nextAssets.assets ?? [])].map((asset: any) => [
+            String(asset._id),
+            asset,
+          ]),
+        );
+        return [...byId.values()];
+      });
+      setNextCursor(nextAssets.nextCursor);
+      setAssetTotal(Number(nextAssets.total ?? nextAssets.assets?.length ?? 0));
+      setSelectedInventoryIds((current) => {
+        const available = new Set(
+          (nextAssets.assets ?? []).map((asset: any) => String(asset._id)),
+        );
+        return current.filter((id) => available.has(id));
+      });
+      setProfileId((current) => {
+        if (!nextStatus.enabled) return "";
+        const enabledIds = new Set(
+          (nextStatus.profiles ?? []).filter((entry: any) => entry.enabled).map(
+            (entry: any) => entry.id,
+          ),
+        );
+        if (current && enabledIds.has(current)) return current;
+        return enabledIds.has(nextStatus.activeProfileId)
+          ? nextStatus.activeProfileId
+          : "";
+      });
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to load Media Library",
@@ -86,8 +310,8 @@ export default function MediaPage() {
   };
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [inventoryFilter, placementFilter]);
 
   useEffect(() => {
     if (
@@ -101,16 +325,33 @@ export default function MediaPage() {
     () => status?.profiles?.find((entry: any) => entry.id === profileId),
     [status, profileId],
   );
-
+  const searchProfile = useMemo(
+    () =>
+      status?.enabled
+        ? status?.profiles?.find((entry: any) =>
+          entry.id === status.activeProfileId && entry.enabled
+        )
+        : undefined,
+    [status],
+  );
+  const filteredAssets = assets;
   const analyze = async () => {
+    if (preview) return;
+    const relativePath = path.trim();
+    const validationError = mountedPathError(relativePath);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
     setBusy(true);
     try {
       const result = await callResource("media", {
         action: "analyzeSource",
-        relativePath: path,
+        relativePath,
         ...(profileId ? { profileId } : {}),
         ...(profileId ? { requestedTasks: selectedTasks } : {}),
       });
+      setQueueRecognition(false);
       setPreview(result);
       toast.success(
         `Analyzed ${result.items.length} local item(s); nothing sent to Google yet`,
@@ -125,7 +366,20 @@ export default function MediaPage() {
   };
 
   const analyzeUploads = async (files: File[]) => {
-    if (files.length === 0) return;
+    if (
+      files.length === 0 || busy ||
+      Boolean(preview) ||
+      Boolean(profileId && selectedTasks.length === 0)
+    ) return;
+    if (files.length > MAX_MANAGED_UPLOAD_FILES) {
+      toast.error(`Choose at most ${MAX_MANAGED_UPLOAD_FILES} files at once`);
+      return;
+    }
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > MAX_MANAGED_UPLOAD_TOTAL_BYTES) {
+      toast.error("The selected upload exceeds the 48 MB request limit");
+      return;
+    }
     setBusy(true);
     try {
       const form = new FormData();
@@ -138,6 +392,7 @@ export default function MediaPage() {
         "/api/media/imports/analyze",
         form,
       );
+      setQueueRecognition(false);
       setPreview(result);
       toast.success(
         `Prepared ${result.items.length} upload(s); originals are staged until confirmation`,
@@ -156,7 +411,8 @@ export default function MediaPage() {
     setBusy(true);
     try {
       const shouldQueue = Boolean(
-        queueRecognition && profileId && selectedTasks.length > 0,
+        queueRecognition && preview.provider?.id &&
+          preview.requestedTasks?.length > 0,
       );
       const result = await callResource("media", {
         action: "confirmImport",
@@ -164,11 +420,26 @@ export default function MediaPage() {
         consent: true,
         queueRecognition: shouldQueue,
       });
-      toast.success(
-        shouldQueue
-          ? `Imported and queued ${result.created.length} media item(s)`
-          : `Imported ${result.created.length} media item(s) without cloud processing`,
-      );
+      const createdCount = result.created?.length ?? 0;
+      const recoveredCount = result.recovered?.length ?? 0;
+      const confirmedCount = createdCount + recoveredCount;
+      const queuedCount =
+        [...(result.created ?? []), ...(result.recovered ?? [])]
+          .filter((entry: any) => Boolean(entry.jobId)).length;
+      const recoveryCopy = recoveredCount
+        ? `; restored ${recoveredCount} original(s)`
+        : "";
+      if (shouldQueue && queuedCount < confirmedCount) {
+        toast.warning(
+          `Confirmed ${confirmedCount} media item(s), but queued ${queuedCount}; failed queue attempts remain available for Retry${recoveryCopy}`,
+        );
+      } else {
+        toast.success(
+          shouldQueue
+            ? `Confirmed and queued ${queuedCount} media item(s)${recoveryCopy}`
+            : `Confirmed ${confirmedCount} media item(s) without cloud processing${recoveryCopy}`,
+        );
+      }
       setPreview(undefined);
       await load();
     } catch (error) {
@@ -190,6 +461,7 @@ export default function MediaPage() {
         limit: 30,
       });
       setResults(result.results ?? []);
+      if (result.semanticWarning) toast.warning(result.semanticWarning);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Media search failed",
@@ -207,6 +479,11 @@ export default function MediaPage() {
         assetId,
       });
       setSelectedAssetId(assetId);
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        next.set("assetId", assetId);
+        return next;
+      }, { replace: true });
       setDetail(result);
       setDeletionPreview(undefined);
     } catch (error) {
@@ -218,22 +495,91 @@ export default function MediaPage() {
     }
   };
 
+  useEffect(() => {
+    const assetId = searchParams.get("assetId");
+    if (assetId && assetId !== selectedAssetId) void openAsset(assetId);
+  }, [searchParams, selectedAssetId]);
+
   const processSelected = async () => {
     if (!selectedAssetId || !profileId) return;
     setBusy(true);
     try {
-      await callResource("media", {
+      const result = await callResource("media", {
         action: "retry",
         assetId: selectedAssetId,
         profileId,
         requestedTasks: selectedTasks,
       });
-      toast.success(`Queued with ${profile?.name ?? profileId}`);
+      if (result.queued === false) {
+        toast.error(
+          "Recognition could not be queued; the asset remains available for Retry",
+        );
+      } else {
+        toast.success(`Queued with ${profile?.name ?? profileId}`);
+      }
       await Promise.all([load(), openAsset(selectedAssetId)]);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to queue recognition",
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const processInventoryBatch = async () => {
+    if (!profileId || selectedTasks.length === 0) return;
+    const selected = assets.filter((asset) =>
+      selectedInventoryIds.includes(String(asset._id)) &&
+      (asset.source || asset.managedOriginal) &&
+      !["queued", "processing"].includes(asset.status)
+    );
+    if (selected.length === 0) {
+      toast.error("Select at least one processable photo or PDF");
+      return;
+    }
+    if (
+      !globalThis.confirm(
+        `Queue ${selected.length} selected item(s) with ${
+          profile?.name ?? profileId
+        } for: ${
+          selectedTasks.join(", ")
+        }? Each item is submitted as its own auditable job.`,
+      )
+    ) return;
+    setBusy(true);
+    let queued = 0;
+    const errors: string[] = [];
+    try {
+      for (const asset of selected) {
+        try {
+          const result = await callResource("media", {
+            action: "retry",
+            assetId: String(asset._id),
+            profileId,
+            requestedTasks: selectedTasks,
+          });
+          if (result.queued) queued += 1;
+          else errors.push(`${asset.fileName}: queue unavailable`);
+        } catch (error) {
+          errors.push(
+            `${asset.fileName}: ${
+              error instanceof Error ? error.message : "request failed"
+            }`,
+          );
+        }
+      }
+      if (errors.length > 0) {
+        toast.warning(
+          `Queued ${queued}/${selected.length}. ${
+            errors.slice(0, 3).join("; ")
+          }`,
+        );
+      } else {
+        toast.success(`Queued ${queued} selected item(s)`);
+      }
+      setSelectedInventoryIds([]);
+      await load();
     } finally {
       setBusy(false);
     }
@@ -350,7 +696,7 @@ export default function MediaPage() {
             semantic search, metadata, and provider provenance in Mycelia.
           </p>
         </div>
-        <Button variant="outline" onClick={load}>
+        <Button variant="outline" onClick={() => void load()}>
           <RefreshCw className="mr-2 h-4 w-4" />Refresh
         </Button>
       </div>
@@ -365,6 +711,8 @@ export default function MediaPage() {
         </Card>
       )}
 
+      <MediaBatchPanel status={status} onInventoryChanged={() => load()} />
+
       <Card>
         <CardHeader>
           <CardTitle>Import photos and PDFs</CardTitle>
@@ -372,18 +720,35 @@ export default function MediaPage() {
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Relative folder or file path</Label>
+              <Label htmlFor="mounted-media-relative-path">
+                Relative folder or file path
+              </Label>
               <Input
+                id="mounted-media-relative-path"
                 value={path}
                 onChange={(event) => setPath(event.target.value)}
                 placeholder="2026/photos"
+                disabled={busy || Boolean(preview)}
               />
+              <p className="text-xs text-muted-foreground">
+                On this Mac, place files in the folder configured as
+                <code className="mx-1">MEDIA_SOURCE_HOST_PATH</code> in
+                <code className="mx-1">.env.media.local</code>. Mycelia sees it
+                read-only at <code>/media-source</code>. Use
+                <code className="mx-1">.</code>{" "}
+                for the whole mounted folder; do not paste a{" "}
+                <code>/Users/…</code> host path here.
+              </p>
             </div>
             <div className="space-y-2">
-              <Label>Recognition provider</Label>
+              <Label htmlFor="media-recognition-provider">
+                Recognition provider
+              </Label>
               <select
+                id="media-recognition-provider"
                 className="w-full rounded-md border bg-background p-2"
                 value={profileId}
+                disabled={busy || Boolean(preview)}
                 onChange={(event) => {
                   const nextId = event.target.value;
                   const nextProfile = status?.profiles?.find((entry: any) =>
@@ -404,7 +769,14 @@ export default function MediaPage() {
               >
                 <option value="">Metadata only (no cloud processing)</option>
                 {status?.profiles?.map((entry: any) => (
-                  <option key={entry.id} value={entry.id}>{entry.name}</option>
+                  <option
+                    key={entry.id}
+                    value={entry.id}
+                    disabled={!entry.enabled}
+                  >
+                    {entry.name}
+                    {entry.enabled ? "" : " (disabled in Settings)"}
+                  </option>
                 ))}
               </select>
             </div>
@@ -436,18 +808,33 @@ export default function MediaPage() {
                           {taskCopy[task].detail}
                         </p>
                         {globalGoogleTask && (
-                          <Badge
-                            className="mt-2"
-                            variant={disabled ? "secondary" : "destructive"}
-                          >
-                            {disabled ? "Disabled in profile" : "Global Google"}
-                          </Badge>
+                          <div className="mt-2 space-y-1">
+                            <Badge
+                              variant={disabled ? "secondary" : "destructive"}
+                            >
+                              {disabled
+                                ? "Disabled in Google profile"
+                                : "Global Google"}
+                            </Badge>
+                            {disabled && (
+                              <p className="text-xs text-muted-foreground">
+                                Enable “Allow global labels and objects” in{" "}
+                                <Link
+                                  className="underline"
+                                  to="/settings/google-cloud"
+                                >
+                                  Settings → Google Cloud
+                                </Link>
+                                , then Save.
+                              </p>
+                            )}
+                          </div>
                         )}
                       </div>
                       <Switch
                         aria-label={taskCopy[task].title}
                         checked={selectedTasks.includes(task)}
-                        disabled={disabled}
+                        disabled={disabled || busy || Boolean(preview)}
                         onCheckedChange={(enabled) => toggleTask(task, enabled)}
                       />
                     </div>
@@ -462,18 +849,34 @@ export default function MediaPage() {
             </div>
           )}
           <div
-            className="rounded-md border-2 border-dashed p-6 text-center"
+            aria-disabled={busy ||
+              Boolean(preview) ||
+              Boolean(profileId && selectedTasks.length === 0)}
+            className={`rounded-md border-2 border-dashed p-6 text-center ${
+              busy || Boolean(preview) ||
+                Boolean(profileId && selectedTasks.length === 0)
+                ? "cursor-not-allowed opacity-60"
+                : ""
+            }`}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
               event.preventDefault();
+              if (
+                busy || Boolean(preview) ||
+                Boolean(profileId && selectedTasks.length === 0)
+              ) return;
               void analyzeUploads(Array.from(event.dataTransfer.files));
             }}
           >
             <Upload className="mx-auto mb-2 h-6 w-6" />
-            <div className="font-medium">Upload managed originals</div>
+            <div className="font-medium">
+              Option 1 — upload managed originals from this computer
+            </div>
             <p className="mb-3 text-sm text-muted-foreground">
               JPEG, PNG, WebP, or PDF. Mycelia checks the real file type,
               deduplicates by SHA-256, and creates metadata-free WebP previews.
+              Up to 50 files and 48 MB total; 20 MB per image, 32 MB per PDF,
+              and 15 pages per PDF.
             </p>
             <label>
               <span className="inline-flex h-10 cursor-pointer items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground">
@@ -484,7 +887,7 @@ export default function MediaPage() {
                 type="file"
                 multiple
                 accept="image/jpeg,image/png,image/webp,application/pdf"
-                disabled={busy ||
+                disabled={busy || Boolean(preview) ||
                   Boolean(profileId && selectedTasks.length === 0)}
                 onChange={(event) => {
                   void analyzeUploads(Array.from(event.target.files ?? []));
@@ -495,16 +898,20 @@ export default function MediaPage() {
           </div>
           <div className="flex flex-wrap items-center gap-3 rounded-md border p-3">
             <div className="min-w-0 flex-1">
-              <div className="font-medium">Mounted read-only source</div>
+              <div className="font-medium">
+                Option 2 — mounted read-only source
+              </div>
               <p className="text-xs text-muted-foreground">
                 Stores only a checked reference to the original; the source file
-                is never copied or deleted.
+                is never copied or deleted. Put it under your configured host
+                folder, then enter <code>.</code> above to scan everything.
               </p>
             </div>
             <Button
               onClick={analyze}
               variant="outline"
               disabled={busy ||
+                Boolean(preview) ||
                 !status?.sourceConfigured ||
                 Boolean(profileId && selectedTasks.length === 0)}
             >
@@ -554,8 +961,10 @@ export default function MediaPage() {
                 </p>
               </div>
               <Switch
+                aria-label="Queue recognition after import"
                 checked={queueRecognition}
-                disabled={!profileId || selectedTasks.length === 0}
+                disabled={!preview.provider?.id ||
+                  preview.requestedTasks?.length === 0}
                 onCheckedChange={setQueueRecognition}
               />
             </div>
@@ -602,11 +1011,12 @@ export default function MediaPage() {
             <div className="rounded-md bg-muted p-3 text-sm">
               <ShieldCheck className="mr-2 inline h-4 w-4" />
               {preview.storageMode === "managed_original"
-                ? "Confirmation promotes staged originals into the separate media_originals store. You can later delete each original through a second preview-and-confirm step while retaining WebP previews, metadata, analysis, and search data."
+                ? "Upload analysis writes originals into staging in the separate media_originals store. An untouched preview expires after one hour; confirmation makes files canonical, and an interrupted confirmation has a bounded seven-day recovery lease. You can later delete each original through a second preview-and-confirm step while retaining WebP previews, metadata, analysis, and search data."
                 : "Confirmation stores checked external references and compact previews. The referenced source files are never copied or deleted."}
               {" "}
-              A provider receives content only when recognition is explicitly
-              queued; paths and EXIF are not included in image requests.
+              During import, a provider receives image content only when
+              recognition is explicitly queued; paths and EXIF are not included
+              in image requests.
             </div>
             <Button onClick={confirm} disabled={busy}>
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -623,14 +1033,23 @@ export default function MediaPage() {
           <CardTitle>Semantic photo search</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {searchProfile
+              ? searchProfile.providerType === "google-cloud"
+                ? `The search text is sent to the active provider ${searchProfile.name} only when you run a search and you have owned semantic media. Mycelia reserves at most $0.0004 gross list price per query.`
+                : `The search text is sent to the active provider ${searchProfile.name} only when you run a search and you have owned semantic media; it stays on your self-hosted endpoint.`
+              : "No enabled active recognition provider is configured, so search uses only stored OCR text and labels."}
+          </p>
           <div className="flex gap-2">
             <Input
+              aria-label="Semantic photo search"
               value={query}
+              maxLength={512}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && search()}
               placeholder="Фотографии с людьми у моря…"
             />
-            <Button onClick={search}>
+            <Button aria-label="Search media" onClick={search}>
               <Search className="h-4 w-4" />
             </Button>
           </div>
@@ -669,6 +1088,282 @@ export default function MediaPage() {
         </CardContent>
       </Card>
 
+      <Card id="media-inventory">
+        <CardHeader>
+          <CardTitle>Media inventory and processing</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-muted-foreground">
+                Showing {assets.length} of {assetTotal}{" "}
+                imported item(s). Ready means provider results were accepted;
+                staged means local metadata and previews exist but recognition
+                has not completed.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Individual photos also appear on the Photos track and Photos map
+                layer when they have reliable EXIF time/GPS. Photo events remain
+                separate explicitly published Objects on the{" "}
+                <a className="underline" href="/timeline">
+                  Timeline
+                </a>.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {([
+                ["all", "All"],
+                ["unprocessed", "Unprocessed"],
+                ["processing", "Queued / processing"],
+                ["ready", "Ready"],
+                ["errors", "Needs attention"],
+              ] as Array<[InventoryFilter, string]>).map(([value, label]) => (
+                <Button
+                  key={value}
+                  type="button"
+                  size="sm"
+                  variant={inventoryFilter === value ? "default" : "outline"}
+                  onClick={() => setInventoryFilter(value)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {([
+              ["all", "All placement"],
+              ["missing_time", "Missing time"],
+              ["missing_location", "Missing location"],
+            ] as const).map(([value, label]) => (
+              <Button
+                key={value}
+                type="button"
+                size="sm"
+                variant={placementFilter === value ? "default" : "outline"}
+                onClick={() => {
+                  setPlacementFilter(value);
+                  setSearchParams((current) => {
+                    const next = new URLSearchParams(current);
+                    if (value === "all") next.delete("placement");
+                    else next.set("placement", value);
+                    return next;
+                  }, { replace: true });
+                }}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 rounded-md border p-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setSelectedInventoryIds(
+                  filteredAssets.map((asset) => String(asset._id)),
+                )}
+              disabled={filteredAssets.length === 0}
+            >
+              Select visible
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setSelectedInventoryIds([])}
+              disabled={selectedInventoryIds.length === 0}
+            >
+              Clear selection
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={processInventoryBatch}
+              disabled={busy || !profileId || selectedTasks.length === 0 ||
+                selectedInventoryIds.length === 0}
+            >
+              {busy
+                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                : <Play className="mr-2 h-4 w-4" />}
+              Process selected ({selectedInventoryIds.length})
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Uses the provider and tasks selected in the import section; every
+              photo is queued as a separate bounded job.
+            </span>
+          </div>
+
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10">Select</TableHead>
+                <TableHead>Photo / file</TableHead>
+                <TableHead>Captured</TableHead>
+                <TableHead>Local metadata</TableHead>
+                <TableHead>Processing</TableHead>
+                <TableHead>Results</TableHead>
+                <TableHead className="text-right">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredAssets.length === 0
+                ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={7}
+                      className="py-8 text-center text-muted-foreground"
+                    >
+                      No media matches this filter.
+                    </TableCell>
+                  </TableRow>
+                )
+                : filteredAssets.map((asset) => {
+                  const id = String(asset._id);
+                  const metadata = mediaMetadataSummary(asset);
+                  const run = asset.inventory?.run;
+                  return (
+                    <TableRow
+                      key={id}
+                      data-state={selectedInventoryIds.includes(id)
+                        ? "selected"
+                        : undefined}
+                    >
+                      <TableCell>
+                        <Checkbox
+                          aria-label={`Select ${asset.fileName}`}
+                          checked={selectedInventoryIds.includes(id)}
+                          onCheckedChange={(checked) =>
+                            setSelectedInventoryIds((current) =>
+                              checked
+                                ? [...new Set([...current, id])]
+                                : current.filter((entry) => entry !== id)
+                            )}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex min-w-[220px] items-center gap-3">
+                          <AuthenticatedMediaImage
+                            path={asset.thumbnailUrl}
+                            alt={asset.fileName}
+                            className="h-12 w-12 rounded border object-cover"
+                          />
+                          <div className="min-w-0">
+                            <div className="max-w-[260px] truncate font-medium">
+                              {asset.fileName}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {asset.kind} ·{" "}
+                              {(Number(asset.byteLength ?? 0) / 1_000_000)
+                                .toFixed(2)} MB
+                            </div>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="min-w-[170px] text-xs">
+                        <div>{metadata.captured}</div>
+                        {asset.capturedAtTimeZone && (
+                          <div className="text-muted-foreground">
+                            {asset.capturedAtTimeZone} ·{" "}
+                            {asset.capturedAtTimeZoneSource}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="min-w-[180px] text-xs">
+                        <div>{metadata.camera}</div>
+                        <div className="text-muted-foreground">
+                          {metadata.dimensions} · GPS{" "}
+                          {metadata.location === "—" ? "no" : "yes"}
+                        </div>
+                      </TableCell>
+                      <TableCell className="min-w-[180px]">
+                        <div className="flex flex-wrap gap-1">
+                          <Badge
+                            variant={asset.status === "ready"
+                              ? "default"
+                              : asset.safeError
+                              ? "destructive"
+                              : "secondary"}
+                          >
+                            {asset.status}
+                          </Badge>
+                          {asset.inventory?.eventId && (
+                            <Badge variant="outline">In photo event</Badge>
+                          )}
+                        </div>
+                        {run && (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {run.providerName ?? run.providerType ?? "provider"}
+                            {run.modelVersion ? ` · ${run.modelVersion}` : ""}
+                          </div>
+                        )}
+                        {asset.safeError && (
+                          <div className="mt-1 max-w-[260px] text-xs text-destructive">
+                            {asset.safeError}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="min-w-[200px] text-xs">
+                        <div>
+                          {asset.inventory?.shortCaption ??
+                            "No visual description"}
+                        </div>
+                        <div className="text-muted-foreground">
+                          OCR {asset.inventory?.ocrPageCount ?? 0}{" "}
+                          page(s) · labels/objects{" "}
+                          {asset.inventory?.annotationCount ?? 0}
+                        </div>
+                        {Number.isFinite(Number(run?.grossListPriceUsd)) && (
+                          <div className="text-muted-foreground">
+                            estimated ${Number(run.grossListPriceUsd).toFixed(
+                              4,
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            openAsset(id)}
+                        >
+                          <Eye className="mr-2 h-4 w-4" />Details
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+            </TableBody>
+          </Table>
+          {nextCursor && (
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                onClick={() => void load({ append: true })}
+                disabled={busy}
+              >
+                Load next 100
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <MediaEventsPanel
+        status={status}
+        candidateAssetIds={selectedInventoryIds.filter((id) =>
+          assets.some((asset) =>
+            String(asset._id) === id && asset.kind === "image"
+          )
+        )}
+        onOpenAsset={openAsset}
+      />
+
       {detail?.asset && (
         <Card className="border-primary/50">
           <CardHeader className="flex-row items-start justify-between space-y-0">
@@ -688,6 +1383,11 @@ export default function MediaPage() {
                 setSelectedAssetId("");
                 setDetail(undefined);
                 setDeletionPreview(undefined);
+                setSearchParams((current) => {
+                  const next = new URLSearchParams(current);
+                  next.delete("assetId");
+                  return next;
+                }, { replace: true });
               }}
             >
               <X className="h-4 w-4" />
@@ -820,14 +1520,39 @@ export default function MediaPage() {
                     staged asset.
                   </p>
                 )}
-                <div>
-                  <div className="mb-1 font-medium">Local metadata</div>
-                  <pre className="max-h-56 overflow-auto rounded bg-muted p-3 text-xs">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {Object.entries(mediaMetadataSummary(detail.asset)).map(
+                    ([key, value]) => (
+                      <div key={key} className="rounded bg-muted p-3 text-sm">
+                        <div className="text-xs font-medium uppercase text-muted-foreground">
+                          {key}
+                        </div>
+                        <div className="mt-1 break-words">{value}</div>
+                      </div>
+                    ),
+                  )}
+                </div>
+                <details className="rounded border p-3">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    Raw local metadata (advanced)
+                  </summary>
+                  <pre className="mt-3 max-h-56 overflow-auto rounded bg-muted p-3 text-xs">
                     {JSON.stringify(detail.asset.metadata ?? {}, null, 2)}
                   </pre>
-                </div>
+                </details>
               </div>
             </div>
+
+            <MediaPlacementEditor
+              key={`${detail.asset._id}:${detail.asset.placementRevision ?? 0}`}
+              asset={detail.asset}
+              onSaved={async () => {
+                await Promise.all([
+                  load(),
+                  openAsset(String(detail.asset._id)),
+                ]);
+              }}
+            />
 
             {detail.visual?.visualUnderstanding && (
               <div className="space-y-4 rounded-md border border-primary/30 p-4">
@@ -998,50 +1723,6 @@ export default function MediaPage() {
           </CardContent>
         </Card>
       )}
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {assets.map((asset) => (
-          <Card key={String(asset._id)} className="overflow-hidden">
-            <AuthenticatedMediaImage
-              path={asset.thumbnailUrl}
-              alt={asset.fileName}
-              className="h-44 w-full object-cover"
-            />
-            <CardContent className="space-y-2 p-4">
-              <div className="truncate font-medium">{asset.fileName}</div>
-              <div className="flex flex-wrap gap-1">
-                <Badge
-                  variant={asset.status === "ready"
-                    ? "default"
-                    : asset.status === "failed"
-                    ? "destructive"
-                    : "secondary"}
-                >
-                  {asset.status}
-                </Badge>
-                <Badge variant="outline">{asset.kind}</Badge>
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {asset.source?.relativePath ?? "Managed copy"}
-              </div>
-              {asset.safeError && (
-                <div className="text-xs text-destructive">
-                  {asset.safeError}
-                </div>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={() =>
-                  openAsset(String(asset._id))}
-              >
-                <Eye className="mr-2 h-4 w-4" />Open details
-              </Button>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
     </div>
   );
 }

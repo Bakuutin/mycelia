@@ -76,6 +76,24 @@ describe("ApiClient", () => {
       );
     });
 
+    it("surfaces a safe JSON error returned by the backend", async () => {
+      const mockResponse = {
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        json: vi.fn().mockResolvedValue({
+          success: false,
+          error: "Use a path relative to the mounted media folder",
+        }),
+      };
+      ((globalThis as any).fetch as any).mockResolvedValue(mockResponse);
+      (auth.getCurrentJWT as any).mockResolvedValue("jwt-token");
+
+      await expect(client.fetch("/api/resource/media")).rejects.toThrow(
+        "Use a path relative to the mounted media folder",
+      );
+    });
+
     it("makes request without JWT when not available", async () => {
       const mockResponse = {
         ok: true,

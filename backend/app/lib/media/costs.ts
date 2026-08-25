@@ -20,6 +20,7 @@ export type GcpUsageSnapshot = {
 export const GOOGLE_VERTEX_VISUAL_SMOKE_GROSS_USD = 0.006;
 export const GOOGLE_VISION_OCR_SMOKE_GROSS_USD = 0.0015;
 export const GOOGLE_DOCUMENT_AI_SMOKE_GROSS_USD = 0.0015;
+export const GOOGLE_QUERY_EMBEDDING_GROSS_USD = 0.0004;
 
 export function estimateGoogleConnectorTestGrossUsd(
   includeDocumentAi: boolean,
@@ -96,7 +97,7 @@ export function assertMediaPerImportBudget(
     throw new Error(
       `Recognition estimate $${
         estimatedGrossUsd.toFixed(4)
-      } for one asset exceeds the per-import limit $${
+      } for one asset exceeds the per-asset limit $${
         config.promoGuard.perImportGrossLimitUsd.toFixed(4)
       }`,
     );

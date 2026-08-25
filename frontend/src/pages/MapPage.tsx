@@ -8,6 +8,7 @@ import {
   Bookmark,
   Clock,
   Database,
+  Images,
   Loader2,
   MapPin,
   MessageSquare,
@@ -38,6 +39,7 @@ import {
   LocationMap,
 } from "@/components/location/LocationMap";
 import { ConversationClustersLayer } from "@/components/location/ConversationClustersLayer";
+import { PhotoClustersLayer } from "@/components/location/PhotoClustersLayer";
 import { ImportTracksDialog } from "@/components/location/ImportTracksDialog";
 import {
   RecordedTracksLayer,
@@ -109,6 +111,13 @@ const MapPage = () => {
   const [showConversations, setShowConversations] = useState(false);
   const [showSavedPlaces, setShowSavedPlaces] = useState(true);
   const [showRecordedTracks, setShowRecordedTracks] = useState(false);
+  const [showPhotos, setShowPhotos] = useState(true);
+  const [photoStats, setPhotoStats] = useState({
+    totalPlaced: 0,
+    visibleCount: 0,
+    unplacedLocationCount: 0,
+    truncated: false,
+  });
   const [conversationsAllTime, setConversationsAllTime] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [geotagsOpen, setGeotagsOpen] = useState(false);
@@ -325,6 +334,31 @@ const MapPage = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <Switch
+            id="show-photos"
+            checked={showPhotos}
+            onCheckedChange={setShowPhotos}
+          />
+          <Label
+            htmlFor="show-photos"
+            className="flex items-center gap-1 text-sm"
+          >
+            <Images className="h-3.5 w-3.5" />
+            Photos ({photoStats.totalPlaced} total · {photoStats.visibleCount}
+            {" "}
+            in view)
+          </Label>
+          {photoStats.unplacedLocationCount > 0 && (
+            <Link
+              className="text-xs text-muted-foreground underline"
+              to="/media?placement=missing_location"
+            >
+              Unplaced {photoStats.unplacedLocationCount}
+            </Link>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
           <Button
             variant={showConversations ? "secondary" : "outline"}
             size="sm"
@@ -437,101 +471,64 @@ const MapPage = () => {
       <div className="flex min-h-0 flex-1 gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="isolate min-h-0 flex-1 overflow-hidden rounded-lg border">
-            {!hasData
-              ? (
-                <div className="flex h-full items-center justify-center">
-                  <Card className="max-w-md">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <MapPin className="h-5 w-5" />
-                        No location data yet
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3 text-sm text-muted-foreground">
-                      <ol className="list-inside list-decimal space-y-1">
-                        <li>
-                          Download the places database (one time, ~13 MB) so
-                          stays get city names.
-                        </li>
-                        <li>
-                          Export a track from Organic Maps: track →{" "}
-                          <span className="font-medium">Share → GPX/KML</span>.
-                        </li>
-                        <li>Import the files here.</li>
-                      </ol>
-                      <div className="flex gap-2 pt-1">
-                        {status && !status.geonamesReady && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={startGeonamesDownload}
-                            disabled={downloadingGeonames}
-                          >
-                            <Database className="mr-2 h-4 w-4" />
-                            Download places
-                          </Button>
-                        )}
-                        <Button size="sm" onClick={() => setImportOpen(true)}>
-                          <Upload className="mr-2 h-4 w-4" />
-                          Import tracks
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              )
-              : (
-                <LocationMap
-                  segments={segments}
-                  extraBoundsPoints={sourceBoundsPoints}
-                  selectedSegmentId={selectedSegment
-                    ? String(selectedSegment._id)
-                    : null}
-                  onSegmentClick={handleSegmentClick}
-                >
-                  {showConversations && (
-                    <ConversationClustersLayer
-                      groups={conversationsData?.groups ?? []}
-                      onSelectGroup={(group) => {
-                        setSelectedSegment(null);
-                        setSelectedSavedPlace(null);
-                        setSelectedRecordedTrack(null);
-                        setSelectedGroup(group);
-                      }}
-                    />
-                  )}
-                  {showRecordedTracks && (
-                    <RecordedTracksLayer
-                      tracks={recordedTracksData?.tracks ?? []}
-                      onSelect={(track) => {
-                        setSelectedGroup(null);
-                        setSelectedSegment(null);
-                        setSelectedSavedPlace(null);
-                        setSelectedRecordedTrack(track);
-                        const first = (track.renderPath ?? track.path)?.[0];
-                        if (first) setFlyTarget([first[1], first[0]]);
-                      }}
-                    />
-                  )}
-                  {showSavedPlaces && (
-                    <SavedPlacesLayer
-                      places={savedPlacesData?.places ?? []}
-                      onSelect={(place) => {
-                        setSelectedGroup(null);
-                        setSelectedSegment(null);
-                        setSelectedRecordedTrack(null);
-                        setSelectedSavedPlace(place);
-                        setFlyTarget([
-                          place.loc.coordinates[1],
-                          place.loc.coordinates[0],
-                        ]);
-                      }}
-                    />
-                  )}
-                  <FlyTo target={flyTarget} />
-                </LocationMap>
+            <LocationMap
+              segments={segments}
+              extraBoundsPoints={sourceBoundsPoints}
+              selectedSegmentId={selectedSegment
+                ? String(selectedSegment._id)
+                : null}
+              onSegmentClick={handleSegmentClick}
+            >
+              {showPhotos && <PhotoClustersLayer onStats={setPhotoStats} />}
+              {showConversations && (
+                <ConversationClustersLayer
+                  groups={conversationsData?.groups ?? []}
+                  onSelectGroup={(group) => {
+                    setSelectedSegment(null);
+                    setSelectedSavedPlace(null);
+                    setSelectedRecordedTrack(null);
+                    setSelectedGroup(group);
+                  }}
+                />
               )}
+              {showRecordedTracks && (
+                <RecordedTracksLayer
+                  tracks={recordedTracksData?.tracks ?? []}
+                  onSelect={(track) => {
+                    setSelectedGroup(null);
+                    setSelectedSegment(null);
+                    setSelectedSavedPlace(null);
+                    setSelectedRecordedTrack(track);
+                    const first = (track.renderPath ?? track.path)?.[0];
+                    if (first) setFlyTarget([first[1], first[0]]);
+                  }}
+                />
+              )}
+              {showSavedPlaces && (
+                <SavedPlacesLayer
+                  places={savedPlacesData?.places ?? []}
+                  onSelect={(place) => {
+                    setSelectedGroup(null);
+                    setSelectedSegment(null);
+                    setSelectedRecordedTrack(null);
+                    setSelectedSavedPlace(place);
+                    setFlyTarget([
+                      place.loc.coordinates[1],
+                      place.loc.coordinates[0],
+                    ]);
+                  }}
+                />
+              )}
+              <FlyTo target={flyTarget} />
+            </LocationMap>
           </div>
+
+          {!hasData && photoStats.totalPlaced > 0 && (
+            <p className="text-xs text-muted-foreground">
+              No imported GPX tracks are required for this view; the map is
+              currently showing EXIF/manual photo locations.
+            </p>
+          )}
 
           {/* Places currently on the map: clickable cluster chips */}
           {placeChips.length > 0 && (

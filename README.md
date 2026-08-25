@@ -51,15 +51,42 @@ your own words.
 - Preview-first import from a read-only mounted folder. Originals stay outside
   Mycelia by default; the database keeps a content hash, source-relative path,
   extracted metadata, and compact GridFS WebP previews.
+- Direct drag-and-drop/file-picker import is also available. Upload analysis
+  stages originals in a separate `media_originals` store. An untouched preview
+  expires after one hour; confirmation makes the files canonical, while an
+  interrupted confirmation has a bounded seven-day recovery lease. Originals
+  can later be removed with a preview-and-confirm receipt while previews,
+  metadata, and analysis remain.
 - Recognition is provider-neutral and can be queued separately from import. Its
   primary Google preset uses multimodal Gemini Flash-Lite through Vertex AI in
-  EU for Russian structured visual descriptions and semantic search. The same
-  Open Media API contract supports a self-hosted visual model.
-- Cloud Vision labels/objects and EU OCR are optional tasks. Versioned visual
+  the EU multi-region for Russian structured visual descriptions, plus
+  `gemini-embedding-001` in `europe-west4` for semantic search. The same Open
+  Media API contract supports a self-hosted visual model.
+- Cloud Vision and Document AI EU OCR are optional tasks; global Vision
+  labels/objects require a separate explicit opt-in. Versioned visual
   descriptions, embeddings, OCR pages, annotations, provenance, usage,
   deduplication, an app-side gross-cost ledger, and independent removal of
   previews, derived analysis, or the source reference are stored separately. See
   [MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+- Photo events locally cluster nearby owned images by capture time and EXIF GPS,
+  then use a separate preview-and-confirm step before a Google or self-hosted
+  provider can analyze a displayed, bounded set of sanitized thumbnails (eight
+  by default, at most twelve). Ready results can be reviewed and explicitly
+  published as idempotent Mycelia Event Objects on the Timeline;
+  audio/transcription/Object links stay local and identity recognition is
+  forbidden. The Media inventory exposes processed, queued, unprocessed, and
+  failed items in a structured table, supports explicit per-photo batch
+  processing, and shows unmatched event candidates as single photos instead of
+  silently omitting them.
+- Large mounted folders use resumable scan → review → confirm campaigns in
+  25-file chunks. The inventory is cursor-paginated, and an exact SHA-bound
+  Google batch can process every eligible photo with one ordinary recognition
+  job per item. Individual photos have a default Photos map layer and adaptive
+  Photos Timeline track; missing time/GPS stays visible as Unplaced and can be
+  assigned locally with audit history.
+- Google media billing supports a fail-closed 24-hour Free Trial confirmation
+  or an explicit persistent paid-account acknowledgement bound to one project;
+  both retain the application monthly, daily, per-asset, and per-event limits.
 
 ### AI Chat
 

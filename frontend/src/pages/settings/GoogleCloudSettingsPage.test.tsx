@@ -15,7 +15,6 @@ const emptyConfig = {
   profiles: [],
   promoGuard: {
     mode: "promo_guarded",
-    promotionExpiresAt: "2026-09-24T00:00:00.000Z",
     stopBeforeHours: 72,
     monthlyGrossLimitUsd: 1,
     dailyGrossLimitUsd: 0.1,
@@ -26,6 +25,14 @@ const emptyConfig = {
     maxImageBytes: 20_000_000,
     maxPdfBytes: 32_000_000,
     maxPdfPages: 15,
+  },
+  eventAggregation: {
+    maxGapMinutes: 240,
+    maxDistanceKm: 25,
+    linkWindowMinutes: 90,
+    maxAssetsPerEvent: 50,
+    maxPreviewsPerAnalysis: 8,
+    perEventGrossLimitUsd: 0.02,
   },
 };
 
@@ -93,7 +100,7 @@ describe("GoogleCloudSettingsPage", () => {
         action: "patch",
         path: "mediaKnowledge",
         updates: expect.objectContaining({
-          activeProfileId: "google-cloud-media",
+          activeProfileId: undefined,
           profiles: [expect.objectContaining({
             providerType: "google-cloud",
             projectId: "mycelia-media-260821",
@@ -113,6 +120,32 @@ describe("GoogleCloudSettingsPage", () => {
     expect(screen.getByText("$0.0060")).toBeTruthy();
     expect(screen.getByText("Reserved")).toBeTruthy();
     expect(screen.getByText("$0.0015")).toBeTruthy();
+  });
+
+  it("persists local clustering and per-event provider limits", async () => {
+    const user = userEvent.setup();
+    render(<GoogleCloudSettingsPage />);
+
+    const gap = await screen.findByLabelText("Default gap, minutes");
+    await user.clear(gap);
+    await user.type(gap, "180");
+    const eventStop = screen.getByLabelText("Per event gross stop, USD");
+    await user.clear(eventStop);
+    await user.type(eventStop, "0.015");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mockCallResource).toHaveBeenCalledWith("config", {
+        action: "patch",
+        path: "mediaKnowledge",
+        updates: expect.objectContaining({
+          eventAggregation: expect.objectContaining({
+            maxGapMinutes: 180,
+            perEventGrossLimitUsd: 0.015,
+          }),
+        }),
+      });
+    });
   });
 
   it("discloses that the Google connector smoke uses Vertex and Vision", async () => {
@@ -149,5 +182,137 @@ describe("GoogleCloudSettingsPage", () => {
     ).toBeTruthy();
     expect(screen.getByText(/reserves at most \$0\.0075/)).toBeTruthy();
     expect(screen.getByText(/No user photo is used/)).toBeTruthy();
+  });
+
+  it("requires and stores an explicit billing-account attestation", async () => {
+    mockCallResource.mockImplementation((resource, input) => {
+      if (resource === "config" && input.action === "get") {
+        return Promise.resolve({
+          ...emptyConfig,
+          promoGuard: {
+            ...emptyConfig.promoGuard,
+            promotionExpiresAt: "2099-09-24T00:00:00.000Z",
+          },
+          activeProfileId: "google-cloud-media",
+          profiles: [{
+            id: "google-cloud-media",
+            name: "Google Cloud EU Photo Knowledge",
+            providerType: "google-cloud",
+            enabled: true,
+            concurrency: 1,
+            projectId: "mycelia-media-260821",
+            location: "eu",
+            vertexModel: "gemini-3.5-flash-lite",
+            embeddingModel: "gemini-embedding-001",
+            documentAiProcessorVersion: "pretrained-ocr-v2.1-2024-08-07",
+            allowGlobalPhotoAnalysis: false,
+          }],
+        });
+      }
+      if (resource === "media" && input.action === "status") {
+        return Promise.resolve({
+          ...status,
+          promoGuard: {
+            ...status.promoGuard,
+            creditVerificationError: "PROMO_ACCOUNT_TYPE_NOT_VERIFIED",
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    render(<GoogleCloudSettingsPage />);
+
+    expect(
+      await screen.findByText(/PROMO_ACCOUNT_TYPE_NOT_VERIFIED/),
+    ).toBeTruthy();
+    await user.selectOptions(
+      screen.getByLabelText("Billing Overview account type"),
+      "paid_with_promo",
+    );
+    await user.type(
+      screen.getByLabelText("Remaining promotional credit, USD"),
+      "300",
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Confirm paid usage for this project",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(mockCallResource).toHaveBeenCalledWith("config", {
+        action: "patch",
+        path: "mediaKnowledge",
+        updates: expect.objectContaining({
+          promoGuard: expect.objectContaining({
+            creditVerifiedProjectId: "mycelia-media-260821",
+            verifiedRemainingUsd: 300,
+            verifiedBillingAccountType: "paid_with_promo",
+            creditVerifiedBillingAccountType: "paid_with_promo",
+            creditVerifiedPromotionExpiresAt: "2099-09-24T00:00:00.000Z",
+          }),
+        }),
+      });
+    });
+  });
+
+  it("persists the explicit Google-call block after a previous attestation", async () => {
+    mockCallResource.mockImplementation((resource, input) => {
+      if (resource === "config" && input.action === "get") {
+        return Promise.resolve({
+          ...emptyConfig,
+          promoGuard: {
+            ...emptyConfig.promoGuard,
+            promotionExpiresAt: "2099-09-24T00:00:00.000Z",
+            creditVerifiedAt: "2099-08-21T11:00:00.000Z",
+            creditVerifiedProjectId: "mycelia-media-260821",
+            verifiedRemainingUsd: 300,
+            verifiedBillingAccountType: "paid_with_promo",
+            creditVerifiedBillingAccountType: "paid_with_promo",
+            creditVerifiedPromotionExpiresAt: "2099-09-24T00:00:00.000Z",
+          },
+          activeProfileId: "google-cloud-media",
+          profiles: [{
+            id: "google-cloud-media",
+            name: "Google Cloud EU Photo Knowledge",
+            providerType: "google-cloud",
+            enabled: true,
+            concurrency: 1,
+            projectId: "mycelia-media-260821",
+            location: "eu",
+            vertexModel: "gemini-3.5-flash-lite",
+            embeddingModel: "gemini-embedding-001",
+            documentAiProcessorVersion: "pretrained-ocr-v2.1-2024-08-07",
+            allowGlobalPhotoAnalysis: false,
+          }],
+        });
+      }
+      if (resource === "media" && input.action === "status") {
+        return Promise.resolve(status);
+      }
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    render(<GoogleCloudSettingsPage />);
+
+    await user.selectOptions(
+      await screen.findByLabelText("Billing Overview account type"),
+      "not_verified",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mockCallResource).toHaveBeenCalledWith("config", {
+        action: "patch",
+        path: "mediaKnowledge",
+        updates: expect.objectContaining({
+          promoGuard: expect.objectContaining({
+            verifiedBillingAccountType: "not_verified",
+            creditVerifiedBillingAccountType: "not_verified",
+          }),
+        }),
+      });
+    });
   });
 });

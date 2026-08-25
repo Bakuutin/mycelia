@@ -1,7 +1,8 @@
 import type { Request, Response } from "express";
 import { Buffer } from "node:buffer";
-import { ObjectId } from "bson";
+import { type Db, ObjectId } from "mongodb";
 import { authenticateOr401 } from "@/lib/auth/core.server.ts";
+import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { getFsResource } from "@/lib/mongo/fs.server.ts";
 
 const DEFAULT_BUCKET = "uploads";
@@ -12,6 +13,55 @@ const ALLOWED_BUCKETS = [
   "media_previews",
   "media_originals",
 ];
+
+type MediaBucket = "media_previews" | "media_originals";
+
+function mediaReferenceFilters(bucket: MediaBucket, id: ObjectId) {
+  if (bucket === "media_originals") {
+    return {
+      asset: { "managedOriginal.fileId": id },
+      stagedImport: { "items.managedOriginal.fileId": id },
+    };
+  }
+
+  return {
+    asset: {
+      $or: [
+        { "thumbnail.fileId": id },
+        { "preview.fileId": id },
+      ],
+    },
+    stagedImport: {
+      $or: [
+        { "items.thumbnail.fileId": id },
+        { "items.preview.fileId": id },
+      ],
+    },
+  };
+}
+
+export async function mediaFileBelongsToPrincipal(
+  db: Db,
+  bucket: MediaBucket,
+  id: ObjectId,
+  principal: string,
+  now = new Date(),
+): Promise<boolean> {
+  const filters = mediaReferenceFilters(bucket, id);
+  const asset = await db.collection("media_assets").findOne({
+    owner: principal,
+    ...filters.asset,
+  }, { projection: { _id: 1 } });
+  if (asset) return true;
+
+  const stagedImport = await db.collection("media_imports").findOne({
+    owner: principal,
+    status: "preview",
+    expiresAt: { $gt: now },
+    ...filters.stagedImport,
+  }, { projection: { _id: 1 } });
+  return Boolean(stagedImport);
+}
 
 function contentTypeForExtension(ext: string): string {
   switch (ext.toLowerCase()) {
@@ -56,6 +106,19 @@ export async function apiFilesIdHandler(req: Request, res: Response) {
 
     if (!ALLOWED_BUCKETS.includes(bucket)) {
       res.status(400).send("Invalid bucket");
+      return;
+    }
+
+    if (
+      (bucket === "media_previews" || bucket === "media_originals") &&
+      !await mediaFileBelongsToPrincipal(
+        await getRootDB(),
+        bucket,
+        new ObjectId(id),
+        auth.principal,
+      )
+    ) {
+      res.status(404).send("Not found");
       return;
     }
 

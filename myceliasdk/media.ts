@@ -14,6 +14,7 @@ export const zMediaAnalysisStatus = z.enum([
   "ready",
   "failed",
   "budget_blocked",
+  "recognition_disabled",
   "source_missing",
   "source_changed",
 ]);
@@ -65,6 +66,20 @@ export const zMediaPreviewRef = z.object({
   byteLength: z.number().int().nonnegative(),
 });
 
+export const zMediaLocation = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  altitudeMeters: z.number().finite().optional(),
+});
+
+export const zMediaGeoPoint = z.object({
+  type: z.literal("Point"),
+  coordinates: z.tuple([
+    z.number().min(-180).max(180),
+    z.number().min(-90).max(90),
+  ]),
+});
+
 export const zMediaAsset = z.object({
   _id: zObjectId(),
   owner: z.string(),
@@ -82,6 +97,7 @@ export const zMediaAsset = z.object({
   originalDeletedAt: zDateOrString().optional(),
   originalDeletionReceipt: z.object({
     receiptId: z.string().min(1),
+    previewId: zObjectId().optional(),
     previousStorageMode: z.literal("managed_original"),
     byteLength: z.number().int().nonnegative(),
     sha256: z.string().length(64),
@@ -92,6 +108,17 @@ export const zMediaAsset = z.object({
   metadata: z.record(z.string(), z.unknown()).default({}),
   capturedAt: zDateOrString().optional(),
   capturedAtSource: z.enum(["exif", "gps", "manual"]).optional(),
+  capturedAtTimeZone: z.string().trim().min(1).optional(),
+  capturedAtTimeZoneSource: z.enum([
+    "embedded",
+    "exif_offset",
+    "unknown",
+    "manual",
+  ]).optional(),
+  location: zMediaLocation.optional(),
+  geo: zMediaGeoPoint.optional(),
+  locationSource: z.enum(["exif", "manual"]).optional(),
+  placementRevision: z.number().int().nonnegative().default(0),
   status: zMediaAnalysisStatus,
   currentRunId: z.string().optional(),
   safeError: z.string().optional(),
@@ -117,6 +144,7 @@ export const zMediaRecognitionProfile = z.discriminatedUnion("providerType", [
     embeddingModel: z.literal("gemini-embedding-001").default(
       "gemini-embedding-001",
     ),
+    embeddingLocation: z.literal("europe-west4").default("europe-west4"),
     documentAiProcessorId: z.string().trim().regex(
       /^[a-z0-9][a-z0-9-]{0,62}$/,
       "Invalid Document AI processor ID",
@@ -132,7 +160,22 @@ export const zMediaRecognitionProfile = z.discriminatedUnion("providerType", [
     providerType: z.literal("self-hosted"),
     enabled: z.boolean().default(false),
     concurrency: z.number().int().min(1).max(4).default(1),
-    baseUrl: z.string().url(),
+    baseUrl: z.string().url().superRefine((value, context) => {
+      const url = new URL(value);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        context.addIssue({
+          code: "custom",
+          message: "Self-hosted media URL must use http or https",
+        });
+      }
+      if (url.username || url.password || url.search || url.hash) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Self-hosted media URL must not contain credentials, query parameters, or a fragment",
+        });
+      }
+    }),
   }),
 ]);
 
@@ -142,9 +185,7 @@ export const zMediaKnowledgeConfig = z.object({
   profiles: z.array(zMediaRecognitionProfile).max(8).default([]),
   promoGuard: z.object({
     mode: z.literal("promo_guarded").default("promo_guarded"),
-    promotionExpiresAt: z.string().datetime().default(
-      "2026-09-24T00:00:00.000Z",
-    ),
+    promotionExpiresAt: z.string().datetime().optional(),
     stopBeforeHours: z.number().int().min(1).max(168).default(72),
     monthlyGrossLimitUsd: z.number().positive().max(300).default(1),
     dailyGrossLimitUsd: z.number().positive().max(50).default(0.1),
@@ -152,13 +193,38 @@ export const zMediaKnowledgeConfig = z.object({
     creditVerifiedAt: z.string().datetime().optional(),
     creditVerifiedProjectId: z.string().trim().min(1).optional(),
     verifiedRemainingUsd: z.number().positive().max(300).optional(),
+    verifiedBillingAccountType: z.enum([
+      "not_verified",
+      "free_trial",
+      "paid_with_promo",
+    ]).optional(),
+    creditVerifiedBillingAccountType: z.enum([
+      "not_verified",
+      "free_trial",
+      "paid_with_promo",
+    ]).optional(),
+    creditVerifiedPromotionExpiresAt: z.string().datetime().optional(),
   }).default({
     mode: "promo_guarded",
-    promotionExpiresAt: "2026-09-24T00:00:00.000Z",
     stopBeforeHours: 72,
     monthlyGrossLimitUsd: 1,
     dailyGrossLimitUsd: 0.1,
     perImportGrossLimitUsd: 0.01,
+  }),
+  eventAggregation: z.object({
+    maxGapMinutes: z.number().int().min(1).max(10_080).default(240),
+    maxDistanceKm: z.number().positive().max(1_000).default(25),
+    linkWindowMinutes: z.number().int().min(1).max(10_080).default(90),
+    maxAssetsPerEvent: z.number().int().min(2).max(500).default(50),
+    maxPreviewsPerAnalysis: z.number().int().min(2).max(12).default(8),
+    perEventGrossLimitUsd: z.number().positive().max(10).default(0.02),
+  }).default({
+    maxGapMinutes: 240,
+    maxDistanceKm: 25,
+    linkWindowMinutes: 90,
+    maxAssetsPerEvent: 50,
+    maxPreviewsPerAnalysis: 8,
+    perEventGrossLimitUsd: 0.02,
   }),
   limits: z.object({
     maxFilesPerImport: z.number().int().min(1).max(500).default(200),
@@ -176,11 +242,18 @@ export const zMediaKnowledgeConfig = z.object({
   profiles: [],
   promoGuard: {
     mode: "promo_guarded",
-    promotionExpiresAt: "2026-09-24T00:00:00.000Z",
     stopBeforeHours: 72,
     monthlyGrossLimitUsd: 1,
     dailyGrossLimitUsd: 0.1,
     perImportGrossLimitUsd: 0.01,
+  },
+  eventAggregation: {
+    maxGapMinutes: 240,
+    maxDistanceKm: 25,
+    linkWindowMinutes: 90,
+    maxAssetsPerEvent: 50,
+    maxPreviewsPerAnalysis: 8,
+    perEventGrossLimitUsd: 0.02,
   },
   limits: {
     maxFilesPerImport: 200,

@@ -24,7 +24,13 @@ Deno.serve({ hostname: "0.0.0.0", port }, async (request) => {
   if (request.method === "GET" && url.pathname === "/v1/capabilities") {
     return json({
       schemaVersion: "v1",
-      features: ["visual-understanding", "ocr", "labels", "objects"],
+      features: [
+        "visual-understanding",
+        "event-understanding-v1",
+        "ocr",
+        "labels",
+        "objects",
+      ],
       provider: { service: "mycelia-media-contract-mock", version: "1" },
     });
   }
@@ -122,6 +128,61 @@ Deno.serve({ hostname: "0.0.0.0", port }, async (request) => {
         requestId,
         receivedBytes: file.size,
       },
+    });
+  }
+  if (
+    request.method === "POST" &&
+    url.pathname === "/v1/media/events/analyze"
+  ) {
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "JSON body is required" }, 400);
+    }
+    const refs = Array.isArray(body?.manifest?.items)
+      ? body.manifest.items.map((item: any) => String(item?.ref ?? ""))
+        .filter(Boolean)
+      : [];
+    const previews = Array.isArray(body?.previews) ? body.previews : [];
+    if (refs.length < 2 || previews.length !== refs.length) {
+      return json({ error: "at least two matching previews are required" }, 400);
+    }
+    return json({
+      understanding: {
+        schemaVersion: "mycelia.media-event-output.v1",
+        title: "Тестовое событие Mycelia",
+        eventType: "other",
+        description:
+          "Группа тестовых превью, обработанная локальным контрактным провайдером.",
+        temporalLabel: "одна фотосессия",
+        place: {
+          kind: "unknown",
+          visualSummary: "Тестовая визуальная сцена",
+          confidence: 0.8,
+          evidenceRefs: refs.slice(0, 2),
+        },
+        participants: {
+          visiblePeopleRange: { min: 0, max: 0 },
+          groups: [],
+        },
+        keyActions: [],
+        highlights: refs.slice(0, 3).map((ref: string, index: number) => ({
+          ref,
+          rank: index + 1,
+          reason: "Репрезентативный тестовый кадр",
+          confidence: 0.9,
+        })),
+        keywords: ["Mycelia", "тестовое событие"],
+        confidence: 0.9,
+        warnings: ["Результат создан локальным mock-провайдером"],
+      },
+      provider: {
+        service: "mycelia-media-event-contract-mock",
+        modelVersion: "fixture-event-v1",
+        processedAt: new Date().toISOString(),
+      },
+      usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 },
     });
   }
   if (request.method === "POST" && url.pathname === "/v1/media/embed") {

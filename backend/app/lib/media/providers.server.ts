@@ -12,6 +12,9 @@ import {
 } from "@/lib/gcp/auth.server.ts";
 import {
   googleDocumentAiProcessUrl,
+  googleMediaLocationSummary,
+  googleMediaServiceSummary,
+  googleVertexEmbeddingUrl,
   googleVertexModelUrl,
   googleVisionEuAnnotateUrl,
 } from "./google-contract.ts";
@@ -319,7 +322,11 @@ async function embedGoogleText(
   taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY",
 ): Promise<MediaQueryEmbedding> {
   const response = await googleRequest(
-    googleVertexModelUrl(profile.projectId, profile.embeddingModel, "predict"),
+    googleVertexEmbeddingUrl(
+      profile.projectId,
+      profile.embeddingModel,
+      profile.embeddingLocation,
+    ),
     profile.projectId,
     {
       instances: [{ content: text, task_type: taskType }],
@@ -574,10 +581,11 @@ async function analyzeGoogle(
     provenance: {
       providerType: "google-cloud",
       providerProfileId: input.profile.id,
-      service: wantsVisual
-        ? "vertex-ai-gemini-visual-understanding"
-        : `vision:${input.requestedTasks.join("+")}`,
-      location: wantsLabels || wantsObjects ? "eu+global_opt_in" : "eu",
+      service: googleMediaServiceSummary(input.requestedTasks),
+      location: googleMediaLocationSummary(
+        input.profile,
+        input.requestedTasks,
+      ),
       ...(visualResult?.provenance.modelVersion
         ? { modelVersion: visualResult.provenance.modelVersion }
         : {}),

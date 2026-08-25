@@ -4,6 +4,9 @@ import {
   assertDocumentAiProcessorId,
   assertGcpProjectId,
   googleDocumentAiProcessUrl,
+  googleMediaLocationSummary,
+  googleMediaServiceSummary,
+  googleVertexEmbeddingUrl,
   googleVertexModelUrl,
   googleVisionEuAnnotateUrl,
 } from "./google-contract.ts";
@@ -21,6 +24,7 @@ const profile: Extract<
   location: "eu",
   vertexModel: "gemini-3.5-flash-lite",
   embeddingModel: "gemini-embedding-001",
+  embeddingLocation: "europe-west4",
   documentAiProcessorId: "abc123def456",
   documentAiProcessorVersion: "pretrained-ocr-v2.1-2024-08-07",
   allowGlobalPhotoAnalysis: false,
@@ -36,12 +40,12 @@ Deno.test("Google media endpoints are pinned to the intended EU surfaces", () =>
     "https://aiplatform.eu.rep.googleapis.com/v1/projects/mycelia-media-260821/locations/eu/publishers/google/models/gemini-3.5-flash-lite:generateContent",
   );
   assertEquals(
-    googleVertexModelUrl(
+    googleVertexEmbeddingUrl(
       profile.projectId,
       profile.embeddingModel,
-      "predict",
+      profile.embeddingLocation,
     ),
-    "https://aiplatform.eu.rep.googleapis.com/v1/projects/mycelia-media-260821/locations/eu/publishers/google/models/gemini-embedding-001:predict",
+    "https://europe-west4-aiplatform.googleapis.com/v1/projects/mycelia-media-260821/locations/europe-west4/publishers/google/models/gemini-embedding-001:predict",
   );
   assertEquals(
     googleVisionEuAnnotateUrl(profile.projectId),
@@ -57,4 +61,31 @@ Deno.test("Google endpoint builders reject path-like identifiers", () => {
   assertThrows(() => assertGcpProjectId("../other-project"));
   assertThrows(() => assertGcpProjectId("UPPERCASE-project"));
   assertThrows(() => assertDocumentAiProcessorId("processor/other"));
+});
+
+Deno.test("Google provenance lists only locations used by selected tasks", () => {
+  assertEquals(
+    googleMediaLocationSummary(profile, ["visual-understanding"]),
+    "eu+europe-west4",
+  );
+  assertEquals(googleMediaLocationSummary(profile, ["ocr"]), "eu");
+  assertEquals(
+    googleMediaLocationSummary(profile, ["labels"]),
+    "global_opt_in",
+  );
+  assertEquals(
+    googleMediaLocationSummary(profile, ["ocr", "objects"]),
+    "eu+global_opt_in",
+  );
+});
+
+Deno.test("Google provenance lists every service used by selected tasks", () => {
+  assertEquals(
+    googleMediaServiceSummary(["visual-understanding"]),
+    "vertex-ai-gemini-visual-understanding+vertex-ai-gemini-embedding",
+  );
+  assertEquals(
+    googleMediaServiceSummary(["visual-understanding", "ocr", "objects"]),
+    "vertex-ai-gemini-visual-understanding+vertex-ai-gemini-embedding+cloud-vision-document-text-detection+cloud-vision-object-localization",
+  );
 });

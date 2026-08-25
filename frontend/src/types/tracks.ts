@@ -9,7 +9,8 @@ export type TrackId =
   | "diarizations"
   | "diarization-coverage"
   | "objects"
-  | "locations";
+  | "locations"
+  | "photos";
 
 // Object categories for timeline grouping
 export type ObjectCategory =

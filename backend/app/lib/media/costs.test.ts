@@ -22,7 +22,7 @@ Deno.test("a multi-file import is guarded per asset, not by batch total", () => 
   assertThrows(
     () => assertMediaItemsWithinPerImportBudget(config, [0.006, 0.012]),
     Error,
-    "for one asset exceeds the per-import limit",
+    "for one asset exceeds the per-asset limit",
   );
 });
 
@@ -36,6 +36,7 @@ const googleProfile: MediaRecognitionProfile = {
   location: "eu",
   vertexModel: "gemini-3.5-flash-lite",
   embeddingModel: "gemini-embedding-001",
+  embeddingLocation: "europe-west4",
   documentAiProcessorVersion: "pretrained-ocr-v2.1-2024-08-07",
   allowGlobalPhotoAnalysis: true,
 };
@@ -66,7 +67,7 @@ Deno.test("retry cannot bypass the per-import guard with extra tasks", () => {
   assertThrows(
     () => assertMediaPerImportBudget(config, estimate),
     Error,
-    "exceeds the per-import limit",
+    "exceeds the per-asset limit",
   );
 });
 

@@ -20,6 +20,7 @@ import {
   VOICE_DETECTION_CONFIG,
   VoiceDetectionTrack,
 } from "./tracks";
+import { PHOTOS_CONFIG, PhotosTrack } from "./tracks/PhotosTrack";
 import { TrackHeader } from "./tracks/TrackHeader";
 import { LOCATIONS_CONFIG, LocationTrack } from "./tracks/LocationTrack";
 import type { TrackId } from "@/types/tracks";
@@ -48,6 +49,7 @@ const TRACK_COMPONENTS: Record<TrackId, React.ComponentType<any>> = {
   "diarizations": DiarizationsTrack,
   "objects": () => null, // Handled separately
   "locations": () => null, // Handled separately
+  "photos": PhotosTrack,
 };
 
 const TRACK_CONFIGS: Record<TrackId, { label: string; color: string }> = {
@@ -59,6 +61,7 @@ const TRACK_CONFIGS: Record<TrackId, { label: string; color: string }> = {
   "diarizations": DIARIZATIONS_CONFIG,
   "objects": { label: "Objects", color: "#6b7280" },
   "locations": LOCATIONS_CONFIG,
+  "photos": PHOTOS_CONFIG,
 };
 
 // Stable list of histogram track IDs
@@ -69,6 +72,7 @@ const HISTOGRAM_TRACK_IDS: TrackId[] = [
   "audio-chunks",
   "diarization-coverage",
   "diarizations",
+  "photos",
 ];
 
 export const MultiTrackTimeline = memo(function MultiTrackTimeline({

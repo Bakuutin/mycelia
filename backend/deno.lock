@@ -111,6 +111,7 @@
     "npm:simplify-js@^1.2.4": "1.2.4",
     "npm:sqlite3@^5.1.7": "5.1.7",
     "npm:sqlite@^5.1.1": "5.1.1",
+    "npm:ssh2@*": "1.17.0",
     "npm:testcontainers@^11.4.0": "11.9.0",
     "npm:tsx@^4.19.2": "4.21.0",
     "npm:typescript@^5.1.6": "5.9.3",

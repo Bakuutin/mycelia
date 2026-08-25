@@ -127,6 +127,16 @@ An ordinary frontend `src/` edit uses HMR without a full restart. Editing
 frontend `[READY]` record. A backend source edit restarts the Deno process and
 may keep `/readiness` unavailable while worker startup checks run.
 
+The Media page uses the same development backend. A `502 Bad Gateway` during a
+source edit means nginx temporarily had no ready upstream; wait for the next
+backend `[READY]` line and retry the local proposal. Clustering validation and
+per-item cost guards return structured application errors instead of 502. The
+Media inventory queues selected photos as separate jobs so one rejected item
+does not fail the rest of the selected batch. Large mounted-folder sync and
+Google recognition batches are durable coordinators: requests return
+immediately, work resumes in 25-file chunks or a bounded photo-job window, and
+the 30-second watchdog resumes a broken continuation after restart.
+
 The dependency watchdog uses its own one-connection MongoDB pool. Long-running
 imports and worker rebuilds may make ordinary queries slower, but they must not
 starve the watchdog or cause `[SELF-HEAL]` restarts from an application-pool
@@ -192,11 +202,29 @@ The source folder must appear at `/media-source` with `RW=false`; backend must
 report `mode=dev`, frontend `mode=development`, and both must emit `[READY]`.
 Run `bash scripts/smoke-media-local.sh` to verify analyze → confirm → protected
 WebP retrieval without queueing recognition. Add `docker-compose.media-gcp.yml`
-only for the later ADC/GCP phase. Full setup and the provider-neutral
-visual-understanding/embedding contract, $1/month promo-credit guard, and
+when testing ADC/GCP; keep it on every backend recreate so the credential mount
+is not dropped. Untouched upload previews expire after one hour, while an
+interrupted confirmation has a bounded seven-day idempotent recovery lease.
+Full setup and the provider-neutral
+visual-understanding/embedding contract, configurable gross-cost guards
+(24-hour Free Trial confirmation or persistent project-bound paid mode), and
 visible committed/reserved cost ledger, multipart managed uploads, EXIF/GPS
 extraction, and preview-confirm deletion of managed originals are in
 [docs/MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+The same guide covers the separate local photo-event proposal → group consent →
+provider analysis → Event Object publication flow; event analysis is never
+triggered automatically by import. Reanalysis also uses its own exact-thumbnail
+preview and confirmation; cancelling a worker after the provider-start fence is
+not proof that the remote request was cancelled or unbilled.
+
+For the 900-photo campaign, place originals under
+`MEDIA_SOURCE_HOST_PATH/900-photos/` and enter `900-photos` on `/media`. Local
+folder sync does not call Google. The separate **Process all with Google Cloud
+EU Photo Knowledge** preview selects every eligible asset server-side, not only
+the visible inventory page, fixes visual-understanding + OCR, and shows the
+authoritative batch ceiling before consent. Photos with local time/GPS are
+queryable through indexed Timeline/Map projections in every recognition state;
+missing values are kept in Unplaced and can be edited without a provider call.
 
 #### Objects browse and Timeline density rollout
 
@@ -834,6 +862,11 @@ are retained and retried with bounded exponential backoff:
 - summarization content-filter failures: 15 minutes, increasing up to 24 hours;
 - completed summarization claims left by an interrupted run are released by
   maintenance once the summary exists.
+- photo-event analysis runs are reconciled at startup and every minute. A run
+  that has not crossed the provider fence releases its reservation; a stale
+  post-fence run becomes `provider_outcome_unknown` and is never replayed
+  automatically. An early duplicate worker is delayed until the saved lease can
+  be reconciled instead of being recorded as completed.
 - active Mongo job records whose BullMQ record disappeared after a process
   restart are cancelled with `queue_record_missing`; summarization claims are
   released and interrupted extraction chunks return to the retry backlog.

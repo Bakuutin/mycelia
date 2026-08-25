@@ -18,6 +18,8 @@ import { LocationResource } from "@/lib/location/resource.server.ts";
 import { SpeakerSegmentsResource } from "@/lib/speakers/resource.server.ts";
 import { ChatResource } from "@/lib/chat/resource.server.ts";
 import { MediaResource } from "@/lib/media/resource.server.ts";
+import { MediaEventsResource } from "@/lib/media-events/resource.server.ts";
+import { MediaLibraryResource } from "@/lib/media-library/resource.server.ts";
 
 const resources = [
   MongoResource,
@@ -38,6 +40,8 @@ const resources = [
   SpeakerSegmentsResource,
   ChatResource,
   MediaResource,
+  MediaEventsResource,
+  MediaLibraryResource,
 ];
 
 export async function setupResources(): Promise<void> {
