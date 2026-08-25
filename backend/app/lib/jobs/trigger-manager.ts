@@ -18,6 +18,7 @@ import { getMongoResource, sift } from "@/lib/mongo/core.server.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { normalizeWorkerConcurrency } from "./worker-concurrency.ts";
 import { getContinuationPriority } from "./job-chain.ts";
+import { ObjectId } from "bson";
 
 // Logging helper for consistent format
 const log = (level: string, msg: string, data?: Record<string, unknown>) => {
@@ -382,26 +383,88 @@ export class TriggerManager {
         reason,
         mongo,
       );
+      const automaticIdentity = triggeredJobData.type === "speakerIdentity" &&
+        triggeredJobData.campaignMode === "classify_automatic" &&
+        typeof triggeredJobData.campaignId === "string";
+      const reservedIdentityJobId = automaticIdentity
+        ? new ObjectId().toString()
+        : undefined;
+      if (automaticIdentity) {
+        const reserved = await mongo({
+          action: "updateOne",
+          collection: "speaker_identity_campaigns",
+          query: {
+            campaignId: triggeredJobData.campaignId,
+            active: true,
+            status: "queued",
+            currentJobId: { $exists: false },
+          },
+          update: {
+            $set: {
+              currentJobId: reservedIdentityJobId,
+              firstJobId: reservedIdentityJobId,
+              updatedAt: new Date(),
+            },
+          },
+        }) as any;
+        if (reserved?.matchedCount !== 1) {
+          throw new Error(
+            "Automatic speaker identity campaign lost its queue reservation",
+          );
+        }
+      }
       const enqueueOptions: EnqueueJobOptions = {
+        ...(reservedIdentityJobId ? { jobId: reservedIdentityJobId } : {}),
         priority: getContinuationPriority(triggeredJobData),
         trigger: {
           type: "auto",
           reason,
         },
       };
+      const retainAutomaticIdentityReservation = async (
+        failureReason: string,
+      ) => {
+        if (
+          triggeredJobData.type !== "speakerIdentity" ||
+          triggeredJobData.campaignMode !== "classify_automatic" ||
+          typeof triggeredJobData.campaignId !== "string"
+        ) return;
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_identity_campaigns",
+          query: { campaignId: triggeredJobData.campaignId, active: true },
+          update: {
+            $set: {
+              status: "queued",
+              reservationRecoveryError: failureReason,
+              updatedAt: new Date(),
+            },
+          },
+        });
+      };
       let enqueued = 0;
       for (let index = 0; index < freeSlots; index += 1) {
         try {
-          await enqueueJob(
+          const job = await enqueueJob(
             triggeredJobData as any,
             enqueueOptions,
           );
           enqueued += 1;
+          if (
+            reservedIdentityJobId && String(job.id) !== reservedIdentityJobId
+          ) {
+            throw new Error(
+              "Speaker identity queue returned a different job id",
+            );
+          }
         } catch (error) {
           const message = error instanceof Error
             ? error.message
             : String(error);
-          if (!isCapacityBlockedEnqueueError(message)) throw error;
+          if (!isCapacityBlockedEnqueueError(message)) {
+            await retainAutomaticIdentityReservation(message);
+            throw error;
+          }
           log("DEBUG", "Provider capacity reached while filling worker slots", {
             jobName,
             reason,
@@ -409,6 +472,11 @@ export class TriggerManager {
           });
           break;
         }
+      }
+      if (enqueued === 0) {
+        await retainAutomaticIdentityReservation(
+          "No worker slot accepted the automatic campaign",
+        );
       }
       log("INFO", `Jobs enqueued successfully`, {
         jobName,

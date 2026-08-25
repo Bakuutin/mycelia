@@ -125,16 +125,18 @@ describe("VoiceIdentityReviewPlayer", () => {
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
     fireEvent.keyDown(window, { key: "ArrowLeft" });
+    fireEvent.keyDown(window, { key: "t" });
     fireEvent.keyDown(window, { key: "s" });
     fireEvent.keyDown(window, { key: " " });
     expect(props.onDecision).toHaveBeenNthCalledWith(1, "me");
     expect(props.onDecision).toHaveBeenNthCalledWith(2, "not-me");
-    expect(props.onDecision).toHaveBeenNthCalledWith(3, "skip");
+    expect(props.onDecision).toHaveBeenNthCalledWith(3, "me-timeline-only");
+    expect(props.onDecision).toHaveBeenNthCalledWith(4, "skip");
     expect(playerControls.togglePlayback).toHaveBeenCalledOnce();
 
     screen.getByRole("switch", { name: /automatically play next/i }).focus();
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(props.onDecision).toHaveBeenCalledTimes(3);
+    expect(props.onDecision).toHaveBeenCalledTimes(4);
 
     rerender(
       <MemoryRouter>
@@ -143,7 +145,7 @@ describe("VoiceIdentityReviewPlayer", () => {
     );
     document.body.focus();
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(props.onDecision).toHaveBeenCalledTimes(3);
+    expect(props.onDecision).toHaveBeenCalledTimes(4);
   });
 
   it("allows edit while reviewed actions are pending-disabled", () => {
@@ -169,7 +171,9 @@ describe("VoiceIdentityReviewPlayer", () => {
   it("keeps Skip available while editing and exposes a separate cancel action", () => {
     const { props } = renderPlayer({ editingLabel: "Andrew Kislov" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Noise \/ unclear/i }),
+    );
     expect(props.onDecision).toHaveBeenCalledWith("skip");
     fireEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
     expect(props.onCancelEdit).toHaveBeenCalledOnce();
@@ -233,6 +237,7 @@ describe("VoiceIdentityReviewPlayer", () => {
     expect(getSwipeDecision({ x: 100, y: 20 }, { x: 180, y: 90 })).toBeNull();
     expect(getReviewShortcut("u")).toBe("undo");
     expect(getReviewShortcut("s")).toBe("skip");
+    expect(getReviewShortcut("t")).toBe("me-timeline-only");
     expect(getReviewShortcut("ArrowDown")).toBe("next");
   });
 

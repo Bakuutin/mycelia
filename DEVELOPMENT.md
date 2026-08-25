@@ -307,8 +307,8 @@ with neither field has no range rendered rather than an inferred one.
 
 The Job Detail page keeps a batch's recorded diarization errors as historical
 evidence, but resolves each affected range against current `audio_chunks` so it
-can distinguish recovered retries, pending retries, and exhausted failures.
-Raw job payloads, worker logs, and access-audit rows remain available in closed
+can distinguish recovered retries, pending retries, and exhausted failures. Raw
+job payloads, worker logs, and access-audit rows remain available in closed
 technical sections instead of expanding the page by default.
 
 Deploy changes to this path by pausing only the diarization worker, draining its
@@ -696,6 +696,23 @@ import { useTimeline } from "@/hooks/useTimeline";
 import type { TimelineItem } from "@/types/timeline";
 ```
 
+### Date and time selection
+
+Use `DateRangePicker` from `frontend/src/components/DateRangePicker.tsx` for
+start/end ranges throughout the app. It keeps the date range in one calendar,
+provides month and year dropdowns, defaults to minute precision, and can add the
+audio-density timeline with `showAudioTimeline`. The picker opens in a
+viewport-contained, internally scrolling dialog; users explicitly select the
+Start or End boundary before editing its date or time. Use `precision="date"`
+for date-only filters and opt into `precision="second"` only when the workflow
+requires exact seconds.
+
+Use `DateTimePicker` from `frontend/src/components/ui/datetime-picker.tsx` only
+for a single instant. Do not assemble new range controls from separate native
+`date`, `time`, or `datetime-local` inputs. Both shared controls use the
+configured app timezone unless the caller explicitly supplies a contextual
+Timeline timezone or UTC for a maintenance boundary.
+
 ## Backend Development
 
 ```bash
@@ -733,16 +750,28 @@ For diarization, voice enrollment, speaker recognition, and historical backfill:
 2. Run diarization locally on CPU or remotely on an NVIDIA GPU.
 3. Configure and verify the route in Settings → Diarization.
 4. Complete missing diarization coverage.
-5. In Settings → Voice Identity, enroll Sky under **Profiles & samples**, label
-   scoped validation audio under **Review & calibration**, preview the selected
-   recordings/Timeline range, and save the current revision-bound calibration.
-6. In **Jobs**, press play on `speakerIdentity`; the launcher resolves Sky,
-   calibration, and the compatible active generation. Run a bounded 24-hour
-   pilot before historical backfill.
+5. In Settings → Voice Identity, build Sky from clean, single-speaker profile
+   samples. Use ordinary review labels for Timeline/calibration; add a clip to
+   the profile only when it represents a missing recording condition.
+6. Press **Start recommended review** and label enough independent recordings
+   for Learn and Check. Timeline-derived profile samples are excluded from both
+   sets; legacy Timeline samples without recording provenance must be re-added.
+7. Save a calibration only after Check has at least 20 Sky labels, 20 not-Sky
+   labels, and 20 safe automatic Sky matches at the selected precision. If
+   held-out not-Sky decisions are not proven, the server keeps them uncertain.
+8. Use the embedded **Classify all compatible history** action. The server
+   freezes a cutoff, partitions real active segments by run and embedding space,
+   and resumes batches with deterministic job ownership. Raw technical IDs
+   remain in Advanced/Jobs for diagnostics only.
+9. If Voice Identity reports empty active coverage, open **Operations &
+   generations**, inspect the non-destructive repair preview, and confirm repair
+   separately before classification. Never purge as part of repair.
+10. Open Timeline and use the Speaker identity track/filter after the campaign
+    reports zero real remaining segments.
 
-See
-[the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)
-for exact commands, UI workflow, safety gates, and troubleshooting.
+See [the architecture guide](docs/SPEAKER_IDENTIFICATION.md) and
+[operator runbook](docs/VOICE_IDENTITY_RUNBOOK.md) for exact commands, UI
+workflow, safety gates, and troubleshooting.
 
 ## Database Migrations
 

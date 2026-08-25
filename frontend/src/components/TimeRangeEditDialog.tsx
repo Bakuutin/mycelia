@@ -3,13 +3,13 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { formatTime } from "@/lib/formatTime";
 import { Pencil, Trash2 } from "lucide-react";
 
@@ -66,7 +66,9 @@ export function TimeRangeEditDialog({
     if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? "s" : ""}`;
     if (diffHours < 24) {
       const mins = diffMins % 60;
-      return mins > 0 ? `${diffHours}h ${mins}m` : `${diffHours} hour${diffHours !== 1 ? "s" : ""}`;
+      return mins > 0
+        ? `${diffHours}h ${mins}m`
+        : `${diffHours} hour${diffHours !== 1 ? "s" : ""}`;
     }
     return `${diffDays} day${diffDays !== 1 ? "s" : ""}`;
   };
@@ -90,26 +92,16 @@ export function TimeRangeEditDialog({
             />
           </div>
 
-          {/* Start Time */}
-          <div className="space-y-2">
-            <Label>Start Time</Label>
-            <DateTimePicker
-              value={start}
-              onChange={(date) => date && setStart(date)}
-              placeholder="Select start time"
-            />
-          </div>
-
-          {/* End Time */}
-          <div className="space-y-2">
-            <Label>End Time (optional)</Label>
-            <DateTimePicker
-              value={end}
-              onChange={(date) => setEnd(date || undefined)}
-              placeholder="Select end time"
-              nullable
-            />
-          </div>
+          <DateRangePicker
+            label="Time range"
+            value={{ start, end }}
+            onChange={(value) => {
+              setStart(value.start);
+              setEnd(value.end);
+            }}
+            allowOpenEnd
+            precision="second"
+          />
 
           {/* Duration display */}
           {getDuration() && (
@@ -176,10 +168,14 @@ export function TimeRangeCompact({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           {timeRange.name && (
-            <span className="text-sm font-medium truncate">{timeRange.name}</span>
+            <span className="text-sm font-medium truncate">
+              {timeRange.name}
+            </span>
           )}
           {!timeRange.name && (
-            <span className="text-sm text-muted-foreground">Time Range {index + 1}</span>
+            <span className="text-sm text-muted-foreground">
+              Time Range {index + 1}
+            </span>
           )}
           <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
             {getDuration()}
