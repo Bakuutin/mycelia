@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
+import { formatPickerRange } from "@/lib/datePicker";
 import { normalizeObjectId } from "@/lib/diarization";
+import { resolveDefaultTimeZone } from "@/lib/timeZones";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import {
   orderVoiceProfilesByRecent,
@@ -16,11 +18,13 @@ import {
   voiceIdentityKeys,
 } from "@/lib/voiceIdentity";
 import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import {
   preloadWaveformAudio,
   WaveformPlayer,
 } from "@/components/audio/WaveformPlayer";
 import { Button } from "@/components/ui/button";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
@@ -378,6 +382,12 @@ function dateTimeInputValue(date: Date): string {
   return local.toISOString().slice(0, 16);
 }
 
+function validDateValue(value: string): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : undefined;
+}
+
 function reviewSourceErrorMessage(error: unknown): string {
   if (
     error instanceof DOMException &&
@@ -393,6 +403,8 @@ function reviewSourceErrorMessage(error: unknown): string {
 }
 
 export default function VoiceIdentityReviewPage() {
+  const defaultTimeZone = useSettingsStore((state) => state.defaultTimeZone);
+  const pickerTimeZone = resolveDefaultTimeZone(defaultTimeZone);
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const timelineSourceStart = Number(searchParams.get("start"));
@@ -2348,32 +2360,23 @@ export default function VoiceIdentityReviewPage() {
 
               {newRange === "custom" &&
                 newSourceMode !== "diarization_generation" && (
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs text-muted-foreground">
-                    Start
-                    <Input
-                      type="datetime-local"
-                      value={customStart}
-                      readOnly={newSourceMode === "timeline_range"}
-                      onChange={(event) => {
-                        setCustomStart(event.target.value);
-                        invalidateSourcePreview();
-                      }}
-                    />
-                  </label>
-                  <label className="text-xs text-muted-foreground">
-                    End
-                    <Input
-                      type="datetime-local"
-                      value={customEnd}
-                      readOnly={newSourceMode === "timeline_range"}
-                      onChange={(event) => {
-                        setCustomEnd(event.target.value);
-                        invalidateSourcePreview();
-                      }}
-                    />
-                  </label>
-                </div>
+                <DateRangePicker
+                  label="Review audio range"
+                  value={validDateValue(customStart) &&
+                      validDateValue(customEnd)
+                    ? {
+                      start: validDateValue(customStart)!,
+                      end: validDateValue(customEnd)!,
+                    }
+                    : undefined}
+                  onChange={(value) => {
+                    setCustomStart(value.start.toISOString());
+                    if (value.end) setCustomEnd(value.end.toISOString());
+                    invalidateSourcePreview();
+                  }}
+                  disabled={newSourceMode === "timeline_range"}
+                  showAudioTimeline
+                />
               )}
 
               <div className="grid gap-2 md:grid-cols-2">
@@ -2459,10 +2462,14 @@ export default function VoiceIdentityReviewPage() {
                 <div className="space-y-2 rounded-md bg-muted/30 p-2">
                   <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                     <span>
-                      Frozen range:{" "}
-                      {new Date(sourcePreview.range.start).toLocaleString()} →
-                      {" "}
-                      {new Date(sourcePreview.range.end).toLocaleString()}
+                      Frozen range: {formatPickerRange(
+                        {
+                          start: new Date(sourcePreview.range.start),
+                          end: new Date(sourcePreview.range.end),
+                        },
+                        pickerTimeZone,
+                        "minute",
+                      )}
                     </span>
                     <span>
                       Hidden by quality filter:{" "}

@@ -619,6 +619,22 @@ import { useTimeline } from "@/hooks/useTimeline";
 import type { TimelineItem } from "@/types/timeline";
 ```
 
+### Date and time selection
+
+Use `DateRangePicker` from `frontend/src/components/DateRangePicker.tsx` for
+start/end ranges throughout the app. It keeps the date range in one calendar,
+provides month and year dropdowns, defaults to minute precision, and can add the
+audio-density timeline with `showAudioTimeline`. Use `precision="date"` for
+date-only filters and opt into `precision="second"` only when the workflow
+requires exact seconds.
+
+Use `DateTimePicker` from
+`frontend/src/components/ui/datetime-picker.tsx` only for a single instant.
+Do not assemble new range controls from separate native `date`, `time`, or
+`datetime-local` inputs. Both shared controls use the configured app timezone
+unless the caller explicitly supplies a contextual Timeline timezone or UTC for
+a maintenance boundary.
+
 ## Backend Development
 
 ```bash

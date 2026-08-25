@@ -4,7 +4,9 @@ import { Link } from "react-router-dom";
 import { Play, UserRoundSearch } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { formatPickerRange } from "@/lib/datePicker";
 import { normalizeObjectId } from "@/lib/diarization";
+import { resolveDefaultTimeZone } from "@/lib/timeZones";
 import {
   buildSpeakerIdentityLaunchData,
   compatibleSpeakerIdentityRuns,
@@ -18,7 +20,8 @@ import {
 } from "@/lib/voiceIdentity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { DateRangePicker } from "@/components/DateRangePicker";
+import { useSettingsStore } from "@/stores/settingsStore";
 import {
   Dialog,
   DialogContent,
@@ -54,6 +57,8 @@ function SpeakerIdentityLauncher({
   onQueued,
 }: SpeakerIdentityLauncherProps) {
   const queryClient = useQueryClient();
+  const defaultTimeZone = useSettingsStore((state) => state.defaultTimeZone);
+  const pickerTimeZone = resolveDefaultTimeZone(defaultTimeZone);
   const [rangeMode, setRangeMode] = useState<RangeMode>(24);
   const [rangeAnchor, setRangeAnchor] = useState(() => new Date());
   const [customStart, setCustomStart] = useState(
@@ -371,28 +376,26 @@ function SpeakerIdentityLauncher({
       </div>
 
       {rangeMode === "custom" && (
-        <div className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Start</Label>
-            <DateTimePicker
-              value={customStart}
-              onChange={(value) => value && setCustomStart(value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>End</Label>
-            <DateTimePicker
-              value={customEnd}
-              onChange={(value) => value && setCustomEnd(value)}
-            />
-          </div>
+        <div className="rounded-md border p-3">
+          <DateRangePicker
+            label="Custom audio range"
+            value={{ start: customStart, end: customEnd }}
+            onChange={(value) => {
+              setCustomStart(value.start);
+              if (value.end) setCustomEnd(value.end);
+            }}
+            maxDurationMs={maxRangeHours == null
+              ? undefined
+              : maxRangeHours * 3_600_000}
+            showAudioTimeline
+          />
         </div>
       )}
 
       <p className="text-xs text-muted-foreground">
-        Selected: {range.start.toLocaleString()} →{" "}
-        {range.end.toLocaleString()}. Existing diarization embeddings are
-        classified in resumable batches; audio is not processed again.
+        Selected: {formatPickerRange(range, pickerTimeZone, "minute")}.{" "}
+        Existing diarization embeddings are classified in resumable batches;
+        audio is not processed again.
         {pilotOnly && (
           <>
             {" "}This lower-precision calibration is provisional, so each run is

@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
+import { formatPickerRange } from "@/lib/datePicker";
 import { normalizeObjectId } from "@/lib/diarization";
+import { resolveDefaultTimeZone } from "@/lib/timeZones";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +15,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { DateRangePicker } from "@/components/DateRangePicker";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -79,6 +82,8 @@ type IdentityCampaign = {
 export function VoiceIdentityOperations() {
   const { promptAction } = useActionDialog();
   const queryClient = useQueryClient();
+  const defaultTimeZone = useSettingsStore((state) => state.defaultTimeZone);
+  const pickerTimeZone = resolveDefaultTimeZone(defaultTimeZone);
   const [hours, setHours] = useState(24 * 7);
   const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
   const [customStart, setCustomStart] = useState(
@@ -435,26 +440,23 @@ export function VoiceIdentityOperations() {
           </div>
         )}
         {rangeMode === "custom" && (
-          <div className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label>Start</Label>
-              <DateTimePicker
-                value={customStart}
-                onChange={(date) => date && setCustomStart(date)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>End</Label>
-              <DateTimePicker
-                value={customEnd}
-                onChange={(date) => date && setCustomEnd(date)}
-              />
-            </div>
+          <div className="rounded-md border p-3">
+            <DateRangePicker
+              label="Custom audio range"
+              value={{ start: customStart, end: customEnd }}
+              onChange={(value) => {
+                setCustomStart(value.start);
+                if (value.end) setCustomEnd(value.end);
+              }}
+              maxDurationMs={maxClassificationHours == null
+                ? undefined
+                : maxClassificationHours * 3_600_000}
+              showAudioTimeline
+            />
           </div>
         )}
         <div className="text-xs text-muted-foreground">
-          Selected: {range.start.toLocaleString()} →{" "}
-          {range.end.toLocaleString()}
+          Selected: {formatPickerRange(range, pickerTimeZone, "minute")}
           {rangeError && (
             <span className="ml-2 text-destructive">{rangeError}</span>
           )}

@@ -151,18 +151,27 @@ const form = useForm({
 ### UI Component Conventions
 
 **Date and Time Input:**
-- **ALWAYS** use `DateTimePicker` component from `@/components/ui/datetime-picker` for editable date/time fields
-- Never use native HTML `<input type="datetime-local">` or `<input type="date">`
-- `DateTimePicker` integrates with user's time format preferences (SI time/Gregorian) from settings store
-- Uses Unix timestamp input with formatted display
+- Use `DateRangePicker` from `@/components/DateRangePicker` whenever a user
+  chooses a start/end range. It provides one combined calendar selection,
+  month/year dropdowns, optional minute/second precision, configured-timezone
+  conversion, validation, and optional audio-density fine tuning.
+- Use `DateTimePicker` from `@/components/ui/datetime-picker` only for a single
+  instant.
+- Never assemble range controls from separate native `date`, `time`, or
+  `datetime-local` inputs.
+- Seconds are opt-in with `precision="second"`; ordinary ranges default to
+  minute precision. Date-only filters use `precision="date"`.
 
 ```typescript
-import { DateTimePicker } from '@/components/ui/datetime-picker';
+import { DateRangePicker } from '@/components/DateRangePicker';
 
-<DateTimePicker
-  value={startDate}
-  onChange={(date) => setStartDate(date)}
-  placeholder="Pick a date and time"
+<DateRangePicker
+  value={{ start, end }}
+  onChange={(range) => {
+    setStart(range.start);
+    if (range.end) setEnd(range.end);
+  }}
+  showAudioTimeline
 />
 ```
 
