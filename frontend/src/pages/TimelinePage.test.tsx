@@ -151,6 +151,7 @@ describe("Timeline photo deep link", () => {
     mockCallResource.mockResolvedValue({
       asset: {
         _id: "asset-1",
+        kind: "image",
         fileName: "lake.jpg",
         status: "ready",
         capturedAt: "2026-08-12T11:22:33.000Z",
@@ -194,6 +195,7 @@ describe("Timeline photo deep link", () => {
     mockCallResource.mockResolvedValue({
       asset: {
         _id: "asset-2",
+        kind: "image",
         fileName: "missing-time.jpg",
         status: "staged",
       },
@@ -208,5 +210,26 @@ describe("Timeline photo deep link", () => {
     expect(useTrackVisibilityStore.getState().visibleTracks).toContain(
       "photos",
     );
+  });
+
+  it("rejects a non-image asset opened through a photo deep link", async () => {
+    mockCallResource.mockResolvedValue({
+      asset: {
+        _id: "document-1",
+        kind: "pdf",
+        fileName: "scan.pdf",
+        capturedAt: "2026-08-12T11:22:33.000Z",
+      },
+    });
+
+    renderTimeline("/timeline?photoAssetId=document-1");
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Photo could not be opened on the Timeline",
+      )
+    );
+    expect(screen.queryByTestId("focused-photo")).toBeNull();
+    expect(mocks.zoomTo).not.toHaveBeenCalled();
   });
 });

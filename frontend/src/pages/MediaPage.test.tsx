@@ -350,6 +350,47 @@ describe("MediaPage consolidated library", () => {
     expect(screen.getByText("Manual Timeline / Map placement")).toBeTruthy();
   });
 
+  it("keeps general analysis but hides photo-only actions for a PDF", async () => {
+    const pdfAsset = {
+      ...baseAsset,
+      fileName: "document.pdf",
+      kind: "pdf",
+    };
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [pdfAsset], total: 1 });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: pdfAsset,
+          pages: [],
+          annotations: [],
+          runs: [],
+        });
+      }
+      return defaultResourceResponse(input);
+    });
+
+    renderMediaPage("/media?assetId=asset-1");
+
+    expect(
+      await screen.findByRole("dialog", { name: "document.pdf" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: "Get description" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Open in Photo analysis" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Open in Analysis" }).getAttribute(
+        "href",
+      ),
+    ).toBe("/media/analysis?assetId=asset-1");
+    expect(screen.queryByRole("link", { name: "Show on Map" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Show on Timeline" })).toBeNull();
+  });
+
   it("preserves assetId deep links in the same dialog viewer", async () => {
     mockCallResource.mockImplementation((_resource, input) => {
       if (input.action === "listAssets") {
@@ -468,7 +509,69 @@ describe("MediaPage consolidated library", () => {
       screen.getByRole("link", {
         name: "Open in Photo analysis",
       }).getAttribute("href"),
-    ).toBe("/media/analysis?assetId=asset-1&select=1");
+    ).toBe("/media/analysis?assetId=asset-1");
+    expect(screen.queryByRole("link", { name: "Get description" })).toBeNull();
+  });
+
+  it("opens ready OCR-only photos as analysis history instead of promising a description", async () => {
+    const readyOcrAsset = {
+      ...baseAsset,
+      status: "ready",
+      currentRunId: "run-ocr",
+    };
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [readyOcrAsset], total: 1 });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: readyOcrAsset,
+          pages: [{ _id: "page-1", pageNumber: 1, text: "Receipt" }],
+          annotations: [],
+          runs: [{ _id: "run-ocr", state: "ready" }],
+        });
+      }
+      return defaultResourceResponse(input);
+    });
+
+    renderMediaPage("/media?assetId=asset-1");
+
+    expect(
+      (await screen.findByRole("link", {
+        name: "Open in Photo analysis",
+      })).getAttribute("href"),
+    ).toBe("/media/analysis?assetId=asset-1");
+    expect(screen.queryByRole("link", { name: "Get description" })).toBeNull();
+  });
+
+  it("does not promise a description when a staged photo has no retained original", async () => {
+    const previewOnlyAsset = {
+      ...baseAsset,
+      storageMode: "preview_only",
+      managedOriginal: undefined,
+    };
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [previewOnlyAsset], total: 1 });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: previewOnlyAsset,
+          pages: [],
+          annotations: [],
+          runs: [],
+        });
+      }
+      return defaultResourceResponse(input);
+    });
+
+    renderMediaPage("/media?assetId=asset-1");
+
+    expect(
+      (await screen.findByRole("link", {
+        name: "Open in Photo analysis",
+      })).getAttribute("href"),
+    ).toBe("/media/analysis?assetId=asset-1");
     expect(screen.queryByRole("link", { name: "Get description" })).toBeNull();
   });
 

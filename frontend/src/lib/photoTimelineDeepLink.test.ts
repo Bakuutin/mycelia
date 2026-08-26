@@ -10,6 +10,7 @@ describe("photo Timeline deep links", () => {
     const focus = photoTimelineFocusFromAssetDetail({
       asset: {
         _id: "ABC123",
+        kind: "image",
         fileName: "photo.jpg",
         status: "ready",
         capturedAt: "2026-08-12T11:22:33.000Z",
@@ -37,6 +38,7 @@ describe("photo Timeline deep links", () => {
     const focus = photoTimelineFocusFromAssetDetail({
       asset: {
         _id: "asset-1",
+        kind: "image",
         fileName: "unplaced.jpg",
         capturedAt: "not-a-date",
       },
@@ -52,6 +54,19 @@ describe("photo Timeline deep links", () => {
         asset: { _id: "another-asset" },
       }, "requested-asset")
     ).toThrow("requested photo was not returned");
+  });
+
+  it("rejects a non-image asset from a direct photo deep link", () => {
+    expect(() =>
+      photoTimelineFocusFromAssetDetail({
+        asset: {
+          _id: "document-1",
+          kind: "pdf",
+          fileName: "scan.pdf",
+          capturedAt: "2026-08-12T11:22:33.000Z",
+        },
+      }, "document-1")
+    ).toThrow("Only photo assets can be opened on the Timeline");
   });
 
   it("uses a bounded ten-minute range centered on capture time", () => {

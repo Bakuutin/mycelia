@@ -37,6 +37,12 @@ import { MediaSectionNav } from "@/components/media/MediaSectionNav";
 
 const MAX_MANAGED_UPLOAD_FILES = 50;
 const MAX_MANAGED_UPLOAD_TOTAL_BYTES = 48_000_000;
+const DESCRIPTION_REQUESTABLE_STATUSES = new Set([
+  "staged",
+  "failed",
+  "budget_blocked",
+  "recognition_disabled",
+]);
 
 type InventoryFilter =
   | "all"
@@ -571,6 +577,22 @@ export default function MediaPage() {
       setBusy(false);
     }
   };
+
+  const detailIsPhoto = detail?.asset?.kind === "image";
+  const detailHasRecognitionSource =
+    (detail?.asset?.storageMode === "managed_original" &&
+      Boolean(detail.asset.managedOriginal?.fileId)) ||
+    (detail?.asset?.storageMode === "external_reference" &&
+      Boolean(detail.asset.source?.relativePath));
+  const detailCanRequestDescription = detailIsPhoto &&
+    detailHasRecognitionSource &&
+    !detail?.visual?.visualUnderstanding &&
+    DESCRIPTION_REQUESTABLE_STATUSES.has(detail.asset.status);
+  const detailAnalysisHref = detail?.asset
+    ? `/media/analysis?assetId=${detail.asset._id}${
+      detailCanRequestDescription ? "&select=1" : ""
+    }`
+    : "";
 
   return (
     <div className="container mx-auto space-y-6 p-4">
@@ -1173,31 +1195,35 @@ export default function MediaPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button asChild>
-                      <Link
-                        to={`/media/analysis?assetId=${detail.asset._id}&select=1`}
-                      >
-                        {detail.visual?.visualUnderstanding
-                          ? <Eye className="mr-2 h-4 w-4" />
-                          : <Sparkles className="mr-2 h-4 w-4" />}
-                        {detail.visual?.visualUnderstanding
-                          ? "Open in Photo analysis"
-                          : "Get description"}
+                      <Link to={detailAnalysisHref}>
+                        {detailCanRequestDescription
+                          ? <Sparkles className="mr-2 h-4 w-4" />
+                          : <Eye className="mr-2 h-4 w-4" />}
+                        {!detailIsPhoto
+                          ? "Open in Analysis"
+                          : detailCanRequestDescription
+                          ? "Get description"
+                          : "Open in Photo analysis"}
                       </Link>
                     </Button>
-                    <Button asChild variant="outline">
-                      <Link to={`/map?photoAssetId=${detail.asset._id}`}>
-                        <MapPin className="mr-2 h-4 w-4" />
-                        Show on Map
-                      </Link>
-                    </Button>
-                    <Button asChild variant="outline">
-                      <Link
-                        to={`/timeline?photoAssetId=${detail.asset._id}`}
-                      >
-                        <Clock3 className="mr-2 h-4 w-4" />
-                        Show on Timeline
-                      </Link>
-                    </Button>
+                    {detailIsPhoto && (
+                      <>
+                        <Button asChild variant="outline">
+                          <Link to={`/map?photoAssetId=${detail.asset._id}`}>
+                            <MapPin className="mr-2 h-4 w-4" />
+                            Show on Map
+                          </Link>
+                        </Button>
+                        <Button asChild variant="outline">
+                          <Link
+                            to={`/timeline?photoAssetId=${detail.asset._id}`}
+                          >
+                            <Clock3 className="mr-2 h-4 w-4" />
+                            Show on Timeline
+                          </Link>
+                        </Button>
+                      </>
+                    )}
                     <Button
                       variant="outline"
                       onClick={() => deleteDerived("analysis")}

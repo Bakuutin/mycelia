@@ -196,9 +196,9 @@ function singleAssetEligibility(asset: Asset): SingleAssetEligibility {
   if (asset.status === "ready") {
     return {
       eligible: false,
-      title: "Description already processed",
+      title: "Photo analysis is already ready",
       description:
-        "Ready photos are skipped by recognition batches. The stored provider description, when available, is shown below.",
+        "Ready photos are skipped by recognition batches. Stored provider results and history are shown below; a missing visual description is not queued again while this photo remains ready.",
     };
   }
   if (asset.status === "queued" || asset.status === "processing") {

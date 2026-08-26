@@ -25,6 +25,9 @@ export function photoTimelineFocusFromAssetDetail(
   ) {
     throw new Error("The requested photo was not returned");
   }
+  if (asset.kind !== "image") {
+    throw new Error("Only photo assets can be opened on the Timeline");
+  }
 
   const capturedAt = validDate(asset.capturedAt);
   const shortCaption = detail?.visual?.visualUnderstanding?.shortCaption ??

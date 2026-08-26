@@ -405,7 +405,7 @@ describe("MediaAnalysisPage", () => {
   it.each([
     {
       status: "ready",
-      title: "Description already processed",
+      title: "Photo analysis is already ready",
     },
     {
       status: "source_missing",
