@@ -9,6 +9,7 @@ python/conversations-to-reextract.jsonl
 .env.backup-*
 .env.tmp-*
 !.env.media.example
+!.env.rag.example
 .local
 *.local
 *.local.*
@@ -17,6 +18,8 @@ python/conversations-to-reextract.jsonl
 *.egg-info/
 **/.DS_Store
 .ruff_cache
+# onnxruntime may emit this telemetry session marker when FastEmbed is imported.
+**/:memory:.ses
 *.ipynb
 coverage
 .vscode

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, callResource } from "@/lib/api";
 import { subscribeToJob } from "@/lib/jobs";
 import Form from "@rjsf/shadcn";
@@ -20,8 +20,9 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
-import { Loader2, CheckCircle2, XCircle, Play } from "lucide-react";
+import { DateRangePicker } from "@/components/DateRangePicker";
+import { CheckCircle2, Loader2, Play, XCircle } from "lucide-react";
+import { useTimelineTimeZone } from "@/hooks/useTimelineTimeZone";
 
 interface RunJobDialogProps {
   open: boolean;
@@ -41,6 +42,7 @@ export function RunJobDialog({
   startDate,
   endDate,
 }: RunJobDialogProps) {
+  const { resolveTimeZone } = useTimelineTimeZone();
   const [schemas, setSchemas] = useState<Record<string, any> | null>(null);
   const [isLoadingSchemas, setIsLoadingSchemas] = useState(false);
   const [selectedType, setSelectedType] = useState<string | null>(null);
@@ -59,17 +61,17 @@ export function RunJobDialog({
 
   const currentSchema = useMemo(() => {
     if (!selectedType || !schemas?.[selectedType]?.input) return null;
-    
+
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { $schema, ...schemaWithoutDraft } = schemas[selectedType].input;
     const schema = { ...schemaWithoutDraft };
     if (schema.properties) {
       const { start, end, ...otherProps } = schema.properties;
       schema.properties = otherProps;
-      
+
       if (schema.required) {
         schema.required = schema.required.filter(
-          (r: string) => r !== "start" && r !== "end"
+          (r: string) => r !== "start" && r !== "end",
         );
       }
     }
@@ -112,7 +114,7 @@ export function RunJobDialog({
 
   const handleSubmit = async (formData: any) => {
     if (!selectedType) return;
-    
+
     setJobStatus("starting");
     setError(null);
 
@@ -127,7 +129,8 @@ export function RunJobDialog({
         },
         trigger: {
           type: "manual",
-          reason: `Manual launch of ${selectedType} from timeline range selection`,
+          reason:
+            `Manual launch of ${selectedType} from timeline range selection`,
         },
       }) as { jobId?: string };
 
@@ -164,7 +167,8 @@ export function RunJobDialog({
     };
   }, []);
 
-  const isJobInProgress = jobStatus && ["starting", "waiting", "active", "delayed"].includes(jobStatus);
+  const isJobInProgress = jobStatus &&
+    ["starting", "waiting", "active", "delayed"].includes(jobStatus);
   const isJobComplete = jobStatus === "completed";
   const isJobFailed = jobStatus === "failed";
 
@@ -177,7 +181,7 @@ export function RunJobDialog({
             Select a job type to run on the selected time range.
           </DialogDescription>
         </DialogHeader>
-        
+
         <div className="grid w-full gap-4 py-4">
           {error && (
             <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
@@ -190,8 +194,12 @@ export function RunJobDialog({
             <div className="flex items-center gap-3 rounded-md bg-blue-500/10 p-4 text-sm text-blue-600 dark:text-blue-400">
               <Loader2 className="h-5 w-5 flex-shrink-0 animate-spin" />
               <div className="flex-1">
-                <div className="font-medium">{selectedType} job is running in background</div>
-                <div className="text-xs opacity-80 mt-1">You can close this dialog and check progress in the Jobs page</div>
+                <div className="font-medium">
+                  {selectedType} job is running in background
+                </div>
+                <div className="text-xs opacity-80 mt-1">
+                  You can close this dialog and check progress in the Jobs page
+                </div>
               </div>
             </div>
           )}
@@ -203,24 +211,17 @@ export function RunJobDialog({
             </div>
           )}
 
-          <div className="space-y-3">
-            <div>
-              <Label className="text-sm font-medium mb-2 block">Start Date & Time</Label>
-              <DateTimePicker
-                value={editableStart}
-                onChange={(date) => date && setEditableStart(date)}
-                disabled={isJobInProgress || isJobComplete}
-              />
-            </div>
-            <div>
-              <Label className="text-sm font-medium mb-2 block">End Date & Time</Label>
-              <DateTimePicker
-                value={editableEnd}
-                onChange={(date) => date && setEditableEnd(date)}
-                disabled={isJobInProgress || isJobComplete}
-              />
-            </div>
-          </div>
+          <DateRangePicker
+            label="Timeline range"
+            value={{ start: editableStart, end: editableEnd }}
+            onChange={(value) => {
+              setEditableStart(value.start);
+              if (value.end) setEditableEnd(value.end);
+            }}
+            disabled={Boolean(isJobInProgress || isJobComplete)}
+            showAudioTimeline
+            timeZone={resolveTimeZone(editableStart)}
+          />
 
           {!isJobInProgress && !isJobComplete && (
             <div className="grid gap-2">
@@ -234,21 +235,25 @@ export function RunJobDialog({
                   <SelectValue placeholder="Select a job type..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {isLoadingSchemas ? (
-                    <SelectItem value="loading" disabled>
-                      Loading schemas...
-                    </SelectItem>
-                  ) : eligibleJobTypes.length === 0 ? (
-                    <SelectItem value="none" disabled>
-                      No compatible job types found
-                    </SelectItem>
-                  ) : (
-                    eligibleJobTypes.map((type) => (
-                      <SelectItem key={type} value={type}>
-                        {type}
+                  {isLoadingSchemas
+                    ? (
+                      <SelectItem value="loading" disabled>
+                        Loading schemas...
                       </SelectItem>
-                    ))
-                  )}
+                    )
+                    : eligibleJobTypes.length === 0
+                    ? (
+                      <SelectItem value="none" disabled>
+                        No compatible job types found
+                      </SelectItem>
+                    )
+                    : (
+                      eligibleJobTypes.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {type}
+                        </SelectItem>
+                      ))
+                    )}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
@@ -257,7 +262,8 @@ export function RunJobDialog({
             </div>
           )}
 
-          {!isJobInProgress && !isJobComplete && selectedType && currentSchema && (
+          {!isJobInProgress && !isJobComplete && selectedType &&
+            currentSchema && (
             <div className="border-t pt-4">
               <Label className="mb-3 block">
                 {selectedType} Configuration
@@ -267,13 +273,13 @@ export function RunJobDialog({
                   schema={currentSchema}
                   validator={validator}
                   onSubmit={(data: any) => handleSubmit(data.formData)}
-                  noHtml5Validate={true}
+                  noHtml5Validate
                   showErrorList={false}
                   liveValidate={false}
                 >
                   <div className="mt-4">
-                    <Button 
-                      type="submit" 
+                    <Button
+                      type="submit"
                       disabled={!selectedType}
                       className="w-full"
                     >
@@ -286,10 +292,11 @@ export function RunJobDialog({
             </div>
           )}
 
-          {!isJobInProgress && !isJobComplete && selectedType && !currentSchema && !isLoadingSchemas && (
+          {!isJobInProgress && !isJobComplete && selectedType &&
+            !currentSchema && !isLoadingSchemas && (
             <div className="border-t pt-4">
-              <Button 
-                onClick={() => handleSubmit({})} 
+              <Button
+                onClick={() => handleSubmit({})}
                 disabled={!selectedType}
                 className="w-full"
               >
@@ -302,7 +309,7 @@ export function RunJobDialog({
 
         {isJobInProgress && (
           <DialogFooter className="sm:justify-center">
-            <Button 
+            <Button
               onClick={() => onOpenChange(false)}
               className="w-full sm:w-auto min-w-[200px]"
             >

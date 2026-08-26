@@ -39,9 +39,10 @@ your own words.
   differences for review.
 - Opt-in Locations row on the timeline: stays with city labels, movements, and
   grey "assumed" gaps; click a band to see where it was on a mini-map.
-- Dedicated Map page: movements over any period with automatic simplification,
-  dwell-time-sized stay circles, saved places/source tracks, coordinate review,
-  and conversation clusters you can browse.
+- Dedicated Map page: shareable time/viewport/layer URLs, an interactive compact
+  timeline, zoom-aware full route geometry with reviewable source conflicts,
+  dwell/visit density, saved places/source tracks, and persistent paginated
+  conversation clusters that do not scan raw objects.
 - Fully offline reverse geocoding (GeoNames) and automatic timezone periods
   derived from your movements; manual location assignment for ranges without
   data. See [LOCATIONS.md](docs/LOCATIONS.md) for the full manual.
@@ -115,6 +116,22 @@ your own words.
   message/pin counts, actual-model labels, unread states, resizable navigation,
   rename, and previous/next navigation across pinned messages.
 
+### Hybrid Knowledge Search
+
+- Optional Qdrant-backed dense + sparse search across transcriptions, messages,
+  objects, and active media descriptions. Typed date/source/message platform and
+  sender filters are revalidated against current MongoDB records; results are
+  capped per chat/recording/source and link back to canonical Mycelia records.
+- Independent projection lifecycle with durable checkpoints, source/chunk
+  ledger, incremental change-stream updates, periodic reconciliation, and
+  blue/green rebuilds that keep the previous active generation searchable.
+- Dedicated Search page and Knowledge settings page for status, progress,
+  freshness, errors, chunk inspection, reconcile, pause/resume, and confirmed
+  rebuild operations. Chat receives only the read-only search tool.
+- Separate `mycelia-rag` Compose project and volumes; Qdrant is additional
+  rebuildable storage and never replaces canonical MongoDB. See
+  [RAG_QDRANT.md](docs/RAG_QDRANT.md).
+
 ### Object Management
 
 - Create, edit, and browse People, Events, Conversations, Relationships, and
@@ -143,6 +160,10 @@ your own words.
   counts available through explicit calculate buttons instead of dashboard
   polling.
 - Pipeline ordering and progress tracking.
+- Sky-first Voice Identity workflow with rolling review, independent calibration
+  checks, resumable all-history classification campaigns, safe empty-generation
+  repair preview, and current/manual speaker projection on Timeline. See the
+  [Voice Identity runbook](docs/VOICE_IDENTITY_RUNBOOK.md).
 - Configurable worker defaults and prompt templates.
 - Failed-job bulk retry, obsolete-failure dismissal, VAD queue recovery, and
   historical conversation repair:
@@ -178,12 +199,13 @@ your own words.
   memories and wearable capture back into Mycelia.
 - GPU diarization stack replacing the current batch-only flow (`diarizator/`
   Helm charts + WebUI).
-- Semantic search + vector memory integration connecting Qdrant-backed pipelines
-  and the OpenMemory MCP bridges into the main timeline.
+- Qdrant retrieval evaluation and owner-scoped authorization hardening.
 
 **Planned**
 
 - Multi-device & multi-modal capture (health, geolocation, photos, sensors).
+- Mem0/OpenMemory and graph-memory integrations built as separate projections
+  after the Qdrant retrieval contract is validated.
 - Privacy + usage dashboards, token metering, and export flows.
 - Processing / artifact templates, batch operations, and backup automation.
 
@@ -209,6 +231,30 @@ The setup script automatically:
 - Starts all services with Docker Compose
 
 Open [http://localhost:3210](http://localhost:3210) in your browser.
+
+#### Optional Qdrant RAG stack
+
+The vector projection is intentionally not part of the main startup. Run it as
+an isolated stack after Mycelia's MongoDB is available:
+
+```bash
+cp .env.rag.example .env.rag.local
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  up -d --build
+```
+
+Then set `RAG_URL` in the main ignored `.env` and recreate only the backend.
+The default standalone ports are `48091` (RAG API), `46333` (Qdrant
+REST/dashboard), and `46334` (Qdrant gRPC).
+
+The default is a local pinned MiniLM + BM25 FastEmbed baseline with no reranker.
+Its model/tokenizer/instruction/dimension/normalization/chunker contract is visible
+in **Settings → Knowledge index** and enforced by the projection fingerprint.
+Qwen3-Embedding-0.6B at 768 dimensions on an RTX 4090 is reserved as a later
+remote-executor projection; Qdrant itself stays on the current host and no GPU or
+remote inference service is started by this Compose file.
 
 #### CLI/Python Daemon Users
 

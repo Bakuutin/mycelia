@@ -24,6 +24,12 @@ vi.mock("./VoiceIdentityReviewPlayer", () => ({
       <span>session:{props.sessionAnswered}/{props.sessionTotal}</span>
       <span>editing:{props.editingLabel ?? "no"}</span>
       <button type="button" onClick={() => props.onDecision("me")}>Sky</button>
+      <button
+        type="button"
+        onClick={() => props.onDecision("me-timeline-only")}
+      >
+        Sky Timeline only
+      </button>
       <button type="button" onClick={() => props.onDecision("not-me")}>
         Not Sky
       </button>
@@ -181,6 +187,46 @@ describe("VoiceIdentityReviewPage", () => {
 
   it("shows a continuous review stream instead of a required 10-item batch", async () => {
     let sessionListCalls = 0;
+    const first = {
+      _id: "66b000000000000000000001",
+      original_id: "66b000000000000000000011",
+      start: "2026-08-10T10:00:00.000Z",
+      end: "2026-08-10T10:00:05.000Z",
+      speaker: "SPEAKER_00",
+    };
+    const createdSession = {
+      _id: "66b000000000000000000050",
+      name: "Rolling review",
+      status: "active",
+      revision: 1,
+      targetProfileIds: [profile._id],
+      window: [{ segmentId: first._id, groupId: "g1", status: "pending" }],
+      groups: [{
+        groupId: "g1",
+        segmentIds: [first._id],
+        start: first.start,
+        end: first.end,
+        durationSeconds: 5,
+      }],
+      segments: [first],
+      activeSegmentId: first._id,
+      loadedCount: 1,
+      reviewedCount: 0,
+      skippedCount: 0,
+      backlogEstimate: 1,
+      hasMore: false,
+      preferences: {
+        autoPlay: true,
+        autoAdvanceWindow: true,
+        groupMode: true,
+        compactMode: true,
+      },
+      querySnapshot: {
+        rangeMode: "fixed",
+        start: "2026-08-07T10:00:00.000Z",
+        end: "2026-08-21T10:00:00.000Z",
+      },
+    };
     mockCallResource.mockImplementation((resource, input: any) => {
       if (resource === "mongo") return Promise.resolve([profile]);
       if (resource === "jobs") {
@@ -237,32 +283,7 @@ describe("VoiceIdentityReviewPage", () => {
         });
       }
       if (input.action === "create-review-session") {
-        return Promise.resolve({
-          _id: "66b000000000000000000050",
-          name: "Rolling review",
-          status: "active",
-          revision: 1,
-          targetProfileIds: [profile._id],
-          window: [],
-          groups: [],
-          segments: [],
-          loadedCount: 0,
-          reviewedCount: 0,
-          skippedCount: 0,
-          backlogEstimate: 0,
-          hasMore: false,
-          preferences: {
-            autoPlay: true,
-            autoAdvanceWindow: true,
-            groupMode: true,
-            compactMode: true,
-          },
-          querySnapshot: {
-            rangeMode: "fixed",
-            start: "2026-08-07T10:00:00.000Z",
-            end: "2026-08-21T10:00:00.000Z",
-          },
-        });
+        return Promise.resolve(createdSession);
       }
       return Promise.resolve({});
     });
@@ -270,24 +291,43 @@ describe("VoiceIdentityReviewPage", () => {
     renderPage();
 
     await screen.findByRole("button", {
-      name: "Check available audio",
+      name: "Start recommended review",
     });
     await waitFor(() => expect(sessionListCalls).toBe(1));
+    await waitFor(() =>
+      expect(screen.getByRole("button", {
+        name: "Start recommended review",
+      })).toBeEnabled()
+    );
     expect(screen.getByText(/One continuous stream/i))
       .toBeInTheDocument();
     expect(screen.getByRole("option", { name: "No saved sessions" }))
       .toBeInTheDocument();
 
-    await waitFor(() =>
-      expect(document.body.textContent).toContain("Clips then keep flowing")
+    fireEvent.click(screen.getByRole("button", {
+      name: "Start recommended review",
+    }));
+    await screen.findByText(`active:${first._id}`);
+    expect(sessionListCalls).toBe(1);
+    expect(mockCallResource).toHaveBeenCalledWith(
+      "speaker-segments",
+      expect.objectContaining({
+        action: "create-review-session",
+        sourceMode: "all_matching",
+        candidateMode: "reviewable",
+        quality: { minDurationSeconds: 1, deduplicateOverlaps: true },
+        limit: 10,
+      }),
+    );
+    expect(mockCallResource).not.toHaveBeenCalledWith(
+      "speaker-segments",
+      expect.objectContaining({ action: "preview-review-session" }),
+      expect.anything(),
     );
     expect(document.body.textContent).toContain(
-      "The buffer size below is only a loading detail",
+      "Timeline-only and Noise / unclear do not",
     );
     expect(screen.queryByText("Rolling window")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("Advanced loading settings"));
-    expect(screen.getByRole("option", { name: "10 clips · recommended" }))
-      .toBeInTheDocument();
   });
 
   it("runs the global identity classification only from the manual button", async () => {
@@ -334,6 +374,52 @@ describe("VoiceIdentityReviewPage", () => {
       profileId: profile._id,
     });
     expect(screen.getByText("10")).toBeInTheDocument();
+  });
+
+  it("does not show a stale remaining estimate for a finished stream", async () => {
+    const finishedSession = {
+      _id: "66b000000000000000000051",
+      name: "Finished review",
+      status: "completed",
+      revision: 4,
+      targetProfileIds: [profile._id],
+      window: [],
+      groups: [],
+      segments: [],
+      loadedCount: 0,
+      reviewedCount: 6,
+      skippedCount: 2,
+      backlogEstimate: 200,
+      hasMore: true,
+      querySnapshot: {
+        rangeMode: "fixed",
+        start: "2026-08-07T10:00:00.000Z",
+        end: "2026-08-21T10:00:00.000Z",
+      },
+    };
+    mockCallResource.mockImplementation((resource, input: any) => {
+      if (resource === "mongo") return Promise.resolve([profile]);
+      if (resource === "jobs") return Promise.resolve({ services: [] });
+      if (input.action === "identity-status") {
+        return Promise.resolve(emptyStatus);
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(emptyPreview);
+      }
+      if (input.action === "list-review-sessions") {
+        return Promise.resolve([finishedSession]);
+      }
+      if (input.action === "get-review-session") {
+        return Promise.resolve(finishedSession);
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("8 saved answers · stream finished"))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/estimated remaining/i)).not.toBeInTheDocument();
   });
 
   it("resumes a server session, commits a decision, advances, and undoes it", async () => {
@@ -462,6 +548,20 @@ describe("VoiceIdentityReviewPage", () => {
       sessionId,
       revision: 2,
     });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sky Timeline only" }),
+    );
+    await waitFor(() =>
+      expect(mockCallResource).toHaveBeenCalledWith(
+        "speaker-segments",
+        expect.objectContaining({
+          action: "commit-review-decision",
+          profileId: profile._id,
+          calibrationUse: "timeline_only",
+        }),
+      )
+    );
   });
 
   it("shows manual profile labels and revises one reviewed segment without changing counts", async () => {
@@ -677,12 +777,12 @@ describe("VoiceIdentityReviewPage", () => {
 
     await screen.findByText("Check needs attention");
     expect(screen.getByText(
-      "Check needs both Sky and not-Sky examples. Move a different mixed recording to Check.",
+      "Check needs both Sky and not-Sky examples. Move a different mixed source group to Check.",
     )).toBeInTheDocument();
     expect(screen.getByText(blockedPreview.blockers[1])).toBeInTheDocument();
     expect(screen.getByText(/Independent accuracy is below 98%/i))
       .toBeInTheDocument();
-    expect(screen.getByText(/Only 3 source recordings/i)).toBeInTheDocument();
+    expect(screen.getByText(/Only 3 source groups/i)).toBeInTheDocument();
   });
 
   it("marks a validated calibration as ready for the 24-hour pilot", async () => {

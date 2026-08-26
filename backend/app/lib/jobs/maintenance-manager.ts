@@ -22,6 +22,7 @@ import {
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { reconcileExpiredMediaEventRuns } from "@/lib/media-events/resource.server.ts";
 import { reconcileExpiredMediaEventRunsGlobally } from "./media-event-run-reaper.ts";
+import { reconcileIdentityCampaignReservations } from "./identity-campaign-recovery.ts";
 
 const MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const WAITING_MISSING_GRACE_MS = 2 * 60 * 1000;
@@ -93,6 +94,21 @@ export class MaintenanceManager {
         console.warn(
           "[SELF-HEAL] Reconciled expired media event runs.",
           mediaEvents,
+        );
+      }
+
+      try {
+        const identityRecovery = await reconcileIdentityCampaignReservations();
+        if (identityRecovery.recovered > 0) {
+          console.warn(
+            `[SELF-HEAL] Re-enqueued ${identityRecovery.recovered} speaker identity campaign reservation(s).`,
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[MaintenanceManager] Speaker identity reservation recovery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         );
       }
       // Waiting jobs have no running process to protect and are cheap to

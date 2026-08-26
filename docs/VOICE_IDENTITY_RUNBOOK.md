@@ -60,11 +60,12 @@ db.diarizations.countDocuments({
 db.diarization_runs.findOne({ runId: "legacy-v0" });
 ```
 
-Migrations `0066_speaker_review_source_index` and
-`0067_speaker_review_range_index` keep full-backlog and bounded-range review
-previews indexed. They are applied automatically at backend startup. Preview
-scans at most 5,000 raw segments per request, shows elapsed time in the UI, and
-reports capped totals as `at least N`.
+Migrations `0066_speaker_review_source_index`,
+`0067_speaker_review_range_index`, `0072_voice_identity_campaign_safety`, and
+`0073_diarization_run_lifecycle_end_index` keep review, classification
+preflight, Timeline aggregation, calibration idempotency, single-campaign
+admission, and exact empty-activation repair previews indexed. They are applied
+automatically at backend startup.
 
 ## Pilot and backfill
 
@@ -73,18 +74,27 @@ current server blockers, and a direct **Open calibration setup** link. Follow
 the displayed `label → fit → validate → save → classify` sequence; calibration
 reuses stored diarization embeddings and does not rerun audio processing.
 
-1. `/settings/voice-identity`: re-enroll Sky from all saved samples.
-2. Start an **Uncertain + unclassified** continuous review stream. **Check
-   available audio** freezes the selected source, then **Start continuous
-   review** begins labeling. The default 10-item buffer (advanced options allow
-   5/10/20) is only for preloading: with **Continuous** enabled, the next buffer
-   arrives automatically and there is no batch-complete button. The stream
-   progress is separate from the calibration total, which includes usable labels
-   from every saved stream. Keep the default **Clear speech · ≥1s ·
-   deduplicate** quality filter; use **All fragments** only to diagnose raw
-   diarization. Label at least 100 compatible pilot segments (40 Sky, 40
-   not-Sky, plus borderline/mixed).
-   - Use **Skip** for noise, clipped/ambiguous speech and overlapping speakers.
+1. `/settings/voice-identity`: inspect the Profile card. Rebuild Sky only when
+   it says that new clean samples are waiting; sufficient sample volume by
+   itself does not require another rebuild.
+2. Press **Start recommended review**. The server chooses all compatible active
+   recordings with clear speech of at least one second, removes overlapping
+   duplicates, mixes recordings, creates a saved stream, and returns the first
+   clip in the same response. Source, date, generation, quality, and buffer size
+   live under **Advanced**. The default rolling buffer is only for preloading;
+   it advances without a batch-complete step. Progress combines usable labels
+   from all saved streams.
+   - **Sky · clear** creates Timeline identity and a calibration-positive label.
+   - **Sky · timeline only** creates Timeline identity but is excluded from
+     calibration. Use it for an identifiable hum or clipped word that is not
+     good training evidence.
+   - **Not Sky / another profile** creates the corresponding manual identity and
+     calibration-negative evidence for Sky.
+   - **Noise or unclear** records a skip without speaker identity. Use it for
+     noise, ambiguous overlap, or an unrecognizable sub-second fragment.
+   - **Add clean clip to profile** is different from labeling: use it only for
+     clean single-speaker audio. It saves a sample and marks the profile as
+     waiting for rebuild; it does not silently rebuild or recalibrate.
    - Use **Edit** to change any saved label or Skip.
    - **Latest saved label** is always visible; **Show all** opens the remaining
      history newest-first. Select any row to listen, correct the speaker, or
@@ -96,11 +106,9 @@ reuses stored diarization embeddings and does not rerun audio processing.
      the review segment stops and disposes the previous clip. The next three
      pending clips/groups are fetched into a bounded browser cache, so autoplay
      normally starts without another audio download wait.
-   - Choose the source explicitly: all matching recordings, selected recordings,
-     an exact Timeline selection, or one active compatible diarization
-     generation. **Check available audio** shows counts, quality exclusions,
-     recordings, and playable samples. The server freezes that exact scope and
-     reapplies it to every preload buffer.
+   - For targeted work, Advanced can use searchable selected recordings, an
+     exact Timeline selection, or one active compatible diarization generation.
+     Preview freezes that exact scope for every rolling window.
 3. Choose the required independent Check precision and save the calculated
    thresholds. Use `98%` for production, a `95%`/`90%` preset for a provisional
    run, or a custom `90–100%` value in `0.5%` steps. This control is a precision
@@ -113,8 +121,11 @@ reuses stored diarization embeddings and does not rerun audio processing.
    and saves `negativeDecisionMode=uncertain_only`. This is intentional
    Sky-first behavior: automatic Sky matches remain available, but every other
    score is left uncertain instead of being auto-rejected. Manual not-Sky labels
-   remain intact. For a provisional target, **Advanced · stricter automatic Sky
-   matching** can raise the positive cosine threshold above the server
+   remain intact. Automatic not-Sky is enabled only when the independent Check
+   set also proves the selected precision with at least 20 rejected decisions;
+   otherwise the server falls back to `uncertain_only` even if Learn found a
+   negative threshold. For a provisional target, **Advanced · stricter automatic
+   Sky matching** can raise the positive cosine threshold above the server
    recommendation in `0.005` steps. It can never lower it. A higher threshold
    usually reduces matches, coverage, and recall, but may improve precision. The
    preview marks this as `positiveThresholdSource=operator_stricter`; **Use
@@ -134,17 +145,35 @@ reuses stored diarization embeddings and does not rerun audio processing.
    held-out clips without closing the editor; the next clip starts playing
    immediately. The recent-speaker shortcuts `1`–`3` remain active after
    clicking the player or an action button, but are intentionally disabled while
-   typing in an input.
-4. Open `/jobs?type=speakerIdentity` and press play on the worker. The launcher
-   resolves primary Sky, its current revision, the usable server calibration,
-   and a compatible active run without raw IDs. Run the 24-hour pilot first and
-   inspect its false positives. The 7/14-day and longer options become available
-   only after saving a production calibration with a ≥98% target.
+   typing in an input. The overall minimum remains 100 labels with at least 40
+   Sky and 40 not-Sky. Independently, Check must contain at least 20 Sky labels,
+   20 not-Sky labels, and produce at least 20 automatic Sky matches; a single
+   correct match at 100% is not enough evidence. The metric cards show Check
+   support, Sky precision, false matches, recall, and the number left uncertain.
+   Every Edit/undo/skip changes the calibration evidence snapshot, immediately
+   makes the old calibration stale, and requires a fresh automatic preview plus
+   Save. Saving the same unchanged evidence and parameters is idempotent.
+4. With a saved production calibration, press **Classify all compatible
+   history** on Voice Identity or Jobs. The server preflight reads actual active
+   segments, splits them into compatible run/embedding-space partitions,
+   excludes empty generations, freezes a cutoff, and shows segment/batch counts.
+   Do not enter run IDs, revisions, calibration IDs, or cursors. A provisional
+   calibration remains limited to a bounded 24-hour pilot.
 5. Create an **Audit automatic matches** session to inspect old/current matched
    candidates across different recordings; also review uncertain and rejected
    samples.
-6. Expand by bounded ranges. `speakerIdentity` is idempotent for run/profile
-   revision/calibration and continues with a cursor.
+6. Watch the campaign, not each 1,000-segment job. Continuations are automatic;
+   `Next batch queued` needs no manual action. Completion means that actual
+   remaining work across every frozen partition is zero. A changed active source
+   becomes `source_changed` instead of incorrectly reporting completion. Every
+   next batch reserves its stable job ID before enqueue. The maintenance
+   watchdog re-enqueues a missing reservation with that same ID after a backend
+   crash, and the Python worker refuses to write if another job owns the
+   campaign.
+7. After the first full-history campaign completes, every newly completed
+   diarization batch triggers a small automatic identity campaign using the same
+   current full calibration. The trigger remains disabled before that baseline,
+   so it cannot start the initial historical backfill unexpectedly.
 
 Enrollment and profile re-enrollment share a priority admission queue with
 diarization. When all diarizator slots are busy, the job remains **Waiting for
@@ -192,6 +221,24 @@ bounded chain finishes, the run becomes ready.
 Use `Compare` before `Activate`. Activation writes the new active segments
 first, then supersedes only overlapping old segments. A retained superseded run
 can be activated again as rollback.
+
+Activation is fail-closed when the target generation is empty, still building,
+contains unresolved generation errors, or overlaps a running identity campaign.
+It records the exact replaced run IDs before changing lifecycle state.
+
+### Repair an accidental empty activation
+
+Open **Voice Identity → Operations & generations → Coverage repair**. Preview is
+read-only and reports the empty active generation, exact recoverable segment
+count, predecessor runs, and preserved data. It never deletes audio,
+transcripts, embeddings, or segment documents.
+
+Only after checking those counts, enter the exact displayed confirmation
+`REPAIR <runId> <count>`. The resume-safe repair claims the activation, restores
+the proven predecessor segments and run metadata, clears partial supersession
+markers, and marks the empty target `failed: Empty activation repaired`. If any
+newer competing active coverage exists or provenance is missing, automatic
+repair stays blocked for manual investigation.
 
 ## Purge
 

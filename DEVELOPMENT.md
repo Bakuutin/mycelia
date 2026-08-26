@@ -69,8 +69,8 @@ statistics, missing required keys, optional keys, undocumented keys, duplicate
 definitions, blank values, malformed assignments, and formatting issues. The
 command exits non-zero when the files need attention, so `--json` can be used in
 CI or other automation. `--all` treats the root contract as required and the
-standalone diarizator/GPU deployments as optional; missing optional `.env` files
-are reported without failing the audit.
+standalone diarizator, GPU, and RAG deployments as optional; missing optional
+`.env` files are reported without failing the audit.
 
 Apply only safe automatic repairs with:
 
@@ -95,9 +95,9 @@ specific template with an explicit, single-contract command:
   --fix --prune-undocumented
 ```
 
-The three contracts remain separate because they are loaded by different
-deployments. Compose services pass explicit diarizator variables instead of
-injecting an entire application `.env` containing unrelated secrets.
+The deployment contracts remain separate because they are loaded by different
+services. Compose services pass explicit diarizator and RAG variables instead
+of injecting an entire application `.env` containing unrelated secrets.
 
 #### Readiness and reload diagnostics
 
@@ -248,6 +248,56 @@ catalog's `manualRun` capability. Generic cancel/clear actions leave folder
 imports, recognition batches, and paid per-photo work untouched; manage those
 campaigns on `/media` and `/media/analysis` instead.
 
+#### Isolated Qdrant RAG development
+
+The vector projection has its own Compose project, ports, state database, model
+cache, and Qdrant volume. Do not add it to the main `docker compose up` command
+or restart MongoDB/Redis while iterating on RAG code.
+
+```bash
+cp .env.rag.example .env.rag.local
+
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  up -d --build
+```
+
+Default host ports are RAG API `48091`, Qdrant REST/dashboard `46333`, and
+Qdrant gRPC `46334`. They do not overlap the main application. Verify process,
+dependency readiness, and projection readiness separately:
+
+```bash
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  ps
+curl -fsS http://127.0.0.1:48091/health
+curl -fsS http://127.0.0.1:48091/ready
+curl -fsS http://127.0.0.1:48091/v1/status
+```
+
+`/health` is only liveness. `/ready` checks for a compatible active Qdrant
+projection/alias and enforces the optional read-only-principal gate;
+`/v1/status` is the authoritative view of build/catch-up/active and checkpoint
+freshness state. A failed blue/green rebuild must leave the previous active
+collection intact. Evidence search separately bulk-revalidates candidate source
+revisions and filters against MongoDB and therefore fails closed if that
+canonical read is unavailable. The complete lifecycle, connection modes, control
+semantics, and deferred authorization/read-only-user migration are documented in
+[docs/RAG_QDRANT.md](docs/RAG_QDRANT.md).
+
+The default inference profile is the local
+`fastembed-minilm-bm25-v1` baseline with pinned MiniLM/BM25 artifact revisions and
+no reranker. `/v1/status` and **Settings → Knowledge index** show the full
+embedding-space fingerprint and executor state. A future Qwen3/4090 service is a
+separate HTTP executor and new blue/green projection; it is not enabled by any
+Stage 1 environment variable. The Stage 1 model, revision, tokenizer,
+instructions, dimensions, and normalization values are immutable and invalid
+overrides stop configuration loading. Future local/remote executors must report
+the same embedding fingerprint and chunker contract before they can write or
+query one generation.
+
 #### Objects browse and Timeline density rollout
 
 The Objects page does not run MongoDB aggregation pipelines in the browser. Each
@@ -326,8 +376,8 @@ with neither field has no range rendered rather than an inferred one.
 
 The Job Detail page keeps a batch's recorded diarization errors as historical
 evidence, but resolves each affected range against current `audio_chunks` so it
-can distinguish recovered retries, pending retries, and exhausted failures.
-Raw job payloads, worker logs, and access-audit rows remain available in closed
+can distinguish recovered retries, pending retries, and exhausted failures. Raw
+job payloads, worker logs, and access-audit rows remain available in closed
 technical sections instead of expanding the page by default.
 
 Deploy changes to this path by pausing only the diarization worker, draining its
@@ -479,15 +529,15 @@ Keep live service availability separate from corpus-wide statistics:
 - Completed summarization claims are released in indexed batches of at most 100
   per maintenance pass. Do not replace this with an unbounded `updateMany`
   predicate over all objects.
-- The Map conversation overlay is off by default and runs only through **Load
-  conversations**. It sends one bounded, indexed range query, cancels stale
-  browser requests, and does not retry a database deadline automatically. The
-  backend requires the explicit `manual: true` request marker, so an old browser
-  bundle cannot keep the former automatic polling behavior alive. Identical
-  server requests share one query, and a database deadline starts a one-minute
-  backoff for that same window so stale browser tabs cannot amplify the timeout.
-  Historical diarization metadata cursors stop after 5000 documents per job and
-  retain the five-second deadline.
+- The Map page reads conversations only from the durable
+  `location_conversation_projection`. It never falls back to scanning raw
+  `objects`; while the first generation is absent it returns a typed
+  `not-built`/`building` state. Summary requests use projection revision,
+  viewport, zoom, range, layers and principal in their bounded LRU/single-flight
+  cache key. The legacy manual `conversations-on-map` action remains only for
+  UAT parity and is no longer called by the Map page. Historical diarization
+  metadata cursors stop after 5000 documents per job and retain the five-second
+  deadline.
 
 Migration `0056_pipeline_dashboard_indexes.ts` adds the partial Jobs index used
 for recent completed transcription batch history and the compound Map index for
@@ -495,6 +545,48 @@ conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds the
 dashboard cursor/rollup indexes, durable snapshot and campaign collections, the
 unique campaign/batch constraint, and the partial entity-typing marker index.
 Apply pending migrations before relying on the new query hints.
+
+#### Location Map projection rollout
+
+Migrations `0068_location_conversation_projection.ts` and
+`0069_location_route_projection.ts` create only derived collections, state and
+indexes. They do not scan conversations, reparse track files or rebuild data at
+startup. Canonical `objects`, `location_points`, source geometry and saved
+originals remain unchanged.
+
+For an existing database, use this controlled rollout:
+
+1. Recreate only the changed application services, restart nginx, and verify
+   their bind mounts and effective dev commands as described in **Readiness and
+   reload diagnostics**. Wait for frontend/backend `[READY]`, healthy app
+   containers and `/readiness = 200`; do not restart MongoDB or Redis.
+2. In **Jobs**, run **Location map index** with `mode: "all"` and
+   `reparseOriginals: true`. Reparse upgrades retained GPX `trkseg` and KML/gx
+   track boundaries before route projection. An unavailable or invalid original
+   is marked `routeBoundaryCompleteness: "incomplete"`; existing raw geometry is
+   retained.
+3. Treat conversations as ready only when
+   `location_conversation_projection_state._id = "current"` has `ready: true`,
+   `building: false`, an `activeGeneration` and a revision. During later
+   rebuilds, the previous generation stays readable with `stale: true` until the
+   atomic generation swap.
+4. Treat routes as ready only when
+   `location_route_projection_state._id = "current"` has `ready: true`,
+   `building: false`, `dirty: false` and an `activeGeneration`. Review pending
+   `location_route_conflicts`; a decision changes derived visibility and never
+   deletes the source geometry.
+5. Verify a representative far-zoom density request, a zoom-14+ route-detail
+   request and a coincident conversation cluster. Summary responses must be
+   bounded to at most 2000 clusters; route responses over 50,000 simplified
+   coordinates must return overview data with `detailLimited: true`, not a
+   silently truncated detail path.
+
+Conversation/object changes enter `location_conversation_projection_pending`;
+location segment changes request a coalesced full association rebuild.
+Track/geometry changes mark the route state dirty. The `locationMapProjection`
+watchdog drains both paths and has concurrency one. A failed rebuild leaves the
+prior published generation intact where one exists and records the error in the
+corresponding state document.
 
 Mongo's Compose health check is an exec-form, one-row native `mongostat` probe
 every 30 seconds, with 1.5-second connection/server/socket deadlines and a
@@ -715,6 +807,23 @@ import { useTimeline } from "@/hooks/useTimeline";
 import type { TimelineItem } from "@/types/timeline";
 ```
 
+### Date and time selection
+
+Use `DateRangePicker` from `frontend/src/components/DateRangePicker.tsx` for
+start/end ranges throughout the app. It keeps the date range in one calendar,
+provides month and year dropdowns, defaults to minute precision, and can add the
+audio-density timeline with `showAudioTimeline`. The picker opens in a
+viewport-contained, internally scrolling dialog; users explicitly select the
+Start or End boundary before editing its date or time. Use `precision="date"`
+for date-only filters and opt into `precision="second"` only when the workflow
+requires exact seconds.
+
+Use `DateTimePicker` from `frontend/src/components/ui/datetime-picker.tsx` only
+for a single instant. Do not assemble new range controls from separate native
+`date`, `time`, or `datetime-local` inputs. Both shared controls use the
+configured app timezone unless the caller explicitly supplies a contextual
+Timeline timezone or UTC for a maintenance boundary.
+
 ## Backend Development
 
 ```bash
@@ -752,16 +861,28 @@ For diarization, voice enrollment, speaker recognition, and historical backfill:
 2. Run diarization locally on CPU or remotely on an NVIDIA GPU.
 3. Configure and verify the route in Settings → Diarization.
 4. Complete missing diarization coverage.
-5. In Settings → Voice Identity, enroll Sky under **Profiles & samples**, label
-   scoped validation audio under **Review & calibration**, preview the selected
-   recordings/Timeline range, and save the current revision-bound calibration.
-6. In **Jobs**, press play on `speakerIdentity`; the launcher resolves Sky,
-   calibration, and the compatible active generation. Run a bounded 24-hour
-   pilot before historical backfill.
+5. In Settings → Voice Identity, build Sky from clean, single-speaker profile
+   samples. Use ordinary review labels for Timeline/calibration; add a clip to
+   the profile only when it represents a missing recording condition.
+6. Press **Start recommended review** and label enough independent recordings
+   for Learn and Check. Timeline-derived profile samples are excluded from both
+   sets; legacy Timeline samples without recording provenance must be re-added.
+7. Save a calibration only after Check has at least 20 Sky labels, 20 not-Sky
+   labels, and 20 safe automatic Sky matches at the selected precision. If
+   held-out not-Sky decisions are not proven, the server keeps them uncertain.
+8. Use the embedded **Classify all compatible history** action. The server
+   freezes a cutoff, partitions real active segments by run and embedding space,
+   and resumes batches with deterministic job ownership. Raw technical IDs
+   remain in Advanced/Jobs for diagnostics only.
+9. If Voice Identity reports empty active coverage, open **Operations &
+   generations**, inspect the non-destructive repair preview, and confirm repair
+   separately before classification. Never purge as part of repair.
+10. Open Timeline and use the Speaker identity track/filter after the campaign
+    reports zero real remaining segments.
 
-See
-[the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)
-for exact commands, UI workflow, safety gates, and troubleshooting.
+See [the architecture guide](docs/SPEAKER_IDENTIFICATION.md) and
+[operator runbook](docs/VOICE_IDENTITY_RUNBOOK.md) for exact commands, UI
+workflow, safety gates, and troubleshooting.
 
 ## Database Migrations
 

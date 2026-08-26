@@ -6,6 +6,7 @@ import { formatTime, formatTimeRangeDuration } from "@/lib/formatTime";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import {
   Tooltip,
   TooltipContent,
@@ -92,82 +93,6 @@ function parseDateParam(value: string | null): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function toDateInputValue(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function toTimeInputValue(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
-
-function replaceLocalDate(current: Date, value: string): Date | null {
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  const next = new Date(current);
-  next.setFullYear(year, month - 1, day);
-  return Number.isNaN(next.getTime()) ? null : next;
-}
-
-function replaceLocalTime(current: Date, value: string): Date | null {
-  const [hours, minutes] = value.split(":").map(Number);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-  const next = new Date(current);
-  next.setHours(hours, minutes, 0, 0);
-  return Number.isNaN(next.getTime()) ? null : next;
-}
-
-function TranscriptDateTimeInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value?: Date;
-  onChange: (date: Date) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1 sm:flex-row sm:items-end">
-      <label className="grid gap-1 text-sm font-medium">
-        <span>{label} date</span>
-        <Input
-          type="date"
-          aria-label={`${label} date`}
-          value={value ? toDateInputValue(value) : ""}
-          onChange={(event) => {
-            const next = replaceLocalDate(
-              value ?? new Date(),
-              event.target.value,
-            );
-            if (next) onChange(next);
-          }}
-          className="w-full sm:w-[170px]"
-        />
-      </label>
-      <label className="grid gap-1 text-sm font-medium">
-        <span>Time</span>
-        <Input
-          type="time"
-          aria-label={`${label} time`}
-          value={value ? toTimeInputValue(value) : ""}
-          onChange={(event) => {
-            const next = replaceLocalTime(
-              value ?? new Date(),
-              event.target.value,
-            );
-            if (next) onChange(next);
-          }}
-          className="w-full sm:w-[130px]"
-        />
-      </label>
-    </div>
-  );
-}
-
 const TranscriptPage = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -213,13 +138,17 @@ const TranscriptPage = () => {
   >("all");
   const [profileFilter, setProfileFilter] = useState("all");
   const [minConfidence, setMinConfidence] = useState(0);
-  const visibleProfiles = useMemo(() => Array.from(new Map(
-    diarizations.flatMap((item) => {
-      const id = normalizeObjectId(item.speakerIdentity?.profileId ?? item.matched_speaker?.profile_id);
-      const name = item.matched_speaker?.name ?? (item.speakerIdentity?.state === "matched" ? "Sky" : null);
-      return id && name ? [[id, name] as const] : [];
-    }),
-  ).entries()), [diarizations]);
+  const visibleProfiles = useMemo(() =>
+    Array.from(new Map(
+      diarizations.flatMap((item) => {
+        const id = normalizeObjectId(
+          item.speakerIdentity?.profileId ?? item.matched_speaker?.profile_id,
+        );
+        const name = item.matched_speaker?.name ??
+          (item.speakerIdentity?.state === "matched" ? "Sky" : null);
+        return id && name ? [[id, name] as const] : [];
+      }),
+    ).entries()), [diarizations]);
   const [openingConversationKey, setOpeningConversationKey] = useState<
     string | null
   >(null);
@@ -747,18 +676,17 @@ const TranscriptPage = () => {
           handleApplyRange();
         }}
       >
-        <div className="grid gap-4 lg:grid-cols-2">
-          <TranscriptDateTimeInput
-            label="Start"
-            value={formStartDate}
-            onChange={setFormStartDate}
+        {formStartDate && formEndDate && (
+          <DateRangePicker
+            label="Transcript range"
+            value={{ start: formStartDate, end: formEndDate }}
+            onChange={(value) => {
+              setFormStartDate(value.start);
+              if (value.end) setFormEndDate(value.end);
+            }}
+            showAudioTimeline
           />
-          <TranscriptDateTimeInput
-            label="End"
-            value={formEndDate}
-            onChange={setFormEndDate}
-          />
-        </div>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <span className="mr-1 text-sm text-muted-foreground">
             Quick range
@@ -817,7 +745,8 @@ const TranscriptPage = () => {
           </Button>
           <select
             value={identityFilter}
-            onChange={(event) => setIdentityFilter(event.target.value as typeof identityFilter)}
+            onChange={(event) =>
+              setIdentityFilter(event.target.value as typeof identityFilter)}
             className="h-10 rounded-md border bg-background px-3 text-sm"
             aria-label="Speaker identity filter"
           >
@@ -833,11 +762,20 @@ const TranscriptPage = () => {
             aria-label="Speaker profile filter"
           >
             <option value="all">All profiles</option>
-            {visibleProfiles.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            {visibleProfiles.map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
           </select>
           <label className="flex h-10 items-center gap-2 rounded-md border px-3 text-xs text-muted-foreground">
             Confidence ≥ {Math.round(minConfidence * 100)}%
-            <input type="range" min="0" max="1" step="0.05" value={minConfidence} onChange={(event) => setMinConfidence(Number(event.target.value))} />
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={minConfidence}
+              onChange={(event) => setMinConfidence(Number(event.target.value))}
+            />
           </label>
           <Button
             type="submit"
@@ -884,13 +822,27 @@ const TranscriptPage = () => {
           : (
             <div className="divide-y">
               {(lastSearchedQ ? searchSegments : segments).filter((segment) => {
-                if (identityFilter === "all" && profileFilter === "all" && minConfidence === 0) return true;
+                if (
+                  identityFilter === "all" && profileFilter === "all" &&
+                  minConfidence === 0
+                ) return true;
                 return diarizations.some((diarization) => {
-                  if (!diarizationOverlapsTranscript(diarization, segment)) return false;
-                  if (identityFilter !== "all" && diarization.speakerIdentity?.state !== identityFilter) return false;
-                  const profileId = normalizeObjectId(diarization.speakerIdentity?.profileId ?? diarization.matched_speaker?.profile_id);
-                  if (profileFilter !== "all" && profileId !== profileFilter) return false;
-                  const score = diarization.speakerIdentity?.primaryScore ?? diarization.matched_speaker?.similarity ?? 0;
+                  if (!diarizationOverlapsTranscript(diarization, segment)) {
+                    return false;
+                  }
+                  if (
+                    identityFilter !== "all" &&
+                    diarization.speakerIdentity?.state !== identityFilter
+                  ) return false;
+                  const profileId = normalizeObjectId(
+                    diarization.speakerIdentity?.profileId ??
+                      diarization.matched_speaker?.profile_id,
+                  );
+                  if (profileFilter !== "all" && profileId !== profileFilter) {
+                    return false;
+                  }
+                  const score = diarization.speakerIdentity?.primaryScore ??
+                    diarization.matched_speaker?.similarity ?? 0;
                   return score >= minConfidence;
                 });
               }).map(
@@ -1086,9 +1038,27 @@ const TranscriptPage = () => {
                                 ) || "#6b7280"}
                               />
                             ))}
-                            {Array.from(new Set(diarizationsInSegment.map((d) => d.speakerIdentity?.state).filter(Boolean))).map((state) => (
-                              <Badge key={state} variant="outline" className={state === "matched" ? "border-green-500 text-green-700" : state === "rejected" ? "border-slate-400 text-slate-600" : "border-amber-500 text-amber-700"}>
-                                {state === "matched" ? "Sky" : state === "rejected" ? "not Sky" : "uncertain"}
+                            {Array.from(
+                              new Set(
+                                diarizationsInSegment.map((d) =>
+                                  d.speakerIdentity?.state
+                                ).filter(Boolean),
+                              ),
+                            ).map((state) => (
+                              <Badge
+                                key={state}
+                                variant="outline"
+                                className={state === "matched"
+                                  ? "border-green-500 text-green-700"
+                                  : state === "rejected"
+                                  ? "border-slate-400 text-slate-600"
+                                  : "border-amber-500 text-amber-700"}
+                              >
+                                {state === "matched"
+                                  ? "Sky"
+                                  : state === "rejected"
+                                  ? "not Sky"
+                                  : "uncertain"}
                               </Badge>
                             ))}
                           </div>

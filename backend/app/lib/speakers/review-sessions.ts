@@ -47,6 +47,8 @@ export type ReviewDecisionSummary = {
   profileName: string | null;
   excludedProfileIds: string[];
   excludedProfileNames: string[];
+  calibrationUse: "eligible" | "timeline_only";
+  skipReason: "noise_or_unclear" | null;
   source: "manual";
   updatedAt: Date | string | null;
 };
@@ -134,6 +136,8 @@ export function attachReviewDecisionSummaries<
     outcome?: unknown;
     profileId?: unknown;
     excludedProfileIds?: unknown[];
+    calibrationUse?: unknown;
+    skipReason?: unknown;
     source?: unknown;
     updatedAt?: Date | string | null;
   }>,
@@ -166,6 +170,12 @@ export function attachReviewDecisionSummaries<
         excludedProfileNames: excludedProfileIds.map((id) =>
           profileNames.get(id) ?? "Deleted profile"
         ),
+        calibrationUse: decision.calibrationUse === "timeline_only"
+          ? "timeline_only"
+          : "eligible",
+        skipReason: decision.skipReason === "noise_or_unclear"
+          ? "noise_or_unclear"
+          : null,
         source: "manual" as const,
         updatedAt: decision.updatedAt ?? null,
       },

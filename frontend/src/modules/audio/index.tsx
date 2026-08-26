@@ -8,6 +8,7 @@ import { useTimelineRange } from "@/stores/timelineRange.ts";
 import { PlayPauseButton } from "./PlayPauseButton.tsx";
 import GainSlider from "./GainSlider.tsx";
 import { useTranscripts } from "./useTranscripts.ts";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 
 export const AudioPlayerTool: Tool = {
   component: () => {
@@ -31,31 +32,13 @@ export const DateTimePickerTool: Tool = {
   component: () => {
     const { currentDate, resetDate } = useAudioPlayer();
 
-    const handleDateTimeChange = (
-      event: React.ChangeEvent<HTMLInputElement>,
-    ) => {
-      const newDate = new Date(event.target.value);
-      resetDate(newDate);
-    };
-
-    const formatDateTimeLocal = (date: Date | null) => {
-      if (!date) return "";
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      const hours = String(date.getHours()).padStart(2, "0");
-      const minutes = String(date.getMinutes()).padStart(2, "0");
-      const seconds = String(date.getSeconds()).padStart(2, "0");
-      return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
-    };
-
     return (
-      <input
-        type="datetime-local"
-        value={formatDateTimeLocal(currentDate)}
-        onChange={handleDateTimeChange}
-        className="px-2 py-1 text-white [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert"
-        step="1"
+      <DateTimePicker
+        value={currentDate ?? undefined}
+        onChange={resetDate}
+        placeholder="Jump to date and time"
+        precision="second"
+        nullable
       />
     );
   },

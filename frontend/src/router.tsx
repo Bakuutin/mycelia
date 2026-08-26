@@ -2,7 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import Layout from "./components/Layout";
 import HomePage from "./pages/HomePage";
 import TimelinePage from "./pages/TimelinePage";
-import MapPage from "./pages/MapPage";
+import MapPage from "./pages/MapExperiencePage";
 import ChatPage from "./pages/ChatPage";
 import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";
@@ -45,6 +45,8 @@ import SummaryHistoryPage from "./pages/SummaryHistoryPage";
 import MediaPage from "./pages/MediaPage";
 import MediaAnalysisPage from "./pages/MediaAnalysisPage";
 import GoogleCloudSettingsPage from "./pages/settings/GoogleCloudSettingsPage";
+import SearchPage from "./pages/SearchPage";
+import KnowledgeSettingsPage from "./pages/settings/KnowledgeSettingsPage";
 
 export const router = createBrowserRouter([
   {
@@ -106,6 +108,10 @@ export const router = createBrowserRouter([
       {
         path: "chat/:chatId",
         element: <ChatPage />,
+      },
+      {
+        path: "search",
+        element: <SearchPage />,
       },
       {
         path: "transcript",
@@ -222,6 +228,10 @@ export const router = createBrowserRouter([
           {
             path: "google-cloud",
             element: <GoogleCloudSettingsPage />,
+          },
+          {
+            path: "knowledge",
+            element: <KnowledgeSettingsPage />,
           },
           {
             path: "voice-profiles",

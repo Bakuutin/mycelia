@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import {
   useAssignManualLocation,
   usePlaceSearch,
@@ -90,8 +90,8 @@ export function AssignLocationDialog({
           setPickedPoint(null);
         }
       } else {
-        setStart(initialStart);
-        setEnd(initialEnd);
+        setStart(initialStart ?? new Date(Date.now() - 3_600_000));
+        setEnd(initialEnd ?? new Date());
         setPickedPoint(null);
       }
       setSearch("");
@@ -189,24 +189,16 @@ export function AssignLocationDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <Label>From</Label>
-            <DateTimePicker
-              value={start}
-              onChange={(d) => setStart(d ?? undefined)}
-              placeholder="Start"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label>To</Label>
-            <DateTimePicker
-              value={end}
-              onChange={(d) => setEnd(d ?? undefined)}
-              placeholder="End"
-            />
-          </div>
-        </div>
+        {start && end && (
+          <DateRangePicker
+            label="Location range"
+            value={{ start, end }}
+            onChange={(value) => {
+              setStart(value.start);
+              setEnd(value.end);
+            }}
+          />
+        )}
 
         <div className="space-y-1">
           <Label htmlFor="place-search">City or place</Label>

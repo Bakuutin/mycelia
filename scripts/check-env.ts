@@ -122,6 +122,12 @@ const ENV_CONTRACTS: EnvContractSpec[] = [
     examplePath: "gpu/.env.example",
     required: false,
   },
+  {
+    name: "rag",
+    envPath: ".env.rag.local",
+    examplePath: ".env.rag.example",
+    required: false,
+  },
 ];
 
 const ACTIVE_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
@@ -591,7 +597,7 @@ function parseArgs(args: string[]): CliOptions {
 Compare .env with .env.example without printing values.
 
 Options:
-  --all             Audit main, diarizator, and GPU env contracts
+  --all             Audit main, diarizator, GPU, and RAG env contracts
   --fix             Back up .env, add required missing keys, normalize spacing,
                     and remove only identical duplicates
   --prune-undocumented

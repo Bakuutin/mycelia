@@ -86,6 +86,8 @@ import {
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { DateRangePicker } from "@/components/DateRangePicker";
+import { zonedDateKey, zonedDateKeyToDate } from "@/lib/datePicker";
 import type { JobInfo } from "@/types/jobs";
 import type { JobsDashboard, WorkerCatalogEntry } from "@/types/jobsDashboard";
 import type {
@@ -5365,40 +5367,34 @@ export default function JobsPage() {
                               </Button>
                             </div>
                           )}
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            <div>
-                              <Label
-                                htmlFor="timeline-period-start"
-                                className="text-xs"
-                              >
-                                Start date (UTC)
-                              </Label>
-                              <Input
-                                id="timeline-period-start"
-                                type="date"
-                                className="mt-1 h-8 text-xs"
-                                value={timelinePeriodStart}
-                                onChange={(event) =>
-                                  setTimelinePeriodStart(event.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <Label
-                                htmlFor="timeline-period-end"
-                                className="text-xs"
-                              >
-                                End date (UTC, inclusive)
-                              </Label>
-                              <Input
-                                id="timeline-period-end"
-                                type="date"
-                                className="mt-1 h-8 text-xs"
-                                value={timelinePeriodEnd}
-                                onChange={(event) =>
-                                  setTimelinePeriodEnd(event.target.value)}
-                              />
-                            </div>
-                          </div>
+                          <DateRangePicker
+                            label="UTC period"
+                            placeholder="Choose the period on the calendar"
+                            value={timelinePeriodStart && timelinePeriodEnd
+                              ? {
+                                start: zonedDateKeyToDate(
+                                  timelinePeriodStart,
+                                  "UTC",
+                                )!,
+                                end: zonedDateKeyToDate(
+                                  timelinePeriodEnd,
+                                  "UTC",
+                                )!,
+                              }
+                              : undefined}
+                            onChange={(value) => {
+                              setTimelinePeriodStart(
+                                zonedDateKey(value.start, "UTC"),
+                              );
+                              if (value.end) {
+                                setTimelinePeriodEnd(
+                                  zonedDateKey(value.end, "UTC"),
+                                );
+                              }
+                            }}
+                            precision="date"
+                            timeZone="UTC"
+                          />
                           <div className="flex flex-wrap gap-2">
                             <Button
                               size="sm"

@@ -10,7 +10,13 @@ import type {
   ChatToolPolicy,
 } from "@myceliasdk/messengers.ts";
 
-export const CHAT_AI_RESOURCE_CODES = ["search", "objects", "docs", "mongo"];
+export const CHAT_AI_RESOURCE_CODES = [
+  "search",
+  "rag",
+  "objects",
+  "docs",
+  "mongo",
+];
 
 export const CHAT_TOOLS_REQUIRING_APPROVAL = [
   "objects_create",
@@ -40,11 +46,17 @@ const CHAT_EXCLUDED_TOOLS = new Set([
 
 export const chatToolFilter = (name: string): boolean =>
   !CHAT_EXCLUDED_TOOLS.has(name) &&
+  (!name.startsWith("rag_") || name === "rag_search") &&
   (!name.startsWith("mongo_") || MONGO_READONLY_TOOLS.has(name));
+
+export function isRagChatEnabled(ragUrl = Deno.env.get("RAG_URL")): boolean {
+  return Boolean(ragUrl?.trim());
+}
 
 function chatResources() {
   return defaultResourceManager.listResources().filter((resource) =>
-    CHAT_AI_RESOURCE_CODES.includes(resource.code)
+    CHAT_AI_RESOURCE_CODES.includes(resource.code) &&
+    (resource.code !== "rag" || isRagChatEnabled())
   );
 }
 
@@ -52,6 +64,7 @@ export function createChatTools(auth: Auth): Record<string, Tool> {
   return createAiSdkToolsFromResources(chatResources(), auth, {
     toolsRequiringApproval: CHAT_TOOLS_REQUIRING_APPROVAL,
     toolFilter: chatToolFilter,
+    resourceManager: defaultResourceManager,
   });
 }
 
@@ -68,6 +81,7 @@ function toolGroup(
   needsApproval: boolean,
 ): ChatToolCatalogEntry["group"] {
   if (needsApproval) return "Actions";
+  if (name.startsWith("rag_")) return "Search";
   if (name.startsWith("search_")) return "Search";
   if (name.startsWith("docs_")) return "Docs";
   if (name.startsWith("mongo_")) return "Advanced data";
@@ -78,6 +92,7 @@ export function listChatTools(auth: Auth): ChatToolCatalogEntry[] {
   const tools = createMCPToolsFromResources(chatResources(), auth, {
     toolsRequiringApproval: CHAT_TOOLS_REQUIRING_APPROVAL,
     toolFilter: chatToolFilter,
+    resourceManager: defaultResourceManager,
   });
 
   return Object.entries(tools).map(([name, tool]) => {

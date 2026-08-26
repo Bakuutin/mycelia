@@ -4,10 +4,102 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
 } from "lucide-react";
-import { DayButton, DayPicker, getDefaultClassNames } from "react-day-picker";
+import {
+  DayButton,
+  DayPicker,
+  type DropdownProps,
+  getDefaultClassNames,
+} from "react-day-picker";
 
 import { cn } from "@/lib/utils";
 import { Button, buttonVariants } from "@/components/ui/button";
+
+function CalendarDropdown({
+  options,
+  value,
+  onChange,
+  disabled,
+  "aria-label": ariaLabel,
+}: DropdownProps) {
+  const [open, setOpen] = React.useState(false);
+  const listboxId = React.useId();
+  const selectedValue = Number(value);
+  const selected = options?.find((option) => option.value === selectedValue);
+  const selectedOptionRef = React.useRef<HTMLButtonElement>(null);
+
+  React.useEffect(() => {
+    if (open) selectedOptionRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [open]);
+
+  const choose = (nextValue: number) => {
+    onChange?.({
+      target: { value: String(nextValue) },
+      currentTarget: { value: String(nextValue) },
+    } as React.ChangeEvent<HTMLSelectElement>);
+    setOpen(false);
+  };
+
+  return (
+    <div
+      className="relative"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        role="combobox"
+        aria-label={ariaLabel}
+        aria-controls={listboxId}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        disabled={disabled}
+        className="flex h-9 min-w-[5.25rem] items-center justify-between gap-2 rounded-md border border-border bg-background px-3 text-sm font-semibold text-foreground shadow-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (
+            event.key === "ArrowDown" || event.key === "Enter" ||
+            event.key === " "
+          ) {
+            event.preventDefault();
+            setOpen(true);
+          } else if (event.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+      >
+        <span>{selected?.label ?? value}</span>
+        <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+      </button>
+      {open && (
+        <div
+          id={listboxId}
+          role="listbox"
+          aria-label={ariaLabel}
+          className="absolute left-1/2 top-[calc(100%+0.25rem)] z-[70] max-h-56 min-w-full -translate-x-1/2 overflow-y-auto overscroll-contain rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+          onWheel={(event) => event.stopPropagation()}
+        >
+          {options?.map((option) => (
+            <button
+              key={option.value}
+              ref={option.value === selectedValue
+                ? selectedOptionRef
+                : undefined}
+              type="button"
+              role="option"
+              aria-selected={option.value === selectedValue}
+              disabled={option.disabled}
+              className="flex w-full items-center rounded-sm px-3 py-2 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground aria-selected:bg-primary aria-selected:text-primary-foreground disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => choose(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Calendar({
   className,
@@ -17,6 +109,7 @@ function Calendar({
   buttonVariant = "ghost",
   formatters,
   components,
+  style,
   ...props
 }: React.ComponentProps<typeof DayPicker> & {
   buttonVariant?: React.ComponentProps<typeof Button>["variant"];
@@ -46,21 +139,21 @@ function Calendar({
         ),
         month: cn("flex w-full flex-col gap-4", defaultClassNames.month),
         nav: cn(
-          "absolute inset-x-0 top-0 flex w-full items-center justify-between gap-1",
+          "pointer-events-none absolute inset-x-0 top-0 z-30 flex w-full items-center justify-between gap-1",
           defaultClassNames.nav,
         ),
         button_previous: cn(
           buttonVariants({ variant: buttonVariant }),
-          "h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
+          "pointer-events-auto h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
           defaultClassNames.button_previous,
         ),
         button_next: cn(
           buttonVariants({ variant: buttonVariant }),
-          "h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
+          "pointer-events-auto h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
           defaultClassNames.button_next,
         ),
         month_caption: cn(
-          "flex h-[--cell-size] w-full items-center justify-center px-[--cell-size]",
+          "relative z-20 flex h-[--cell-size] w-full items-center justify-center px-[--cell-size]",
           defaultClassNames.month_caption,
         ),
         dropdowns: cn(
@@ -154,6 +247,7 @@ function Calendar({
           );
         },
         DayButton: CalendarDayButton,
+        Dropdown: CalendarDropdown,
         WeekNumber: ({ children, ...props }) => {
           return (
             <td {...props}>
@@ -166,6 +260,20 @@ function Calendar({
         ...components,
       }}
       {...props}
+      style={{
+        ...style,
+        "--rdp-accent-color": "var(--primary)",
+        "--rdp-accent-background-color":
+          "color-mix(in oklab, var(--primary) 30%, var(--background))",
+        "--rdp-range_middle-background-color":
+          "color-mix(in oklab, var(--primary) 30%, var(--background))",
+        "--rdp-range_middle-color": "var(--foreground)",
+        "--rdp-range_start-color": "var(--primary-foreground)",
+        "--rdp-range_end-color": "var(--primary-foreground)",
+        "--rdp-range_start-date-background-color": "var(--primary)",
+        "--rdp-range_end-date-background-color": "var(--primary)",
+        "--rdp-today-color": "var(--primary)",
+      } as React.CSSProperties}
     />
   );
 }
@@ -197,7 +305,7 @@ function CalendarDayButton({
       data-range-end={modifiers.range_end}
       data-range-middle={modifiers.range_middle}
       className={cn(
-        "data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground data-[range-middle=true]:bg-accent data-[range-middle=true]:text-accent-foreground data-[range-start=true]:bg-primary data-[range-start=true]:text-primary-foreground data-[range-end=true]:bg-primary data-[range-end=true]:text-primary-foreground group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-ring/50 flex aspect-square h-auto w-full min-w-[--cell-size] flex-col gap-1 font-normal leading-none data-[range-end=true]:rounded-md data-[range-middle=true]:rounded-none data-[range-start=true]:rounded-md group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-[3px] [&>span]:text-xs [&>span]:opacity-70",
+        "data-[selected-single=true]:!bg-primary data-[selected-single=true]:!text-primary-foreground data-[range-middle=true]:!bg-primary/25 data-[range-middle=true]:!text-foreground data-[range-middle=true]:hover:!bg-primary/35 data-[range-start=true]:!bg-primary data-[range-start=true]:!text-primary-foreground data-[range-end=true]:!bg-primary data-[range-end=true]:!text-primary-foreground group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-ring/50 flex aspect-square h-auto w-full min-w-[--cell-size] flex-col gap-1 font-normal leading-none data-[range-end=true]:rounded-md data-[range-middle=true]:rounded-none data-[range-start=true]:rounded-md group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-[3px] [&>span]:text-xs [&>span]:opacity-70",
         defaultClassNames.day,
         className,
       )}

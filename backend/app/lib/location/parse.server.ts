@@ -9,6 +9,8 @@ export interface ParsedPoint {
   lng: number;
   ele?: number;
   trackIndex?: number;
+  sourceFragmentIndex?: number;
+  sourcePointIndex?: number;
   pointIndex?: number;
 }
 
@@ -16,6 +18,10 @@ export interface ParsedCoordinate {
   lat: number;
   lng: number;
   ele?: number;
+  /** Explicit GPX trkseg / KML track boundary retained for route projection. */
+  sourceFragmentIndex?: number;
+  /** Position inside the explicit source fragment. */
+  sourcePointIndex?: number;
 }
 
 export interface ParsedStyle {
@@ -341,31 +347,45 @@ export function parseGpx(text: string): ParseResult {
     unsupportedGeometries: 0,
   };
 
-  const addTrack = (node: any, rawPoints: any[]) => {
+  const addTrack = (node: any, rawFragments: any[][]) => {
     const trackIndex = result.tracks.length;
     const coordinates: Array<ParsedCoordinate & { ts?: Date }> = [];
     let timed = 0;
-    for (const raw of rawPoints) {
-      const coordinate = coordinateFromGpx(raw);
-      if (!coordinate) {
-        result.skipped++;
-        result.invalidCoordinates++;
-        continue;
-      }
-      const ts = parseTimestamp(raw?.time) ?? undefined;
-      if (raw?.time && !ts) result.invalidTimestamps++;
-      const pointIndex = coordinates.length;
-      coordinates.push({ ...coordinate, ...(ts ? { ts } : {}) });
-      if (ts) {
-        timed++;
-        result.points.push({
-          ...coordinate,
-          ts,
-          trackIndex,
-          pointIndex,
-        });
-      } else {
-        result.untimedCoordinates++;
+    for (
+      let fragmentIndex = 0;
+      fragmentIndex < rawFragments.length;
+      fragmentIndex++
+    ) {
+      const rawPoints = rawFragments[fragmentIndex];
+      for (
+        let sourcePointIndex = 0;
+        sourcePointIndex < rawPoints.length;
+        sourcePointIndex++
+      ) {
+        const raw = rawPoints[sourcePointIndex];
+        const coordinate = coordinateFromGpx(raw);
+        if (!coordinate) {
+          result.skipped++;
+          result.invalidCoordinates++;
+          continue;
+        }
+        const ts = parseTimestamp(raw?.time) ?? undefined;
+        if (raw?.time && !ts) result.invalidTimestamps++;
+        const pointIndex = coordinates.length;
+        const source = { sourceFragmentIndex: fragmentIndex, sourcePointIndex };
+        coordinates.push({ ...coordinate, ...source, ...(ts ? { ts } : {}) });
+        if (ts) {
+          timed++;
+          result.points.push({
+            ...coordinate,
+            ...source,
+            ts,
+            trackIndex,
+            pointIndex,
+          });
+        } else {
+          result.untimedCoordinates++;
+        }
       }
     }
     if (coordinates.length > 0) {
@@ -383,13 +403,13 @@ export function parseGpx(text: string): ParseResult {
   };
 
   for (const trk of asArray(gpx.trk)) {
-    const rawPoints = asArray(trk?.trkseg).flatMap((seg: any) =>
+    const rawFragments = asArray(trk?.trkseg).map((seg: any) =>
       asArray(seg?.trkpt)
     );
-    addTrack(trk, rawPoints);
+    addTrack(trk, rawFragments);
   }
   for (const route of asArray(gpx.rte)) {
-    addTrack(route, asArray(route?.rtept));
+    addTrack(route, [asArray(route?.rtept)]);
   }
   for (const waypoint of asArray(gpx.wpt)) {
     const coordinate = coordinateFromGpx(waypoint);
@@ -490,43 +510,58 @@ export function parseKml(text: string): ParseResult {
   for (const source of placemarks) {
     const pm = source.node;
     const metadata = metadataFromKml(pm, source.folderPath);
-    const tracks = [...asArray(pm?.["gx:Track"]), ...asArray(pm?.Track)];
-    for (const track of tracks) {
+    const addKmlTrack = (trackFragments: any[]) => {
       const trackIndex = result.tracks.length;
-      const whens = asArray(track?.when);
-      const coords = [
-        ...asArray(track?.["gx:coord"]),
-        ...asArray(track?.coord),
-      ];
       const coordinates: Array<ParsedCoordinate & { ts?: Date }> = [];
       let timed = 0;
-      for (let i = 0; i < Math.max(whens.length, coords.length); i++) {
-        if (i >= coords.length) {
-          result.unpairedTimestamps++;
-          result.skipped++;
-          continue;
-        }
-        const coordinate = parseCoordinateTuple(coords[i]);
-        if (!coordinate) {
-          result.invalidCoordinates++;
-          result.skipped++;
-          continue;
-        }
-        const ts = parseTimestamp(whens[i]) ?? undefined;
-        if (i >= whens.length) result.unpairedCoordinates++;
-        else if (!ts) result.invalidTimestamps++;
-        const pointIndex = coordinates.length;
-        coordinates.push({ ...coordinate, ...(ts ? { ts } : {}) });
-        if (ts) {
-          timed++;
-          result.points.push({
+      for (
+        let fragmentIndex = 0;
+        fragmentIndex < trackFragments.length;
+        fragmentIndex++
+      ) {
+        const track = trackFragments[fragmentIndex];
+        const whens = asArray(track?.when);
+        const coords = [
+          ...asArray(track?.["gx:coord"]),
+          ...asArray(track?.coord),
+        ];
+        for (let i = 0; i < Math.max(whens.length, coords.length); i++) {
+          if (i >= coords.length) {
+            result.unpairedTimestamps++;
+            result.skipped++;
+            continue;
+          }
+          const coordinate = parseCoordinateTuple(coords[i]);
+          if (!coordinate) {
+            result.invalidCoordinates++;
+            result.skipped++;
+            continue;
+          }
+          const ts = parseTimestamp(whens[i]) ?? undefined;
+          if (i >= whens.length) result.unpairedCoordinates++;
+          else if (!ts) result.invalidTimestamps++;
+          const pointIndex = coordinates.length;
+          const sourcePosition = {
+            sourceFragmentIndex: fragmentIndex,
+            sourcePointIndex: i,
+          };
+          coordinates.push({
             ...coordinate,
-            ts,
-            trackIndex,
-            pointIndex,
+            ...sourcePosition,
+            ...(ts ? { ts } : {}),
           });
-        } else {
-          result.untimedCoordinates++;
+          if (ts) {
+            timed++;
+            result.points.push({
+              ...coordinate,
+              ...sourcePosition,
+              ts,
+              trackIndex,
+              pointIndex,
+            });
+          } else {
+            result.untimedCoordinates++;
+          }
         }
       }
       if (coordinates.length > 0) {
@@ -541,6 +576,22 @@ export function parseKml(text: string): ParseResult {
           coordinates,
         });
       }
+    };
+
+    const tracks = [...asArray(pm?.["gx:Track"]), ...asArray(pm?.Track)];
+    for (const track of tracks) addKmlTrack([track]);
+    for (
+      const multiTrack of [
+        ...asArray(pm?.["gx:MultiTrack"]),
+        ...asArray(pm?.MultiTrack),
+      ]
+    ) {
+      const children = [
+        ...asArray(multiTrack?.["gx:Track"]),
+        ...asArray(multiTrack?.Track),
+      ];
+      if (children.length > 0) addKmlTrack(children);
+      else result.unsupportedGeometries++;
     }
 
     const lineStrings = [
@@ -582,8 +633,7 @@ export function parseKml(text: string): ParseResult {
     }
     const multiGeometries = asArray(pm?.MultiGeometry);
     result.unsupportedGeometries += asArray(pm?.Polygon).length +
-      asArray(pm?.Model).length + asArray(pm?.["gx:MultiTrack"]).length +
-      asArray(pm?.MultiTrack).length +
+      asArray(pm?.Model).length +
       multiGeometries.reduce(
         (count, geometry: any) =>
           count + asArray(geometry?.Polygon).length +
