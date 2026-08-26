@@ -635,6 +635,10 @@ class IndexManager:
                         2_000,
                     )
                     if event:
+                        # The blocking poll can return after pause() has cleared the
+                        # gate. Keep the event coupled to its resume token: neither
+                        # apply the event nor advance the durable token until resume.
+                        await self._run_gate.wait()
                         operation = str(event.get("operationType", ""))
                         if operation not in {"insert", "update", "replace", "delete"}:
                             reason = (
