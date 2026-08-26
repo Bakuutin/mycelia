@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import * as userEventLib from "@testing-library/user-event";
 import * as api from "@/lib/api";
 import MediaAnalysisPage from "./MediaAnalysisPage";
@@ -42,12 +42,16 @@ const stagedAssets = [{
   fileName: "first.jpg",
   status: "staged",
   thumbnailUrl: "/thumb/first",
+  storageMode: "external_reference",
+  source: { relativePath: "900-photos/first.jpg" },
   inventory: {},
 }, {
   _id: "222222222222222222222222",
   fileName: "second.jpg",
   status: "staged",
   thumbnailUrl: "/thumb/second",
+  storageMode: "external_reference",
+  source: { relativePath: "900-photos/second.jpg" },
   inventory: {},
 }];
 
@@ -55,8 +59,14 @@ function renderPage(initialEntry = "/media/analysis") {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <MediaAnalysisPage />
+      <LocationProbe />
     </MemoryRouter>,
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="analysis-location">{location.search}</div>;
 }
 
 function baseResponse(resource: string, input: any) {
@@ -316,4 +326,129 @@ describe("MediaAnalysisPage", () => {
       screen.getByRole("button", { name: "Review analysis batch (1)" }),
     ).toBeTruthy();
   });
+
+  it("preselects exactly one eligible deep-linked photo without preparing a preview", async () => {
+    mockCallResource.mockImplementation((resource, input) => {
+      const base = baseResponse(resource, input);
+      if (base) return base;
+      if (resource === "media" && input.action === "listAssets") {
+        return Promise.resolve({ total: 2, assets: stagedAssets });
+      }
+      if (resource === "media" && input.action === "getAsset") {
+        return Promise.resolve({
+          asset: stagedAssets[0],
+          pages: [],
+          runs: [],
+        });
+      }
+      if (
+        resource === "media-library" &&
+        input.action === "previewRecognitionBatch"
+      ) {
+        return Promise.resolve({
+          previewId: "333333333333333333333333",
+          eligibleCount: 1,
+          authorizedGrossUsd: 0.01,
+        });
+      }
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    renderPage(
+      "/media/analysis?assetId=111111111111111111111111&select=1",
+    );
+
+    expect(
+      await screen.findByText("Ready to review one photo"),
+    ).toBeTruthy();
+    expect(screen.getByText("1 explicit photo(s) selected")).toBeTruthy();
+    expect(
+      mockCallResource.mock.calls.filter(([, input]) =>
+        input.action === "previewRecognitionBatch"
+      ),
+    ).toHaveLength(0);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Continue to Review analysis batch (1)",
+      }),
+    );
+    const reviewButton = await screen.findByRole("button", {
+      name: "Review analysis batch (1)",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(reviewButton));
+    expect(screen.getByTestId("analysis-location").textContent).toBe("");
+    await user.click(reviewButton);
+
+    await waitFor(() => {
+      const previewCalls = mockCallResource.mock.calls.filter(([, input]) =>
+        input.action === "previewRecognitionBatch"
+      );
+      expect(previewCalls).toEqual([[
+        "media-library",
+        expect.objectContaining({
+          action: "previewRecognitionBatch",
+          selection: expect.objectContaining({
+            mode: "explicit",
+            assetIds: ["111111111111111111111111"],
+          }),
+        }),
+      ]]);
+    });
+    expect(
+      mockCallResource.mock.calls.some(([, input]) =>
+        input.action === "confirmRecognitionBatch"
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      status: "ready",
+      title: "Description already processed",
+    },
+    {
+      status: "source_missing",
+      title: "Original photo is unavailable",
+    },
+  ])(
+    "does not preselect a $status deep-linked photo",
+    async ({ status: assetStatus, title }) => {
+      const asset = {
+        ...stagedAssets[0],
+        status: assetStatus,
+        safeError: assetStatus === "source_missing"
+          ? "The original photo is not available at its mounted reference"
+          : undefined,
+      };
+      mockCallResource.mockImplementation((resource, input) => {
+        const base = baseResponse(resource, input);
+        if (base) return base;
+        if (resource === "media" && input.action === "listAssets") {
+          return Promise.resolve({ total: 1, assets: [asset] });
+        }
+        if (resource === "media" && input.action === "getAsset") {
+          return Promise.resolve({ asset, pages: [], runs: [] });
+        }
+        return Promise.resolve({});
+      });
+      renderPage(
+        "/media/analysis?assetId=111111111111111111111111&select=1",
+      );
+
+      expect(await screen.findByText(title)).toBeTruthy();
+      expect(screen.getByText("0 explicit photo(s) selected")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", {
+          name: "Continue to Review analysis batch (1)",
+        }),
+      ).toBeNull();
+      expect(
+        mockCallResource.mock.calls.some(([, input]) =>
+          input.action === "previewRecognitionBatch" ||
+          input.action === "confirmRecognitionBatch"
+        ),
+      ).toBe(false);
+    },
+  );
 });

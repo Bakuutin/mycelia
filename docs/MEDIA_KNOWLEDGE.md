@@ -385,6 +385,12 @@ first page. Useful capture time, timezone, camera, dimensions, GPS, provider,
 OCR, annotations, description, and usage remain available in the detail view;
 raw EXIF/ffprobe JSON stays under the advanced disclosure. The detail header
 remains visible while content scrolls and has an explicit close action.
+From the same detail view, **Show on Map** and **Show on Timeline** open a
+focused photo sheet. If the stored GPS or capture time is missing, the target
+page shows the photo as Unplaced instead of inventing metadata. When no visual
+description exists, **Get description** opens Photo Analysis with exactly that
+photo selected; it does not contact a provider until the priced preview is
+reviewed and explicitly confirmed.
 Provider analysis is always stated: an empty card means no Google or
 self-hosted run/result is stored, while an active result names the provider and
 shows its service/location/model plus stored visual/OCR projection counts.

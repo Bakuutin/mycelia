@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  Clock3,
   Eye,
   FileImage,
   Loader2,
+  MapPin,
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -1170,8 +1173,29 @@ export default function MediaPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button asChild>
-                      <Link to={`/media/analysis?assetId=${detail.asset._id}`}>
-                        Open in Photo analysis
+                      <Link
+                        to={`/media/analysis?assetId=${detail.asset._id}&select=1`}
+                      >
+                        {detail.visual?.visualUnderstanding
+                          ? <Eye className="mr-2 h-4 w-4" />
+                          : <Sparkles className="mr-2 h-4 w-4" />}
+                        {detail.visual?.visualUnderstanding
+                          ? "Open in Photo analysis"
+                          : "Get description"}
+                      </Link>
+                    </Button>
+                    <Button asChild variant="outline">
+                      <Link to={`/map?photoAssetId=${detail.asset._id}`}>
+                        <MapPin className="mr-2 h-4 w-4" />
+                        Show on Map
+                      </Link>
+                    </Button>
+                    <Button asChild variant="outline">
+                      <Link
+                        to={`/timeline?photoAssetId=${detail.asset._id}`}
+                      >
+                        <Clock3 className="mr-2 h-4 w-4" />
+                        Show on Timeline
                       </Link>
                     </Button>
                     <Button

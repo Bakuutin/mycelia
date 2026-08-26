@@ -304,7 +304,11 @@ describe("MediaPage consolidated library", () => {
       }
       if (input.action === "getAsset") {
         return Promise.resolve({
-          asset: baseAsset,
+          asset: {
+            ...baseAsset,
+            capturedAt: "2024-04-05T12:00:00.000Z",
+            location: { latitude: 41.7, longitude: -8.1 },
+          },
           pages: [],
           annotations: [],
           runs: [],
@@ -326,10 +330,18 @@ describe("MediaPage consolidated library", () => {
     const dialog = await screen.findByRole("dialog", { name: "photo.jpg" });
     expect(dialog).toBeTruthy();
     expect(
-      screen.getByRole("link", { name: "Open in Photo analysis" }).getAttribute(
+      screen.getByRole("link", { name: "Get description" }).getAttribute(
         "href",
       ),
-    ).toBe("/media/analysis?assetId=asset-1");
+    ).toBe("/media/analysis?assetId=asset-1&select=1");
+    expect(
+      screen.getByRole("link", { name: "Show on Map" }).getAttribute("href"),
+    ).toBe("/map?photoAssetId=asset-1");
+    expect(
+      screen.getByRole("link", { name: "Show on Timeline" }).getAttribute(
+        "href",
+      ),
+    ).toBe("/timeline?photoAssetId=asset-1");
     expect(
       (screen.getByRole("button", {
         name: "Review original deletion",
@@ -371,7 +383,6 @@ describe("MediaPage consolidated library", () => {
       action: "getAsset",
       assetId: "asset-1",
     });
-
     await user.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "photo.jpg" })).toBeNull()
@@ -453,6 +464,12 @@ describe("MediaPage consolidated library", () => {
       "Visual description: available",
     );
     expect(providerStatus.textContent).toContain("OCR pages: 1");
+    expect(
+      screen.getByRole("link", {
+        name: "Open in Photo analysis",
+      }).getAttribute("href"),
+    ).toBe("/media/analysis?assetId=asset-1&select=1");
+    expect(screen.queryByRole("link", { name: "Get description" })).toBeNull();
   });
 
   it("keeps the preview-and-confirm guard for managed-original deletion", async () => {
