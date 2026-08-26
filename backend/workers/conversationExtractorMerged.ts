@@ -11,7 +11,10 @@ import {
 } from "@/lib/llm/provenance.ts";
 import { createPromptCacheSessionId } from "@/lib/llm/prompt-cache-session.ts";
 import { getTriggerTiming } from "@/lib/jobs/trigger-config.ts";
-import { assertCompletionNotTruncated } from "@/lib/llm/completion-response.ts";
+import {
+  assertCompletionNotTruncated,
+  LLM_TRUNCATED_RESPONSE_CODE,
+} from "@/lib/llm/completion-response.ts";
 import { hasIndexedPendingWork } from "@/lib/jobs/pending-work.ts";
 import {
   buildJsonSchemaResponseFormat,
@@ -19,12 +22,14 @@ import {
   resolveWorkerFallbackModel,
 } from "@/lib/llm/worker-response.ts";
 import {
+  bisectPromptWindow,
   buildTagListPrompt,
   type ConversationChunk,
   type ConversationError,
   createEntityRelationships,
   createSegmentParser,
   createTagRelationships,
+  DEFAULT_EXTRACTION_MAX_PROMPT_CHARS,
   deleteConversationsForChunk,
   ENTITY_TYPES,
   type EntityType,
@@ -33,17 +38,18 @@ import {
   formatChunkAsPrompt,
   getExtractionRetryDelayMs,
   normalizeEmoji,
+  partitionTranscriptionsForPrompt,
   transcriptionToUtterances,
 } from "@/lib/extraction/shared.ts";
 
 /**
  * Merged Conversation Extractor — the PRIMARY extraction worker.
  *
- * One LLM call per chunk instead of 1 segmentation call + 1 metadata call per
- * segment: the model segments the transcript AND returns per-segment
- * metadata (emoji, agreement, typed entities, tags) in a single structured
- * response. The transcript is sent to the LLM once instead of ~twice —
- * the largest token saving in the pipeline.
+ * One LLM call per size-bounded extraction window instead of 1 segmentation
+ * call + 1 metadata call per segment: the model segments each window AND
+ * returns per-segment metadata (emoji, agreement, typed entities, tags) in a
+ * single structured response. Normal chunks remain one call; oversized
+ * legacy chunks are partitioned before inference.
  *
  * The legacy two-call `conversation_extractor` is DEPRECATED (paused by
  * migration 0029, kept for rollback). Both claim the same ready chunks
@@ -52,8 +58,9 @@ import {
  * result for review on the job details page.
  */
 
-const MERGED_EXTRACTOR_VERSION = "merged-v1";
+const MERGED_EXTRACTOR_VERSION = "merged-v2-windowed";
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_ADAPTIVE_SPLITS_PER_CHUNK = 8;
 
 // ============================================================================
 // Schema
@@ -100,7 +107,12 @@ export const schema = z.object({
     ),
   maxTokens: z.number().int().min(256).max(32768).default(8192)
     .describe(
-      "Output-token cap for the single composite call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+      "Output-token cap for each composite window call; a truncated response fails loudly with LLM_TRUNCATED_RESPONSE",
+    ),
+  maxPromptChars: z.number().int().min(4_000).max(200_000)
+    .default(DEFAULT_EXTRACTION_MAX_PROMPT_CHARS)
+    .describe(
+      "Maximum transcript characters sent in one extraction call; larger chunks are partitioned at source/transcription/utterance boundaries",
     ),
   reasoning: z.enum(["off", "default", "on"]).default("off")
     .describe(
@@ -152,6 +164,31 @@ export function buildConversationChunkClaimQuery(
   }
 
   return query;
+}
+
+export function buildConversationChunkClaimRequest(
+  input: Partial<
+    Pick<MergedExtractorJobData, "start" | "end" | "retryNow">
+  >,
+  jobId: string,
+  now = new Date(),
+): Record<string, unknown> {
+  return {
+    action: "findOneAndUpdate",
+    collection: "conversation_chunks",
+    query: buildConversationChunkClaimQuery(input, now),
+    update: {
+      $set: {
+        state: "processing",
+        processingStartedAt: now,
+        processedByJobId: jobId,
+      },
+    },
+    options: {
+      sort: { start: -1 },
+      returnDocument: "before",
+    },
+  };
 }
 
 // ============================================================================
@@ -305,7 +342,8 @@ const capability: JobCapability = {
     segmentsFound: z.number(),
     entityCount: z.number(),
     tagsApplied: z.number(),
-    singleCallPerChunk: z.literal(true),
+    singleCallPerChunk: z.boolean(),
+    llmCalls: z.number(),
     hasMore: z.boolean(),
     artifacts: z.array(z.any()).describe(
       "Per-chunk diagnostics: prompt size, raw vs resolved segments, per-segment metadata and link outcomes",
@@ -325,15 +363,20 @@ const capability: JobCapability = {
     { resource: "llm/chat", action: "completions", effect: "allow" },
   ],
   maxConcurrency: 1,
+  // Return a boolean, not the numeric value 1. TriggerManager interprets a
+  // numeric pending-work result as an exact job count, which used to cap this
+  // worker at one automatic job even when runtime concurrency was higher.
+  // The LLM resource still enforces each local/OpenRouter profile's own
+  // concurrency budget while this worker fills its configured BullMQ slots.
   hasPendingWork: async ({ mongo }) =>
     await hasIndexedPendingWork(mongo, {
-        collection: "conversation_chunks",
-        query: buildConversationChunkClaimQuery(),
-      })
-      ? 1
-      : 0,
+      collection: "conversation_chunks",
+      query: buildConversationChunkClaimQuery(),
+    }),
   use: async (job) => {
     const input = job.data as MergedExtractorJobData;
+    const maxPromptChars = input.maxPromptChars ??
+      DEFAULT_EXTRACTION_MAX_PROMPT_CHARS;
     const jwt = Deno.env.get("MYCELIA_JWT")!;
     const myceliaUrl = Deno.env.get("MYCELIA_URL")!;
 
@@ -351,8 +394,12 @@ const capability: JobCapability = {
     let segmentsFound = 0;
     let entityCount = 0;
     let tagsApplied = 0;
+    let llmCalls = 0;
+    let singleCallPerChunk = true;
 
-    // Chunk selection mirrors the regular extractor.
+    // Automatic jobs claim their chunks during selection so concurrent jobs
+    // cannot all choose the same newest row and then finish as not_claimed.
+    // Explicit/manual jobs keep the separate force-aware claim below.
     let chunks: ConversationChunk[];
     if (input.chunkId) {
       const chunk = await mongo({
@@ -362,19 +409,21 @@ const capability: JobCapability = {
       }) as ConversationChunk | null;
       chunks = chunk ? [chunk] : [];
     } else {
-      chunks = await mongo({
-        action: "find",
-        collection: "conversation_chunks",
-        query: buildConversationChunkClaimQuery(input),
-        options: { sort: { start: -1 }, limit: input.limit + 1 },
-      }) as ConversationChunk[];
+      chunks = [];
+      for (let index = 0; index < input.limit; index++) {
+        const chunk = await mongo(
+          buildConversationChunkClaimRequest(input, job.id!),
+        ) as ConversationChunk | null;
+        if (!chunk) break;
+        chunks.push(chunk);
+      }
     }
 
-    const hasMore = chunks.length > input.limit;
-    const chunksToProcess = chunks.slice(0, input.limit);
+    let hasMore = false;
+    const chunksToProcess = chunks;
 
     console.log(
-      `[MergedExtractor] Job ${job.id}: found ${chunks.length} chunks, processing ${chunksToProcess.length}, hasMore=${hasMore}`,
+      `[MergedExtractor] Job ${job.id}: selected ${chunksToProcess.length} chunk(s) for processing`,
     );
 
     // Tag list is appended to the merged prompt, same as the regular
@@ -419,26 +468,27 @@ const capability: JobCapability = {
       };
 
       try {
-        // Atomic claim, same shape as the regular extractor.
-        const claim = await mongo({
-          action: "updateOne",
-          collection: "conversation_chunks",
-          query: input.force && input.chunkId ? { _id: chunk._id } : {
-            _id: chunk._id,
-            ...buildConversationChunkClaimQuery(input),
-          },
-          update: {
-            $set: {
-              state: "processing",
-              processingStartedAt: new Date(),
-              processedByJobId: job.id,
+        if (input.chunkId) {
+          const claim = await mongo({
+            action: "updateOne",
+            collection: "conversation_chunks",
+            query: input.force ? { _id: chunk._id } : {
+              _id: chunk._id,
+              ...buildConversationChunkClaimQuery(input),
             },
-          },
-        }) as { modifiedCount: number };
-        if (claim.modifiedCount === 0) {
-          chunkDiagnostics.outcome = "not_claimed";
-          artifacts.push(chunkDiagnostics);
-          continue;
+            update: {
+              $set: {
+                state: "processing",
+                processingStartedAt: new Date(),
+                processedByJobId: job.id,
+              },
+            },
+          }) as { modifiedCount: number };
+          if (claim.modifiedCount === 0) {
+            chunkDiagnostics.outcome = "not_claimed";
+            artifacts.push(chunkDiagnostics);
+            continue;
+          }
         }
 
         if (input.force) {
@@ -446,7 +496,9 @@ const capability: JobCapability = {
           chunkDiagnostics.deletedPreviousConversations = deleted;
         }
 
-        // Build the transcript prompt.
+        // Build size-bounded transcript windows. New chunks are bounded by the
+        // creator too, but this remains the safety net for legacy chunks and
+        // for a single unusually large transcription.
         const transcriptions = await mongo({
           action: "find",
           collection: "transcriptions",
@@ -456,9 +508,25 @@ const capability: JobCapability = {
         const utterances = transcriptions.flatMap((t) =>
           transcriptionToUtterances(t)
         );
-        const { prompt } = formatChunkAsPrompt(utterances);
+        if (utterances.length === 0) {
+          throw new Error(
+            `Conversation chunk ${chunk._id} has no usable transcription text`,
+          );
+        }
+        const fullPromptChars = formatChunkAsPrompt(utterances).prompt.length;
+        const promptWindows = partitionTranscriptionsForPrompt(
+          transcriptions,
+          maxPromptChars,
+        );
+        if (promptWindows.length === 0) {
+          throw new Error(
+            `Conversation chunk ${chunk._id} produced no extraction windows`,
+          );
+        }
         chunkDiagnostics.utterances = utterances.length;
-        chunkDiagnostics.promptChars = prompt.length;
+        chunkDiagnostics.promptChars = fullPromptChars;
+        chunkDiagnostics.maxPromptChars = maxPromptChars;
+        chunkDiagnostics.initialPromptWindowCount = promptWindows.length;
 
         // The creator no longer snapshots a model on the chunk. The extractor
         // job's current defaults/routing decision are authoritative.
@@ -474,63 +542,149 @@ const capability: JobCapability = {
           mergedResponseSchema.toJSONSchema() as Record<string, unknown>,
         );
 
-        await job.updateProgress({
-          stage: "merged_extraction",
-          chunkId: chunk._id.toString(),
-          promptChars: prompt.length,
-        });
+        const extractedSegments: Array<{
+          segment: MergedSegment;
+          provenance: InferenceProvenance;
+          windowIndex: number;
+        }> = [];
+        const chunkProvenances: InferenceProvenance[] = [];
+        const windowDiagnostics: any[] = [];
+        const adaptiveTruncationDiagnostics: any[] = [];
+        chunkDiagnostics.truncatedWindowAttempts =
+          adaptiveTruncationDiagnostics;
+        let responseChars = 0;
+        let chunkLlmCalls = 0;
 
-        // THE single call.
-        const response = await llm({
-          action: "completions",
-          model,
-          ...(fallbackModel ? { fallbackModel } : {}),
-          ...(input.providerProfileId
-            ? { provider_profile_id: input.providerProfileId }
-            : {}),
-          ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
-          reasoning: input.reasoning ?? "off",
-          category: "extraction",
-          session_id: createPromptCacheSessionId(
-            "conversation-extractor-merged",
-            {
-              system: systemPrompt,
-              responseFormat,
+        // Complete every LLM window before writing any objects. If one window
+        // fails, the chunk remains retryable without partial conversations. A
+        // token-truncated window is bisected by utterance and retried; every
+        // split strictly reduces the utterance count, so this cannot loop.
+        const pendingPromptWindows = [...promptWindows];
+        while (pendingPromptWindows.length > 0) {
+          const window = pendingPromptWindows.shift()!;
+          const plannedWindowCount = windowDiagnostics.length +
+            pendingPromptWindows.length + 1;
+          await job.updateProgress({
+            stage: "merged_extraction",
+            chunkId: chunk._id.toString(),
+            promptChars: fullPromptChars,
+            windowPromptChars: window.promptChars,
+            windowIndex: windowDiagnostics.length + 1,
+            windowCount: plannedWindowCount,
+            adaptiveSplits: adaptiveTruncationDiagnostics.length,
+          });
+
+          let response: any;
+          try {
+            response = await llm({
+              action: "completions",
+              model,
+              ...(fallbackModel ? { fallbackModel } : {}),
+              ...(input.providerProfileId
+                ? { provider_profile_id: input.providerProfileId }
+                : {}),
+              ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
               reasoning: input.reasoning ?? "off",
-            },
-          ),
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: prompt },
-          ],
-          response_format: responseFormat,
-        }) as any;
-        // Truncated composite JSON must fail loudly, not as a parse mystery.
-        assertCompletionNotTruncated(response, {
-          requestedModel: model,
-          maxTokens: input.maxTokens,
-          purpose: `merged extraction chunk ${chunk._id}`,
-        });
-        const provenance = getInferenceProvenance(
-          response,
-          model,
-          fallbackModel,
-        );
-        inferenceRuns.push(provenance);
-        const content = response.choices[0]?.message?.content;
-        if (!content) throw new Error("Empty response from LLM");
-        chunkDiagnostics.responseChars = content.length;
+              category: "extraction",
+              session_id: createPromptCacheSessionId(
+                "conversation-extractor-merged",
+                {
+                  system: systemPrompt,
+                  responseFormat,
+                  reasoning: input.reasoning ?? "off",
+                },
+              ),
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: window.prompt },
+              ],
+              response_format: responseFormat,
+            }) as any;
+            llmCalls++;
+            chunkLlmCalls++;
+            assertCompletionNotTruncated(response, {
+              requestedModel: model,
+              maxTokens: input.maxTokens,
+              purpose: `merged extraction chunk ${chunk._id} window ${
+                windowDiagnostics.length + 1
+              }/${plannedWindowCount}`,
+            });
+          } catch (error) {
+            const isTruncated = error instanceof Error &&
+              error.message.includes(LLM_TRUNCATED_RESPONSE_CODE);
+            const children = isTruncated &&
+                adaptiveTruncationDiagnostics.length <
+                  MAX_ADAPTIVE_SPLITS_PER_CHUNK
+              ? bisectPromptWindow(window)
+              : null;
+            if (children) {
+              adaptiveTruncationDiagnostics.push({
+                promptChars: window.promptChars,
+                utterances: window.utterances.length,
+                childPromptChars: children.map((child) => child.promptChars),
+              });
+              pendingPromptWindows.unshift(...children);
+              continue;
+            }
+            if (isTruncated && error instanceof Error) {
+              throw new Error(
+                `${error.message} Adaptive prompt splitting stopped after ${adaptiveTruncationDiagnostics.length} split(s); the window cannot be divided further or the per-chunk safety limit (${MAX_ADAPTIVE_SPLITS_PER_CHUNK}) was reached.`,
+                { cause: error },
+              );
+            }
+            throw error;
+          }
 
-        const promptLines = prompt.split("\n");
-        const segments = parseMergedResponse(
-          content,
-          promptLines,
-          chunk.start,
-          chunk.end,
-          validTagNames,
-        );
-        chunkDiagnostics.segmentsReturned = segments.length;
-        segmentsFound += segments.length;
+          const windowIndex = windowDiagnostics.length;
+          const provenance = getInferenceProvenance(
+            response,
+            model,
+            fallbackModel,
+          );
+          inferenceRuns.push(provenance);
+          chunkProvenances.push(provenance);
+          const content = response.choices[0]?.message?.content;
+          if (!content) throw new Error("Empty response from LLM");
+          responseChars += content.length;
+
+          const segments = parseMergedResponse(
+            content,
+            window.prompt.split("\n"),
+            window.start,
+            window.end,
+            validTagNames,
+          );
+          extractedSegments.push(
+            ...segments.map((segment) => ({
+              segment,
+              provenance,
+              windowIndex,
+            })),
+          );
+          windowDiagnostics.push({
+            index: windowIndex + 1,
+            start: window.start,
+            end: window.end,
+            sourceKey: window.sourceKey,
+            boundaryReason: window.boundaryReason,
+            transcriptionCount: window.transcriptions.length,
+            utterances: window.utterances.length,
+            promptChars: window.promptChars,
+            responseChars: content.length,
+            segmentsReturned: segments.length,
+          });
+        }
+
+        singleCallPerChunk &&= chunkLlmCalls === 1;
+        chunkDiagnostics.promptWindowCount = windowDiagnostics.length;
+        chunkDiagnostics.adaptiveSplitCount =
+          adaptiveTruncationDiagnostics.length;
+        chunkDiagnostics.truncatedWindowAttempts =
+          adaptiveTruncationDiagnostics;
+        chunkDiagnostics.windows = windowDiagnostics;
+        chunkDiagnostics.responseChars = responseChars;
+        chunkDiagnostics.segmentsReturned = extractedSegments.length;
+        segmentsFound += extractedSegments.length;
 
         const generatedAt = new Date();
         const extractionKey = createHash("sha256")
@@ -541,7 +695,8 @@ const capability: JobCapability = {
           .slice(0, 16);
 
         const segmentDiagnostics: any[] = [];
-        for (const segment of segments) {
+        for (const extracted of extractedSegments) {
+          const { segment, provenance, windowIndex } = extracted;
           const segDiag: any = {
             title: segment.title,
             rawStart: segment.rawStart,
@@ -557,6 +712,7 @@ const capability: JobCapability = {
             droppedEntities: segment.droppedEntities,
             tags: segment.tags,
             droppedTags: segment.droppedTags,
+            windowIndex: windowIndex + 1,
           };
 
           try {
@@ -578,8 +734,10 @@ const capability: JobCapability = {
                   jobId: job.id,
                   timestamp: generatedAt,
                   result: {
-                    schemaVersion: "merged-v1",
+                    schemaVersion: "merged-v2-windowed",
                     status: "completed",
+                    windowIndex: windowIndex + 1,
+                    windowCount: windowDiagnostics.length,
                     emojiPresent: Boolean(segment.emoji),
                     entityCount: segment.entities.length,
                     tagsApplied: segment.tags.length,
@@ -684,7 +842,7 @@ const capability: JobCapability = {
           update: {
             $set: {
               state: "completed",
-              segmentsFound: segments.length,
+              segmentsFound: extractedSegments.length,
               conversationsCreated: segmentDiagnostics.filter((s) =>
                 s.conversationId
               ).length,
@@ -692,9 +850,10 @@ const capability: JobCapability = {
               inferenceProvenance: {
                 merged: {
                   task: "conversation_extraction_merged",
-                  ...provenance,
+                  ...(summarizeInferenceUsage(chunkProvenances) ?? {}),
                   jobId: job.id,
                   generatedAt,
+                  windowCount: windowDiagnostics.length,
                 },
               },
             },
@@ -737,6 +896,13 @@ const capability: JobCapability = {
       artifacts.push(chunkDiagnostics);
     }
 
+    if (!input.chunkId) {
+      hasMore = await hasIndexedPendingWork(mongo, {
+        collection: "conversation_chunks",
+        query: buildConversationChunkClaimQuery(input),
+      });
+    }
+
     // Every claimed chunk failed: fail the job instead of reporting a green
     // "completed" run. Chunk states/backoff are already persisted above.
     if (chunksProcessed === 0 && errors.length > 0) {
@@ -761,7 +927,8 @@ const capability: JobCapability = {
       segmentsFound,
       entityCount,
       tagsApplied,
-      singleCallPerChunk: true as const,
+      singleCallPerChunk,
+      llmCalls,
       hasMore,
       artifacts,
       ...(inference ? { inference } : {}),

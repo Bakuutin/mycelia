@@ -4,7 +4,7 @@ import type { HistogramItem } from "@/modules/histogram/useHistogramCache";
 import { BaseTrack } from "./BaseTrack";
 import { useQuery } from "@tanstack/react-query";
 import { callResource } from "@/lib/api";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   coverageBucketMs,
   coverageColor,
@@ -12,14 +12,24 @@ import {
   hasActiveDiarizationCoverage,
 } from "@/lib/diarizationCoverage";
 import { useTimelineQueryRange } from "@/hooks/useTimelineQueryRange";
-import { timelineSpeakerLimit } from "@/lib/timelineDetail";
 import {
   coverageOpacity,
   DIARIZATION_BUILDING_COLOR,
   speakerIdentityAppearance,
 } from "@/lib/timelineDiarization";
+import {
+  buildSpeakerTimelineSummaryRequest,
+  dominantSpeakerBucket,
+  hasSpeakerTimelineData,
+  type SpeakerTimelineFilters,
+  type SpeakerTimelineSummary,
+} from "@/lib/speakerTimeline";
 
 const SPEAKER_QUERY_DELAY_MS = 650;
+
+function speakerTimelineDate(value: Date | string | number): Date {
+  return value instanceof Date ? value : new Date(value);
+}
 
 // Config for each histogram track type
 export const TRANSCRIPTIONS_CONFIG: TrackConfig = {
@@ -153,14 +163,15 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
   props: TrackRenderProps,
 ) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const rescaledScale = useMemo(() => props.transform.rescaleX(props.scale), [
     props.transform,
     props.scale,
   ]);
   const [start, end] = rescaledScale.domain() as [Date, Date];
   const rangeMs = Math.max(0, end.getTime() - start.getTime());
+  const farZoom = rangeMs / Math.max(props.width, 1) > 60_000;
   const queryAlignmentMs = coverageBucketMs(rangeMs, props.width);
-  const segmentLimit = timelineSpeakerLimit(rangeMs, props.width);
   const queryRange = useTimelineQueryRange(
     start,
     end,
@@ -170,66 +181,139 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
   const queryRangeReady = queryRange.alignmentMs === queryAlignmentMs &&
     queryRange.start.getTime() <= start.getTime() &&
     queryRange.end.getTime() >= end.getTime();
-  const { data } = useQuery({
+  const speakerFilter = searchParams.get("speakerIdentity") === "sky"
+    ? "sky"
+    : searchParams.get("speakerIdentity") === "uncertain"
+    ? "uncertain"
+    : "all";
+  const statusFilter = searchParams.get("speakerIdentityStatus") ===
+      "verified"
+    ? "verified"
+    : searchParams.get("speakerIdentityStatus") === "provisional"
+    ? "provisional"
+    : "all";
+  const filters = useMemo<SpeakerTimelineFilters>(() => ({
+    ...(speakerFilter === "sky"
+      ? { states: ["matched" as const] }
+      : speakerFilter === "uncertain"
+      ? { states: ["uncertain" as const] }
+      : {}),
+    ...(statusFilter === "verified"
+      ? { validities: ["verified" as const, "manual" as const] }
+      : statusFilter === "provisional"
+      ? { validities: ["provisional" as const] }
+      : {}),
+  }), [speakerFilter, statusFilter]);
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [
-      "speaker-track",
+      "speaker-timeline-summary",
       queryRange.start.getTime(),
       queryRange.end.getTime(),
-      segmentLimit,
+      queryAlignmentMs,
+      farZoom ? "buckets" : "intervals",
+      speakerFilter,
+      statusFilter,
     ],
     queryFn: () =>
-      callResource("speaker-segments", {
-        action: "list",
-        start: queryRange.start,
-        end: queryRange.end,
-        view: "timeline",
-        limit: segmentLimit,
-      }) as Promise<{ segments: any[] }>,
+      callResource(
+        "speaker-segments",
+        buildSpeakerTimelineSummaryRequest({
+          start: queryRange.start,
+          end: queryRange.end,
+          detail: farZoom ? "buckets" : "intervals",
+          bucketMs: queryAlignmentMs,
+          filters,
+        }),
+      ) as Promise<SpeakerTimelineSummary>,
     staleTime: 60_000,
     placeholderData: (previousData) => previousData,
     retry: 1,
     enabled: queryRangeReady,
   });
-  const segments = data?.segments ?? [];
-  const farZoom = rangeMs / Math.max(props.width, 1) > 60_000;
   const marks = useMemo(() => {
-    if (!farZoom) {
-      return segments.map((segment) => ({
-        id: String(segment._id),
-        x: rescaledScale(new Date(segment.start)),
+    if (data?.mode === "intervals") {
+      return (data.intervals ?? []).map((interval) => ({
+        id: interval.segmentId,
+        x: rescaledScale(speakerTimelineDate(interval.start)),
         width: Math.max(
           2,
-          rescaledScale(new Date(segment.end)) -
-            rescaledScale(new Date(segment.start)),
+          rescaledScale(speakerTimelineDate(interval.end)) -
+            rescaledScale(speakerTimelineDate(interval.start)),
         ),
-        state: segment.speakerIdentity?.state,
-        segment,
+        state: interval.state,
+        validity: interval.validity,
+        segmentId: interval.segmentId,
+        start: speakerTimelineDate(interval.start),
+        end: speakerTimelineDate(interval.end),
+        count: 1,
       }));
     }
-    const buckets = new Map<
-      number,
-      { counts: Record<string, number>; segment: any }
-    >();
-    for (const segment of segments) {
-      const x = Math.max(0, Math.floor(rescaledScale(new Date(segment.start))));
-      const bucket = buckets.get(x) ?? { counts: {}, segment };
-      const state = segment.speakerIdentity?.state ?? "unclassified";
-      bucket.counts[state] = (bucket.counts[state] ?? 0) + 1;
-      buckets.set(x, bucket);
-    }
-    return [...buckets.entries()].map(([x, bucket]) => ({
-      id: `bucket-${x}`,
-      x,
-      width: 2,
-      state: Object.entries(bucket.counts).sort((a, b) => b[1] - a[1])[0]?.[0],
-      segment: bucket.segment,
-    }));
-  }, [farZoom, segments, rescaledScale]);
+    return (data?.buckets ?? []).map((bucket, index) => {
+      const appearance = dominantSpeakerBucket(bucket);
+      const bucketStart = speakerTimelineDate(bucket.start);
+      const bucketEnd = speakerTimelineDate(bucket.end);
+      const x = rescaledScale(bucketStart);
+      return {
+        id: `bucket-${bucketStart.getTime()}-${index}`,
+        x,
+        width: Math.max(1, rescaledScale(bucketEnd) - x),
+        state: appearance.state,
+        validity: appearance.validity,
+        segmentId: undefined,
+        start: bucketStart,
+        end: bucketEnd,
+        count: Object.values(bucket.counts).reduce(
+          (total, count) => total + (count ?? 0),
+          0,
+        ),
+      };
+    });
+  }, [data, rescaledScale]);
+  const hasData = hasSpeakerTimelineData(data);
   return (
     <BaseTrack {...props} config={DIARIZATIONS_CONFIG}>
       <g>
+        {isLoading && !data && (
+          <text
+            x={8}
+            y={Math.max(14, props.height / 2 + 4)}
+            fontSize={11}
+            fill="currentColor"
+            opacity={0.65}
+          >
+            Loading speaker identity…
+          </text>
+        )}
+        {isError && (
+          <text
+            x={8}
+            y={Math.max(14, props.height / 2 + 4)}
+            fontSize={11}
+            fill="#dc2626"
+            className="cursor-pointer"
+            onClick={() => void refetch()}
+          >
+            Speaker identity unavailable — click to retry
+          </text>
+        )}
+        {!isLoading && !isError && !hasData && (
+          <text
+            x={8}
+            y={Math.max(14, props.height / 2 + 4)}
+            fontSize={11}
+            fill="currentColor"
+            opacity={0.55}
+          >
+            {data?.reason ?? (speakerFilter === "all" && statusFilter === "all"
+              ? "No speaker identity in this range"
+              : "No speaker identity matches these filters")}
+          </text>
+        )}
         {marks.map((mark) => {
-          const appearance = speakerIdentityAppearance(mark.state);
+          const appearance = speakerIdentityAppearance(
+            mark.state,
+            mark.validity,
+          );
           return (
             <rect
               key={mark.id}
@@ -239,11 +323,25 @@ export const DiarizationsTrack = memo(function DiarizationsTrack(
               height={Math.max(4, props.height - 8)}
               fill={appearance.color}
               opacity={appearance.opacity}
+              stroke={appearance.stroke}
+              strokeDasharray={appearance.strokeDasharray}
+              strokeWidth={appearance.stroke ? 1.5 : undefined}
               className="cursor-pointer"
-              onClick={() =>
-                navigate(`/diarizations/${String(mark.segment._id)}`)}
+              onClick={() => {
+                if (mark.segmentId) {
+                  navigate(`/diarizations/${mark.segmentId}`);
+                  return;
+                }
+                const next = new URLSearchParams(searchParams);
+                next.set("start", String(mark.start.getTime()));
+                next.set("end", String(mark.end.getTime()));
+                navigate(`/timeline?${next.toString()}`);
+              }}
             >
-              <title>{appearance.label}</title>
+              <title>
+                {appearance.label}
+                {mark.count > 1 ? ` · ${mark.count} segments` : ""}
+              </title>
             </rect>
           );
         })}

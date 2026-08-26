@@ -86,10 +86,19 @@ const searchObjectsSchema = z.object({
   ),
 });
 
+const searchMediaSchema = z.object({
+  action: z.literal("searchMedia").describe(
+    "Search OCR text and recognized labels in imported photos and PDF documents.",
+  ),
+  query: z.string().trim().min(1),
+  limit: z.number().int().min(1).max(50).default(20),
+});
+
 const searchRequestSchema = z.discriminatedUnion("action", [
   searchTranscriptionsSchema,
   searchMessagesSchema,
   searchObjectsSchema,
+  searchMediaSchema,
 ]);
 
 export type SearchRequest = z.infer<typeof searchRequestSchema>;
@@ -156,7 +165,8 @@ export class SearchResource implements Resource<SearchRequest, SearchResponse> {
 Available actions:
 - searchTranscriptions: Find content in voice recordings/transcriptions
 - searchMessages: Find content in chat conversations
-- searchObjects: Find people, events, places, relationships in knowledge graph (searches names, details, summaries)`;
+- searchObjects: Find people, events, places, relationships in knowledge graph (searches names, details, summaries)
+- searchMedia: Find OCR text and recognized labels in photos and PDFs`;
 
   schemas = {
     request: searchRequestSchema as z.ZodType<SearchRequest>,
@@ -167,6 +177,14 @@ Available actions:
     const mongo = await getMongoResource(auth);
 
     switch (input.action) {
+      case "searchMedia": {
+        const media = auth.getResource<any, any>("media");
+        return await media({
+          action: "search",
+          query: input.query,
+          limit: input.limit,
+        });
+      }
       case "searchTranscriptions": {
         const searchRegex = {
           $regex: escapeMongoRegex(input.query),

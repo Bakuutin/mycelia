@@ -38,6 +38,50 @@ from jobs.speaker_matching import (  # noqa: E402
 
 
 class EnrollmentJobTest(TestCase):
+    def test_enrollment_persists_the_actual_admitted_runtime(self):
+        runtime = {
+            "modelId": "pyannote/community-1",
+            "modelVersion": "model-revision-1",
+            "embeddingSpaceId": "space-v1",
+        }
+        with (
+            patch("jobs.enrollment._get_audio_from_gridfs", return_value=b"wav"),
+            patch(
+                "jobs.enrollment._extract_embedding",
+                return_value={
+                    "embedding": [1.0, 0.0],
+                    "duration": 10.0,
+                    **runtime,
+                },
+            ),
+            patch(
+                "jobs.enrollment.create_or_update_profile",
+                return_value={
+                    "_id": ObjectId(),
+                    "embeddingSpaceId": "space-v1",
+                },
+            ) as create,
+            patch(
+                "jobs.enrollment.call_resource",
+                return_value={"matchedCount": 1},
+            ),
+        ):
+            result = process_enrollment_job(
+                "job-runtime",
+                EnrollmentJobData(
+                    name="Sky",
+                    sample_file_id=str(ObjectId()),
+                    routingContext=runtime,
+                ),
+                lambda _progress: None,
+            )
+
+        self.assertEqual(
+            create.call_args.kwargs["runtime_provenance"],
+            runtime,
+        )
+        self.assertEqual(result["runtimeProvenance"], runtime)
+
     def test_existing_profile_is_updated_by_id_and_sample_link_is_required(self):
         profile_id = str(ObjectId())
         sample_id = str(ObjectId())
@@ -241,6 +285,8 @@ class DiarizationJobTest(TestCase):
             "_id": ObjectId(),
             "name": "Sky",
             "embedding": [1.0, 0.0],
+            "embeddingSpaceId": "space-v1",
+            "revision": 4,
         }
         with (
             patch("jobs.diarization._campaign_call", return_value=None),
@@ -276,7 +322,10 @@ class DiarizationJobTest(TestCase):
         ):
             process_diarization_job(
                 "job-profile-snapshot",
-                DiarizationJobData(limit=2),
+                DiarizationJobData(
+                    limit=2,
+                    routingContext={"embeddingSpaceId": "space-v1"},
+                ),
                 lambda _progress: None,
             )
 
@@ -1417,12 +1466,29 @@ class SpeakerMatchingJobTest(TestCase):
     def test_time_range_is_applied_and_continuation_uses_camel_case(self):
         start = datetime(2026, 8, 1, tzinfo=UTC)
         end = datetime(2026, 8, 2, tzinfo=UTC)
-        profile = {"_id": ObjectId(), "name": "Sky", "embedding": [1.0, 0.0]}
-        segment = {"_id": ObjectId(), "embedding": [0.0, 1.0]}
+        profile = {
+            "_id": ObjectId(),
+            "name": "Sky",
+            "embedding": [1.0, 0.0],
+            "embeddingSpaceId": "space-v1",
+            "revision": 4,
+        }
+        segment = {
+            "_id": ObjectId(),
+            "embedding": [0.0, 1.0],
+            "embeddingSpaceId": "space-v1",
+        }
 
         def resource(_name, request):
             if request["action"] == "getFirstBatch":
                 self.assertEqual(request["query"]["start"], {"$gte": start, "$lte": end})
+                self.assertEqual(
+                    request["query"]["embeddingSpaceId"],
+                    {
+                        "$exists": True,
+                        "$nin": ["", "unknown", "legacy-unknown"],
+                    },
+                )
                 return {"cursorId": "cursor", "hasMore": True, "data": [segment]}
             raise AssertionError(request)
 

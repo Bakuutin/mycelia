@@ -13,7 +13,10 @@ from dataclasses import dataclass, field
 from tqdm import tqdm
 from lib.resources import call_resource
 from lib.worker import setup_worker_logging, get_worker_id, mongo_cursor, claim_chunks, release_chunks
-from lib.diarization_runtime import StageTimings
+from lib.diarization_runtime import (
+    StageTimings,
+    extract_diarizator_runtime_provenance,
+)
 
 logger = setup_worker_logging('diarization_worker')
 
@@ -116,6 +119,7 @@ def _get_speaker_profiles() -> list:
                         "name": 1,
                         "embedding": 1,
                         "embeddingSpaceId": 1,
+                        "revision": 1,
                     },
                     "sort": {"created_at": 1},
                 },
@@ -180,11 +184,33 @@ def _get_speaker_profiles() -> list:
             return []
 
 
-def get_speaker_profiles_snapshot() -> list:
-    """Resolve the feature flag and immutable profile view once per job."""
+def get_speaker_profiles_snapshot(
+    expected_embedding_space_id: Optional[str] = None,
+) -> list:
+    """Resolve an immutable, embedding-space-compatible profile view per job."""
     if not _is_speaker_identification_enabled():
         return []
-    return list(_get_speaker_profiles())
+    if not expected_embedding_space_id:
+        # Legacy jobs without admitted runtime provenance keep the historical
+        # no-identification behavior instead of risking cross-space matching.
+        return []
+    profiles = list(_get_speaker_profiles())
+    compatible = [
+        profile
+        for profile in profiles
+        if profile.get("embeddingSpaceId") == expected_embedding_space_id
+        and isinstance(profile.get("revision"), int)
+        and not isinstance(profile.get("revision"), bool)
+        and profile["revision"] > 0
+    ]
+    skipped = len(profiles) - len(compatible)
+    if skipped:
+        logger.warning(
+            "Skipping %d speaker profiles outside admitted embedding space %s",
+            skipped,
+            expected_embedding_space_id,
+        )
+    return compatible
 
 
 def _build_clusters_param(profiles: list) -> str:
@@ -906,6 +932,8 @@ def diarize_sequence(
     lifecycle_status: str = "active",
     mark_chunks: bool = True,
     expected_embedding_space_id: Optional[str] = None,
+    expected_model_id: Optional[str] = None,
+    expected_model_version: Optional[str] = None,
     server_url: Optional[str] = None,
     prepared: Optional[PreparedDiarizationSequence] = None,
     provider_session: Optional[requests.Session] = None,
@@ -1028,6 +1056,20 @@ def diarize_sequence(
                 speaker_profiles = speaker_profiles_snapshot
             elif run_id == "legacy-v0" and _is_speaker_identification_enabled():
                 speaker_profiles = _get_speaker_profiles()
+            if expected_embedding_space_id:
+                speaker_profiles = [
+                    profile
+                    for profile in speaker_profiles
+                    if profile.get("embeddingSpaceId")
+                    == expected_embedding_space_id
+                    and isinstance(profile.get("revision"), int)
+                    and not isinstance(profile.get("revision"), bool)
+                    and profile["revision"] > 0
+                ]
+            else:
+                # A route without exact runtime provenance cannot safely use
+                # enrolled embeddings for automatic identification.
+                speaker_profiles = []
             if speaker_profiles:
                 clusters_param = _build_clusters_param(speaker_profiles)
                 log_info(f'  → Speaker identification enabled with {len(speaker_profiles)} profiles')
@@ -1066,9 +1108,26 @@ def diarize_sequence(
                 )
         segments = data.get('segments', [])
         embedding_space_id = data.get('embeddingSpaceId', 'legacy-unknown')
+        runtime_provenance = extract_diarizator_runtime_provenance(data)
         if expected_embedding_space_id and embedding_space_id != expected_embedding_space_id:
             raise ValueError(
                 f"Diarizator embedding space changed while building run: {embedding_space_id} != {expected_embedding_space_id}"
+            )
+        if expected_model_id and (
+            runtime_provenance or {}
+        ).get("modelId") != expected_model_id:
+            raise ValueError(
+                "Diarizator model changed after route admission: "
+                f"{(runtime_provenance or {}).get('modelId')} != "
+                f"{expected_model_id}"
+            )
+        if expected_model_version and (
+            runtime_provenance or {}
+        ).get("modelVersion") != expected_model_version:
+            raise ValueError(
+                "Diarizator model version changed after route admission: "
+                f"{(runtime_provenance or {}).get('modelVersion')} != "
+                f"{expected_model_version}"
             )
 
         with timings.measure("continuity"):
@@ -1102,6 +1161,7 @@ def diarize_sequence(
                 "chunks_diarized": chunks_marked,
                 "duration": duration,
                 "segments": 0,
+                "runtimeProvenance": runtime_provenance,
             })
 
         # Generate unique inference_id for this diarization run
@@ -1148,6 +1208,15 @@ def diarize_sequence(
                 "runId": run_id,
                 "generation": generation,
                 "embeddingSpaceId": embedding_space_id,
+                **(
+                    {
+                        "modelId": runtime_provenance["modelId"],
+                        "modelVersion": runtime_provenance["modelVersion"],
+                        "runtimeProvenanceSource": "inference_response",
+                    }
+                    if runtime_provenance
+                    else {}
+                ),
                 "lifecycleStatus": lifecycle_status,
             }
             diar_doc["segmentKey"] = _segment_identity_key(
@@ -1163,7 +1232,9 @@ def diarize_sequence(
                     "name": profile.get("name", "Unknown"),
                     "similarity": segment.get('similarity', 0),
                     "matched_at": datetime.now(tz=UTC),
-                    "method": "live"
+                    "method": "live",
+                    "profile_revision": profile["revision"],
+                    "embedding_space_id": embedding_space_id,
                 }
                 matched_segments += 1
 
@@ -1215,6 +1286,7 @@ def diarize_sequence(
             "duration": duration,
             "segments": saved_segments,
             "matched_segments": matched_segments,
+            "runtimeProvenance": runtime_provenance,
         })
 
     except requests.exceptions.ReadTimeout:

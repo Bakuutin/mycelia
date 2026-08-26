@@ -69,8 +69,8 @@ statistics, missing required keys, optional keys, undocumented keys, duplicate
 definitions, blank values, malformed assignments, and formatting issues. The
 command exits non-zero when the files need attention, so `--json` can be used in
 CI or other automation. `--all` treats the root contract as required and the
-standalone diarizator/GPU deployments as optional; missing optional `.env`
-files are reported without failing the audit.
+standalone diarizator, GPU, and RAG deployments as optional; missing optional
+`.env` files are reported without failing the audit.
 
 Apply only safe automatic repairs with:
 
@@ -95,9 +95,9 @@ specific template with an explicit, single-contract command:
   --fix --prune-undocumented
 ```
 
-The three contracts remain separate because they are loaded by different
-deployments. Compose services pass explicit diarizator variables instead of
-injecting an entire application `.env` containing unrelated secrets.
+The deployment contracts remain separate because they are loaded by different
+services. Compose services pass explicit diarizator and RAG variables instead
+of injecting an entire application `.env` containing unrelated secrets.
 
 #### Readiness and reload diagnostics
 
@@ -127,6 +127,21 @@ An ordinary frontend `src/` edit uses HMR without a full restart. Editing
 frontend `[READY]` record. A backend source edit restarts the Deno process and
 may keep `/readiness` unavailable while worker startup checks run.
 
+The Media page uses the same development backend. A `502 Bad Gateway` during a
+source edit means nginx temporarily had no ready upstream; wait for the next
+backend `[READY]` line and retry the local proposal. Clustering validation and
+per-item cost guards return structured application errors instead of 502. The
+Media library never loops over visible cards to queue recognition. The separate
+`/media/analysis` page sends one exact server-side selection receipt; the
+coordinator creates separate photo jobs so one rejected item does not fail the
+rest of the batch. Large mounted-folder sync and recognition batches return
+immediately, resume in 25-file chunks or a bounded photo-job window, and the
+30-second watchdog resumes a broken continuation after restart. Browsing,
+filtering, and local import remain available while older batches run. Google
+profiles use Vertex visual understanding/embedding plus strict-EU Vision OCR;
+self-hosted profiles receive the same fixed visual-understanding + OCR request
+without a Google call. Global labels/objects are excluded from this bulk path.
+
 The dependency watchdog uses its own one-connection MongoDB pool. Long-running
 imports and worker rebuilds may make ordinary queries slower, but they must not
 starve the watchdog or cause `[SELF-HEAL]` restarts from an application-pool
@@ -152,6 +167,136 @@ When a change is not visible:
 5. After recreating frontend or backend, restart nginx because the container IP
    may have changed: `docker compose restart nginx`.
 6. Do not restart MongoDB or Redis for an application-code reload.
+
+#### Isolated Photo/PDF Knowledge development
+
+Use the media overlays when the feature must run without sharing the main
+checkout's Docker state. The overlay fixes the Compose project name to
+`mycelia-media-89da`, publishes `3211`/`4443`, removes the Mongo host port, uses
+distinct app image tags, and creates separate Mongo/Redis volumes.
+
+```bash
+cp .env.media.example .env.media.local
+# Set absolute MEDIA_SOURCE_HOST_PATH and replace development secrets.
+
+docker compose \
+  --env-file .env.media.local \
+  -f docker-compose.yml \
+  -f docker-compose.media-dev.yml \
+  up -d --build mongo redis backend frontend nginx
+```
+
+Verify the actual checkout and runtime before testing:
+
+```bash
+docker inspect mycelia-media-89da-backend-1 \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination .RW}}{{end}}'
+docker inspect mycelia-media-89da-frontend-1 \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination .RW}}{{end}}'
+
+docker compose \
+  --env-file .env.media.local \
+  -f docker-compose.yml \
+  -f docker-compose.media-dev.yml \
+  ps
+
+curl -fsS http://127.0.0.1:3211/readiness
+```
+
+The source folder must appear at `/media-source` with `RW=false`; backend must
+report `mode=dev`, frontend `mode=development`, and both must emit `[READY]`.
+Run `bash scripts/smoke-media-local.sh` to verify analyze → confirm → protected
+WebP retrieval without queueing recognition. Add `docker-compose.media-gcp.yml`
+when testing ADC/GCP; keep it on every backend recreate so the credential mount
+is not dropped. Untouched upload previews expire after one hour, while an
+interrupted confirmation has a bounded seven-day idempotent recovery lease.
+Full setup and the provider-neutral
+visual-understanding/embedding contract, configurable gross-cost guards
+(24-hour Free Trial confirmation or persistent project-bound paid mode), and
+visible committed/reserved cost ledger, multipart managed uploads, EXIF/GPS
+extraction, and preview-confirm deletion of managed originals are in
+[docs/MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+The same guide covers the separate local photo-event proposal → group consent →
+provider analysis → Event Object publication flow; event analysis is never
+triggered automatically by import. Reanalysis also uses its own exact-thumbnail
+preview and confirmation; cancelling a worker after the provider-start fence is
+not proof that the remote request was cancelled or unbilled.
+
+For the 900-photo campaign, place originals under
+`MEDIA_SOURCE_HOST_PATH/900-photos/` and select `900-photos` in the mounted
+folder browser on `/media`; `.` remains the default recursive root. Local folder
+sync does not call Google. Its single normal `mediaFolderImport` job loops over
+durable 25-file commits and publishes checked/total progress, speed and ETA to
+Media and Jobs. Restart/recovery attempts remain durable history, but Jobs
+groups the same `campaignId` into one visible campaign row. On
+`/media/analysis`, a batch preview can select an explicit set or every eligible
+asset matching the current server-side filters, not only the visible gallery
+page. It fixes visual-understanding + OCR and shows the authoritative batch
+ceiling before consent. With a Google profile this means Vertex visual
+understanding/embedding plus strict-EU Vision OCR; a self-hosted profile sends
+the same feature request only to its configured endpoint. Photos with local
+time/GPS are queryable through indexed Timeline/Map projections in every
+recognition state. At close map zoom, grouped markers expand into a thumbnail,
+caption, status, and capture-time list; the adaptive Photos Timeline track opens
+the same library links from overlapping markers or a selected density bucket.
+Missing values are kept in Unplaced and can be edited without a provider call.
+Jobs presents the durable recognition campaign as one
+`mediaRecognitionBatch` row with aggregate done/total and state counters;
+per-photo `mediaRecognition` jobs are hidden from the normal list and retained
+only for explicit diagnostics. Jobs launch/restart actions follow the worker
+catalog's `manualRun` capability. Generic cancel/clear actions leave folder
+imports, recognition batches, and paid per-photo work untouched; manage those
+campaigns on `/media` and `/media/analysis` instead.
+
+#### Isolated Qdrant RAG development
+
+The vector projection has its own Compose project, ports, state database, model
+cache, and Qdrant volume. Do not add it to the main `docker compose up` command
+or restart MongoDB/Redis while iterating on RAG code.
+
+```bash
+cp .env.rag.example .env.rag.local
+
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  up -d --build
+```
+
+Default host ports are RAG API `48091`, Qdrant REST/dashboard `46333`, and
+Qdrant gRPC `46334`. They do not overlap the main application. Verify process,
+dependency readiness, and projection readiness separately:
+
+```bash
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  ps
+curl -fsS http://127.0.0.1:48091/health
+curl -fsS http://127.0.0.1:48091/ready
+curl -fsS http://127.0.0.1:48091/v1/status
+```
+
+`/health` is only liveness. `/ready` checks for a compatible active Qdrant
+projection/alias and enforces the optional read-only-principal gate;
+`/v1/status` is the authoritative view of build/catch-up/active and checkpoint
+freshness state. A failed blue/green rebuild must leave the previous active
+collection intact. Evidence search separately bulk-revalidates candidate source
+revisions and filters against MongoDB and therefore fails closed if that
+canonical read is unavailable. The complete lifecycle, connection modes, control
+semantics, and deferred authorization/read-only-user migration are documented in
+[docs/RAG_QDRANT.md](docs/RAG_QDRANT.md).
+
+The default inference profile is the local
+`fastembed-minilm-bm25-v1` baseline with pinned MiniLM/BM25 artifact revisions and
+no reranker. `/v1/status` and **Settings → Knowledge index** show the full
+embedding-space fingerprint and executor state. A future Qwen3/4090 service is a
+separate HTTP executor and new blue/green projection; it is not enabled by any
+Stage 1 environment variable. The Stage 1 model, revision, tokenizer,
+instructions, dimensions, and normalization values are immutable and invalid
+overrides stop configuration loading. Future local/remote executors must report
+the same embedding fingerprint and chunker contract before they can write or
+query one generation.
 
 #### Objects browse and Timeline density rollout
 
@@ -229,6 +374,12 @@ links that interval to Timeline without querying `audio_chunks` again.
 Older/manual jobs fall back to their requested `data.start`/`data.end`; a job
 with neither field has no range rendered rather than an inferred one.
 
+The Job Detail page keeps a batch's recorded diarization errors as historical
+evidence, but resolves each affected range against current `audio_chunks` so it
+can distinguish recovered retries, pending retries, and exhausted failures. Raw
+job payloads, worker logs, and access-audit rows remain available in closed
+technical sections instead of expanding the page by default.
+
 Deploy changes to this path by pausing only the diarization worker, draining its
 active jobs, recreating `backend` and `python-worker`, and then resuming the
 same worker. Do not clear waiting or delayed jobs, and do not restart MongoDB or
@@ -236,6 +387,22 @@ Redis. After rollout, verify metadata cursor requests omit `data`, hydration is
 limited to the current sequence plus at most one leased lookahead, stopped
 batches leave no application cursor registered in the backend, and expired
 `diarization_recording_leases` can be acquired by a new worker.
+
+Archive-wide `diarization` jobs in `missing` mode use route affinity as a
+preference, not a hard constraint. A continuation keeps its previous route when
+that slot is free, otherwise admission may select another healthy route only
+when `modelId`, `modelVersion`, and `embeddingSpaceId` match exactly.
+Enrollment, profile re-enrollment, targeted diarization, and generation builds
+retain hard route affinity. Every newly routed job snapshots this runtime
+contract from the route readiness payload, and the Python worker checks the
+inference response again before it persists diarizations or profile embeddings.
+Legacy or unknown fingerprints never qualify for compatible fallback. On every
+diarizator terminal event, the backend first drains persisted work in
+priority/FIFO order and then immediately fills any remaining provider capacity
+with archive-wide missing work. This refill uses live BullMQ reservations and
+healthy route slots; Mongo waiting rows are history/admission state and must not
+suppress an otherwise free GPU. The 60-second maintenance pass remains only a
+watchdog for missed events.
 
 The Audio Pipeline page does not run exact corpus counts on a timer. A small
 `/api/audio/pipeline/live` response polls the current global campaign, the
@@ -256,28 +423,62 @@ provider capacity and BullMQ worker concurrency.
 Jobs → Workers uses the backend worker catalog shared with Settings. Worker
 descriptions, availability, queue state, and history stay visible by default;
 Concurrency, Batch, and Schedule are available through **Advanced columns**.
-Diarization route health and slots stay in External services & routing, so
-there is no second live-slots dashboard.
+Rows are grouped as **Pipeline**, **Maintenance**, and **Diagnostics**. In each
+external-service card, the worker action reads **Resume workers** whenever any
+routed worker is paused; otherwise it reads **Pause workers**. Diarization route
+health and slots stay in External services & routing, so there is no second
+live-slots dashboard.
+
+Conversation extraction fills its configured runtime concurrency with atomically
+distinct chunk claims. Provider concurrency remains a separate inference limit:
+keep a one-slot local LLM profile and the extractor worker at 1, while a tested
+OpenRouter profile may use a higher worker value (currently up to 8). The
+provider-specific tuning contract and the deferred RTX 4090 two-slot experiment
+are documented in `docs/CONVERSATION_EXTRACTION_TROUBLESHOOTING.md`.
 
 #### Timeline density rebuild recovery
 
-Timeline density rebuilds affect only derived audio/transcription histogram
-buckets. They never rewrite raw audio, transcript text, terminal transcription
-markers, or speaker identity. Speaker identity reads active speaker segments
-directly, so diarizations are not part of histogram audit totals or rebuilds.
+Timeline density repairs affect only derived audio/transcription density buckets
+(the bars historically called histograms). They never rewrite raw audio,
+transcript text, transcription completion markers, or speaker identity. Speaker
+identity reads active speaker segments directly, so diarizations are not part of
+density totals or repairs.
 
-A full rebuild creates a durable `timeline_rebuild_campaigns` row before its
-first 31-day batch. `histRecalculation` runs at concurrency one and reports its
-delete, 5-minute, hourly, daily, and weekly phases. The backend reconciles an
-explicitly started, unpaused campaign every 30 seconds and restores a missing
-successor. A legacy campaign remains `paused_legacy` until an operator confirms
-**Resume**; page load or deployment never starts it. Pause/Resume and campaign
-links are available from Jobs, and the job list filters by `campaignId`.
+The manual exact check compares UTC-day raw counts with daily density totals. If
+they differ, Jobs proposes only the mismatched days, merges adjacent days, and
+starts one sparse durable campaign for those ranges. A known continuous period
+can also be selected manually. Rebuilding all history is reserved for a density
+schema change or widespread corruption that cannot be localized. New imports do
+not automatically start `histRecalculation`; run **Check now** after a large or
+historical import.
+
+Every repair creates a durable `timeline_rebuild_campaigns` row before its first
+bounded job. Long continuous periods split into 31-day jobs; disjoint affected
+dates remain disjoint. `histRecalculation` runs at concurrency one and reports
+its delete, 5-minute, hourly, daily, and weekly phases. The backend reconciles
+an explicitly started, unpaused campaign every 30 seconds and restores the next
+selected range. A legacy campaign remains `paused_legacy` until an operator
+confirms **Resume**; page load or deployment never starts it. Pause/Resume and
+campaign links are available from Jobs, and the job list filters by
+`campaignId`.
 
 Campaign completion requires a manual exact Timeline audit after all planned
-batches finish. Audio/transcription mismatches require **Rebuild Timeline
-density**; stale buckets use **Update stale ranges**. Terminal-marker repair is
-a separate Preview then Apply workflow.
+batches finish. Jobs -> Timeline density integrity shows **Run exact
+verification** while the campaign is `verifying`, and polls every two seconds
+while the audit runs. This manual audit scans date-bearing raw rows for exact
+counts; maintained collection metadata is used only for fast campaign range
+planning because it can lag behind recent bulk ingestion. Matching source and
+density totals closes the campaign as `completed`; remaining differences close
+it as `completed_with_errors`, release the rebuild control, and require a new
+bounded campaign over the affected dates. Stale buckets use **Update stale
+ranges**. Transcription completion-marker repair is separate: **Check markers**
+is read-only, and **Repair markers** is needed only when the check finds chunks
+whose completed/empty sequence still has `transcribed_at=null`. It never creates
+or changes transcript text.
+
+The Jobs summary keeps Timeline density integrity in a compact two-row card
+above **Work ready now**. **Details** opens the full recovery controls in a
+centered modal on the same page.
 
 Recent source-file metadata loads independently once and is ordered by
 `source_files.updatedAt`, `start`, and `_id`; it is not described as downstream
@@ -340,10 +541,10 @@ Keep live service availability separate from corpus-wide statistics:
 
 Migration `0056_pipeline_dashboard_indexes.ts` adds the partial Jobs index used
 for recent completed transcription batch history and the compound Map index for
-conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds
-the dashboard cursor/rollup indexes, durable snapshot and campaign collections,
-the unique campaign/batch constraint, and the partial entity-typing marker
-index. Apply pending migrations before relying on the new query hints.
+conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds the
+dashboard cursor/rollup indexes, durable snapshot and campaign collections, the
+unique campaign/batch constraint, and the partial entity-typing marker index.
+Apply pending migrations before relying on the new query hints.
 
 #### Location Map projection rollout
 
@@ -588,6 +789,7 @@ port)
 ### Tech Stack
 
 - **Deno** runtime with npm compatibility
+- **FFmpeg/ffprobe and ExifTool** for local media previews and metadata
 - **React 18** + TypeScript
 - **Vite** for build tooling
 - **Zustand** for state management
@@ -604,6 +806,23 @@ import { Component } from "@/components/Component";
 import { useTimeline } from "@/hooks/useTimeline";
 import type { TimelineItem } from "@/types/timeline";
 ```
+
+### Date and time selection
+
+Use `DateRangePicker` from `frontend/src/components/DateRangePicker.tsx` for
+start/end ranges throughout the app. It keeps the date range in one calendar,
+provides month and year dropdowns, defaults to minute precision, and can add the
+audio-density timeline with `showAudioTimeline`. The picker opens in a
+viewport-contained, internally scrolling dialog; users explicitly select the
+Start or End boundary before editing its date or time. Use `precision="date"`
+for date-only filters and opt into `precision="second"` only when the workflow
+requires exact seconds.
+
+Use `DateTimePicker` from `frontend/src/components/ui/datetime-picker.tsx` only
+for a single instant. Do not assemble new range controls from separate native
+`date`, `time`, or `datetime-local` inputs. Both shared controls use the
+configured app timezone unless the caller explicitly supplies a contextual
+Timeline timezone or UTC for a maintenance boundary.
 
 ## Backend Development
 
@@ -642,16 +861,28 @@ For diarization, voice enrollment, speaker recognition, and historical backfill:
 2. Run diarization locally on CPU or remotely on an NVIDIA GPU.
 3. Configure and verify the route in Settings → Diarization.
 4. Complete missing diarization coverage.
-5. In Settings → Voice Identity, enroll Sky under **Profiles & samples**, label
-   scoped validation audio under **Review & calibration**, preview the selected
-   recordings/Timeline range, and save the current revision-bound calibration.
-6. In **Jobs**, press play on `speakerIdentity`; the launcher resolves Sky,
-   calibration, and the compatible active generation. Run a bounded 24-hour
-   pilot before historical backfill.
+5. In Settings → Voice Identity, build Sky from clean, single-speaker profile
+   samples. Use ordinary review labels for Timeline/calibration; add a clip to
+   the profile only when it represents a missing recording condition.
+6. Press **Start recommended review** and label enough independent recordings
+   for Learn and Check. Timeline-derived profile samples are excluded from both
+   sets; legacy Timeline samples without recording provenance must be re-added.
+7. Save a calibration only after Check has at least 20 Sky labels, 20 not-Sky
+   labels, and 20 safe automatic Sky matches at the selected precision. If
+   held-out not-Sky decisions are not proven, the server keeps them uncertain.
+8. Use the embedded **Classify all compatible history** action. The server
+   freezes a cutoff, partitions real active segments by run and embedding space,
+   and resumes batches with deterministic job ownership. Raw technical IDs
+   remain in Advanced/Jobs for diagnostics only.
+9. If Voice Identity reports empty active coverage, open **Operations &
+   generations**, inspect the non-destructive repair preview, and confirm repair
+   separately before classification. Never purge as part of repair.
+10. Open Timeline and use the Speaker identity track/filter after the campaign
+    reports zero real remaining segments.
 
-See
-[the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)
-for exact commands, UI workflow, safety gates, and troubleshooting.
+See [the architecture guide](docs/SPEAKER_IDENTIFICATION.md) and
+[operator runbook](docs/VOICE_IDENTITY_RUNBOOK.md) for exact commands, UI
+workflow, safety gates, and troubleshooting.
 
 ## Database Migrations
 
@@ -774,6 +1005,11 @@ are retained and retried with bounded exponential backoff:
 - summarization content-filter failures: 15 minutes, increasing up to 24 hours;
 - completed summarization claims left by an interrupted run are released by
   maintenance once the summary exists.
+- photo-event analysis runs are reconciled at startup and every minute. A run
+  that has not crossed the provider fence releases its reservation; a stale
+  post-fence run becomes `provider_outcome_unknown` and is never replayed
+  automatically. An early duplicate worker is delayed until the saved lease can
+  be reconciled instead of being recorded as completed.
 - active Mongo job records whose BullMQ record disappeared after a process
   restart are cancelled with `queue_record_missing`; summarization claims are
   released and interrupted extraction chunks return to the retry backlog.
@@ -842,6 +1078,15 @@ the automatic cursor to the full history:
    active claim, delayed retry, or terminal failure. Repeating automatic jobs
    with `processed:0` while eligible pending work remains is a contract
    violation, not an idle state.
+
+Conversation extraction has a second safety boundary in addition to queue
+retries. New conversation chunks are finalized at source-file changes or before
+their formatted transcript would exceed `maxPromptChars` (32,000 by default),
+and the merged extractor partitions legacy oversized chunks into the same
+bounded windows before inference. If a bounded window still ends with
+`finish_reason=length`, it is adaptively bisected by utterance and retried, up
+to eight splits per chunk. Do not raise the default `maxTokens=8192` solely for
+a large source chunk; inspect Job Detail window diagnostics first.
 
 ### FFmpeg Import Errors
 

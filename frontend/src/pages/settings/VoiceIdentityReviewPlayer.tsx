@@ -34,7 +34,11 @@ import { Switch } from "@/components/ui/switch";
 import { normalizeObjectId } from "@/lib/diarization";
 import { useAudioPlaybackStore } from "@/stores/audioPlaybackStore";
 
-export type VoiceIdentityDecision = "me" | "not-me" | "skip";
+export type VoiceIdentityDecision =
+  | "me"
+  | "me-timeline-only"
+  | "not-me"
+  | "skip";
 type ReviewCommand =
   | VoiceIdentityDecision
   | "play"
@@ -91,6 +95,7 @@ interface VoiceIdentityReviewPlayerProps {
   editingLabel?: string | null;
   alternateProfiles: VoiceIdentityProfileOption[];
   creatingProfile: boolean;
+  shortcutsEnabled?: boolean;
   onDecision: (decision: VoiceIdentityDecision) => void;
   onAssignProfile: (profileId: string) => void;
   onCreateProfile: (name: string) => Promise<void>;
@@ -106,7 +111,7 @@ const SWIPE_DISTANCE_PX = 72;
 const SWIPE_MAX_VERTICAL_PX = 48;
 
 export function getReviewShortcut(key: string): ReviewCommand | null {
-  if (/^[1-9]$/.test(key)) {
+  if (/^[1-3]$/.test(key)) {
     return { type: "profile", index: Number(key) - 1 };
   }
   switch (key) {
@@ -127,6 +132,9 @@ export function getReviewShortcut(key: string): ReviewCommand | null {
     case "s":
     case "S":
       return "skip";
+    case "t":
+    case "T":
+      return "me-timeline-only";
     case "e":
     case "E":
       return "edit";
@@ -153,6 +161,12 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
     target.closest(
       "input, textarea, select, button, a, [contenteditable='true'], [role='switch']",
     ),
+  );
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(
+    target.closest("input, textarea, select, [contenteditable='true']"),
   );
 }
 
@@ -196,6 +210,7 @@ export function VoiceIdentityReviewPlayer({
   editingLabel,
   alternateProfiles,
   creatingProfile,
+  shortcutsEnabled = true,
   onDecision,
   onAssignProfile,
   onCreateProfile,
@@ -260,15 +275,15 @@ export function VoiceIdentityReviewPlayer({
   }, [alternateProfiles, selectedProfileId]);
 
   useEffect(() => {
+    if (!shortcutsEnabled) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        isInteractiveTarget(event.target) ||
-        isInteractiveTarget(document.activeElement)
-      ) return;
       const command = getReviewShortcut(event.key);
       if (!command) return;
       if (typeof command === "object") {
-        if (pending) return;
+        if (
+          pending || isTypingTarget(event.target) ||
+          isTypingTarget(document.activeElement)
+        ) return;
         const profile = alternateProfiles[command.index];
         if (profile) {
           event.preventDefault();
@@ -276,6 +291,10 @@ export function VoiceIdentityReviewPlayer({
         }
         return;
       }
+      if (
+        isInteractiveTarget(event.target) ||
+        isInteractiveTarget(document.activeElement)
+      ) return;
       if (command === "play") {
         event.preventDefault();
         playerRef.current?.togglePlayback();
@@ -287,7 +306,10 @@ export function VoiceIdentityReviewPlayer({
         return;
       }
       if (pending) return;
-      if (command === "me" || command === "not-me" || command === "skip") {
+      if (
+        command === "me" || command === "me-timeline-only" ||
+        command === "not-me" || command === "skip"
+      ) {
         event.preventDefault();
         stopThen(() => onDecision(command));
       } else if (command === "previous" && canPrevious) {
@@ -316,6 +338,7 @@ export function VoiceIdentityReviewPlayer({
     onPrevious,
     onUndo,
     pending,
+    shortcutsEnabled,
   ]);
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -391,8 +414,8 @@ export function VoiceIdentityReviewPlayer({
             <div className="flex items-center justify-between gap-3 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-sm">
               <span>
                 Editing previous answer:{" "}
-                <strong>{editingLabel}</strong>. Choose a new speaker or Skip
-                for noise.
+                <strong>{editingLabel}</strong>. Choose the corrected speaker
+                label or mark it Noise / unclear.
               </span>
               <Button
                 size="sm"
@@ -422,37 +445,74 @@ export function VoiceIdentityReviewPlayer({
               </div>
             )}
 
-          <div className="grid grid-cols-[1fr_auto_1fr] gap-3">
+          <div className="grid gap-2 sm:grid-cols-2">
             <Button
               size="lg"
               variant="outline"
-              className="h-14 border-rose-500/40 text-base hover:bg-rose-500/10"
+              className="h-14 justify-start border-rose-500/40 text-base hover:bg-rose-500/10"
               disabled={pending}
               onClick={() => stopThen(() => onDecision("not-me"))}
             >
-              <ArrowLeft className="mr-2 h-5 w-5" />Not {profileName}
+              <ArrowLeft className="mr-2 h-5 w-5" />
+              <span className="text-left">
+                <span className="block">Not {profileName}</span>
+                <span className="block text-[11px] font-normal opacity-70">
+                  clear other voice · calibration
+                </span>
+              </span>
+            </Button>
+            <Button
+              size="lg"
+              className="h-14 justify-start bg-sky-600 text-base hover:bg-sky-700"
+              disabled={pending}
+              onClick={() => stopThen(() => onDecision("me"))}
+            >
+              <span className="text-left">
+                <span className="block">{profileName} · clear</span>
+                <span className="block text-[11px] font-normal opacity-80">
+                  Timeline + calibration
+                </span>
+              </span>
+              <ArrowRight className="ml-auto h-5 w-5" />
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              className="h-14 justify-start border-sky-500/40"
+              disabled={pending}
+              onClick={() => stopThen(() => onDecision("me-timeline-only"))}
+              title="Label the speaker on Timeline but exclude this ambiguous clip from calibration (T)"
+            >
+              <span className="text-left">
+                <span className="block">{profileName} · Timeline only</span>
+                <span className="block text-[11px] font-normal text-muted-foreground">
+                  overlap / mumble · not calibration
+                </span>
+              </span>
             </Button>
             <Button
               size="lg"
               variant="ghost"
-              className="h-14 px-4 text-muted-foreground"
+              className="h-14 justify-start text-muted-foreground"
               disabled={pending}
               onClick={() => stopThen(() => onDecision("skip"))}
               title="Keep this segment unlabeled and exclude it from calibration (S)"
             >
-              <SkipForward className="mr-1 h-4 w-4" />
-              Skip
-            </Button>
-            <Button
-              size="lg"
-              className="h-14 bg-sky-600 text-base hover:bg-sky-700"
-              disabled={pending}
-              onClick={() => stopThen(() => onDecision("me"))}
-            >
-              {profileName}
-              <ArrowRight className="ml-2 h-5 w-5" />
+              <SkipForward className="mr-2 h-4 w-4" />
+              <span className="text-left">
+                <span className="block">Noise / unclear</span>
+                <span className="block text-[11px] font-normal opacity-70">
+                  no reliable speaker label
+                </span>
+              </span>
             </Button>
           </div>
+
+          <p className="text-center text-xs text-muted-foreground">
+            Use clear only for one recognizable speaker. Timeline-only keeps a
+            useful identity label without training calibration on overlap,
+            mumbling, or a doubtful fragment.
+          </p>
 
           <div className="rounded-lg border bg-muted/20 p-3">
             <p className="mb-2 text-xs text-muted-foreground">
@@ -460,6 +520,29 @@ export function VoiceIdentityReviewPlayer({
               voice sample is separate and is used later to rebuild the profile
               embedding.
             </p>
+            {alternateProfiles.length > 0 && (
+              <div
+                className="mb-3 grid gap-2 sm:grid-cols-3"
+                aria-label="Recently used speakers"
+              >
+                {alternateProfiles.slice(0, 3).map((profile, index) => (
+                  <Button
+                    key={profile.id}
+                    type="button"
+                    variant="secondary"
+                    className="min-w-0 justify-start"
+                    disabled={pending}
+                    onClick={() => stopThen(() => onAssignProfile(profile.id))}
+                    title={`Assign ${profile.name} · shortcut ${index + 1}`}
+                  >
+                    <kbd className="mr-2 rounded border bg-background px-1.5 py-0.5 text-[10px]">
+                      {index + 1}
+                    </kbd>
+                    <span className="truncate">{profile.name}</span>
+                  </Button>
+                ))}
+              </div>
+            )}
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
               {alternateProfiles.length > 0
                 ? (
@@ -477,9 +560,8 @@ export function VoiceIdentityReviewPlayer({
                       onChange={(event) =>
                         setSelectedProfileId(event.target.value)}
                     >
-                      {alternateProfiles.map((profile, index) => (
+                      {alternateProfiles.map((profile) => (
                         <option key={profile.id} value={profile.id}>
-                          {index < 9 ? `${index + 1} · ` : ""}
                           {profile.name}
                         </option>
                       ))}
@@ -529,8 +611,9 @@ export function VoiceIdentityReviewPlayer({
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            Swipe or use ← Not {profileName} · → {profileName}{" "}
-            · S skips · 1–9 profiles · Space plays · U undoes · E edits
+            Swipe or use ← Not {profileName} · → {profileName} clear{" "}
+            · T Timeline-only · S noise/unclear · 1–3 recent speakers · Space
+            plays · U undoes · E edits
           </p>
         </div>
 

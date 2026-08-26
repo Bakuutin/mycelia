@@ -7,7 +7,7 @@ import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 import requests
 from bson import ObjectId
@@ -42,6 +42,30 @@ DIARIZATION_RECORDING_LEASE_SECONDS = (
 )
 DIARIZATION_RECORDING_LEASE_COLLECTION = "diarization_recording_leases"
 ResourceCall = Callable[[str, dict], Any]
+
+
+def extract_diarizator_runtime_provenance(
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, str]]:
+    """Normalize compact aliases or a full diarizator inference fingerprint."""
+    fingerprint = payload.get("diarizationFingerprint")
+    if not isinstance(fingerprint, dict):
+        fingerprint = {}
+    model_id = payload.get("modelId") or fingerprint.get("model")
+    model_version = payload.get("modelVersion") or fingerprint.get(
+        "resolvedRevision"
+    )
+    embedding_space_id = payload.get("embeddingSpaceId")
+    if not all(
+        isinstance(value, str) and value.strip()
+        for value in (model_id, model_version, embedding_space_id)
+    ):
+        return None
+    return {
+        "modelId": model_id.strip(),
+        "modelVersion": model_version.strip(),
+        "embeddingSpaceId": embedding_space_id.strip(),
+    }
 
 
 @dataclass(frozen=True)

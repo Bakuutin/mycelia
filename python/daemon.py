@@ -59,20 +59,38 @@ importer_map = {importer.code: importer for importer in settings.importers}
 unknown_importer = Importer(code="unknown")
 
 
-def ingests_missing_sources(limit=None, retry_errors=False):
-    base_query = {
-        "ingested": False,
-        "$or": [
+def ingests_missing_sources(
+    limit=None,
+    retry_errors=False,
+    only_errors=False,
+    source_ids=None,
+    source_path_overrides=None,
+):
+    source_ids = list(source_ids or [])
+    source_path_overrides = {
+        str(source_id): path
+        for source_id, path in (source_path_overrides or {}).items()
+    }
+    base_query = {"ingested": False}
+    if source_ids:
+        # An explicit operator-selected ID is authoritative, including legacy
+        # records whose importer code or host name predates current settings.
+        base_query["_id"] = {"$in": source_ids}
+    else:
+        base_query["$or"] = [
             {
                 "path": {"$exists": True},
                 "platform.node": platform.node(),
             },
             {"platform.importer": {"$in": list(importer_map.keys())}},
-        ],
-    }
+        ]
 
-    if not retry_errors:
+    if only_errors:
+        base_query["ingestion.error"] = {"$exists": True}
+    elif not retry_errors:
         base_query["ingestion.error"] = {"$exists": False}
+
+    scope_query = {"_id": {"$in": source_ids}} if source_ids else {}
 
     total_pending = call_resource('mongo', {
         "action": "count",
@@ -83,7 +101,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
     already_ingested = call_resource('mongo', {
         "action": "count",
         "collection": "source_files",
-        "query": {"ingested": True}
+        "query": {"ingested": True, **scope_query}
     })
 
     errored_count = call_resource('mongo', {
@@ -91,11 +109,15 @@ def ingests_missing_sources(limit=None, retry_errors=False):
         "collection": "source_files",
         "query": {
             "ingested": False,
-            "ingestion.error": {"$exists": True}
+            "ingestion.error": {"$exists": True},
+            **scope_query,
         }
     })
 
-    total_files = already_ingested + total_pending + errored_count
+    # retry_errors includes cached failures in total_pending; do not count the
+    # same selected source twice in progress totals.
+    cached_excluded_errors = 0 if retry_errors else errored_count
+    total_files = already_ingested + total_pending + cached_excluded_errors
 
     if total_pending == 0:
         if errored_count > 0:
@@ -118,7 +140,13 @@ def ingests_missing_sources(limit=None, retry_errors=False):
     errors = 0
 
     for idx, source in enumerate(query, 1):
-        file_path = source.get('path', str(source['_id']))
+        replacement_path = source_path_overrides.get(str(source['_id']))
+        source_for_upload = (
+            {**source, "path": replacement_path}
+            if replacement_path
+            else source
+        )
+        file_path = source_for_upload.get('path', str(source['_id']))
         file_name = os.path.basename(file_path) if 'path' in source else str(source['_id'])
 
         logger.info(f"Processing [{idx}/{min(limit or total_pending, total_pending)}]: {file_name}")
@@ -128,7 +156,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
                 source['platform'].get('importer'),
                 unknown_importer
             )
-            importer.upload(source)
+            importer.upload(source_for_upload)
             call_resource('mongo', {
                 "action": "updateOne",
                 "collection": "source_files",
@@ -165,7 +193,7 @@ def ingests_missing_sources(limit=None, retry_errors=False):
 
     remaining = total_pending - processed - errors
     new_ingested_total = already_ingested + processed
-    new_errored_total = errored_count + errors
+    new_errored_total = cached_excluded_errors + errors
     logger.info(f"Batch complete: {processed} processed, {errors} errors, {remaining} remaining")
     logger.info(f"Overall status: {new_ingested_total}/{total_files} ingested, {new_errored_total} errored")
 

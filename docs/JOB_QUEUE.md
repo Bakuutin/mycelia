@@ -410,11 +410,15 @@ The system includes a **Maintenance Manager** that runs every minute to ensure j
 
 1. **Timeout Cleanup**: Cancels jobs that have been active longer than 15 minutes (backup mechanism if processor timeout fails)
 2. **Queue Synchronization**: Re-enqueues jobs that exist in database but are missing from BullMQ queue (after 2-minute grace period)
+3. **Diarizator Admission Watchdog**: Recovers deferred diarizator jobs only if
+   an event-driven completion/failure/cancellation drain was missed
 
 **Implementation** (`backend/app/lib/jobs/maintenance-manager.ts`):
 - Runs every 60 seconds
 - Processes up to 500 jobs per maintenance cycle
 - Updates job states and publishes events for cancelled/re-enqueued jobs
+- Does not pace normal diarizator admission; available GPU slots are filled by
+  terminal queue events
 
 ## Error Handling
 

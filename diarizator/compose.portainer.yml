@@ -37,6 +37,7 @@ x-diarization-common: &diarization-common
     # serialized; one additional request may wait and further requests get 429.
     DIARIZATION_REQUEST_CONCURRENCY: "${DIARIZATION_REQUEST_CONCURRENCY:-1}"
     DIARIZATION_MAX_QUEUED_REQUESTS: "${DIARIZATION_MAX_QUEUED_REQUESTS:-1}"
+    DIARIZATION_IDLE_TIMEOUT_SECONDS: "${DIARIZATION_IDLE_TIMEOUT_SECONDS:-120}"
     PYTORCH_CUDA_ALLOC_CONF: "${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
     COMPUTE_MODE: gpu
     SPEAKER_SERVICE_HOST: 0.0.0.0

@@ -53,12 +53,69 @@ describe("TimelineRecoveryStatus", () => {
     );
 
     expect(
-      await screen.findByText(/Full histogram rebuild is recommended/),
+      await screen.findByText(/Timeline density repair is recommended/),
     ).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "Recovery controls" }).getAttribute(
         "href",
       ),
     ).toBe("/jobs?timelineAudit=1#timeline-integrity");
+  });
+
+  it("makes the exact verification step explicit after all batches finish", async () => {
+    vi.spyOn(api, "callResource").mockResolvedValue({
+      checkedAt: "2026-08-21T20:15:09.892Z",
+      status: "needs_attention",
+      sources: [],
+      histograms: [],
+      bookkeeping: {
+        checked: false,
+        terminalSequences: null,
+        eligibleChunks: null,
+        modifiedChunks: 0,
+        applied: false,
+      },
+      lastBookkeepingRepair: null,
+      campaign: {
+        campaignId: "campaign-1",
+        status: "verifying",
+        plannedJobs: 118,
+        queuedJobs: 118,
+        missingJobs: 0,
+        active: 0,
+        waiting: 0,
+        delayed: 0,
+        completed: 118,
+        failed: 0,
+        cancelled: 0,
+        start: null,
+        end: null,
+        createdAt: null,
+        finishedAt: null,
+        failures: [],
+      },
+      issues: [],
+      scope: { verifies: [], note: "" },
+      performance: { totalMs: 10, stages: {}, note: "" },
+      snapshot: { state: "ready" },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <TimelineRecoveryStatus />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByText(/All 118 rebuild batches finished/),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Run exact verification" }),
+    ).toBeTruthy();
   });
 });

@@ -1,9 +1,85 @@
 import { expect } from "@std/expect";
+import { ObjectId } from "bson";
+import { transcriptionToUtterances } from "@/lib/extraction/shared.ts";
 import {
+  ChunkingEngine,
   findHistoricalUnassignedTranscriptions,
   hasPendingConversationChunkWork,
+  schema,
   unassignedTranscriptionQuery,
 } from "./conversationChunkCreator.ts";
+
+const GAP_THRESHOLDS = {
+  sparse: 45 * 60 * 1000,
+  normal: 5 * 60 * 1000,
+  dense: 40 * 1000,
+};
+const CHAR_THRESHOLDS = { sparseMax: 500, normalMax: 20_000 };
+
+function unit(
+  source: string,
+  start: string,
+  text: string,
+) {
+  const end = new Date(new Date(start).getTime() + 30_000);
+  const transcription = {
+    start,
+    end,
+    text,
+  };
+  return {
+    _id: new ObjectId(),
+    original: new ObjectId(source),
+    start: new Date(start),
+    end,
+    text,
+    promptUtterances: transcriptionToUtterances(transcription),
+  };
+}
+
+Deno.test("chunk creator defaults to a 32k prompt cap", () => {
+  const input = schema.parse({ type: "conversation_chunk_creator" });
+  expect(input.maxPromptChars).toBe(32_000);
+});
+
+Deno.test("backfill chunking separates source files regardless of gap", () => {
+  const engine = new ChunkingEngine(
+    GAP_THRESHOLDS,
+    CHAR_THRESHOLDS,
+    32_000,
+  );
+  const sourceA = "64b000000000000000000001";
+  const sourceB = "64b000000000000000000002";
+
+  expect(
+    engine.process(unit(sourceB, "2026-08-01T10:00:31.000Z", "newer")),
+  ).toBeNull();
+  const split = engine.process(
+    unit(sourceA, "2026-08-01T10:00:00.000Z", "older"),
+  );
+
+  expect(split?.splitReason).toBe("source_change");
+  expect(split?.transcriptionIds).toHaveLength(1);
+  expect(split?.original_id?.toString()).toBe(sourceB);
+});
+
+Deno.test("backfill chunking finalizes before exceeding prompt cap", () => {
+  const engine = new ChunkingEngine(GAP_THRESHOLDS, CHAR_THRESHOLDS, 400);
+  const source = "64b000000000000000000001";
+
+  expect(
+    engine.process(
+      unit(source, "2026-08-01T10:01:00.000Z", "a".repeat(180)),
+    ),
+  ).toBeNull();
+  const split = engine.process(
+    unit(source, "2026-08-01T10:00:00.000Z", "b".repeat(180)),
+  );
+
+  expect(split?.splitReason).toBe("prompt_limit");
+  expect(split?.promptChars).toBeLessThanOrEqual(400);
+  expect(engine.finalize()?.promptChars).toBeLessThanOrEqual(400);
+});
 
 Deno.test("chunk creator auto-trigger runs for unassigned transcriptions", async () => {
   const calls: any[] = [];

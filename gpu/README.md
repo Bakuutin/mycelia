@@ -1,6 +1,14 @@
 # GPU Services
 
-This directory contains Docker Compose configuration for GPU-accelerated AI services used by Mycelia, including Whisper transcription, Ollama LLM inference, and speaker diarization.
+This directory contains Docker Compose configuration for GPU-accelerated AI
+services used by Mycelia. The Portainer compose in this directory is STT-only:
+it deploys Whisper and the authenticated proxy. Remote speaker diarization has
+one canonical Portainer definition in
+[`diarizator/compose.portainer.yml`](../diarizator/compose.portainer.yml).
+
+The local-development `gpu/docker-compose.yml` still provides the older
+combined Whisper, Ollama, diarization, and proxy setup. Do not use that combined
+file or `gpu/docker-compose.portainer.yml` to create a remote diarization stack.
 
 ## Services
 
@@ -15,6 +23,7 @@ This directory contains Docker Compose configuration for GPU-accelerated AI serv
 - **Port**: Internal only (accessed via proxy)
 
 ### Diarization (Speaker Recognition)
+- **Remote Portainer stack**: `../diarizator/compose.portainer.yml`
 - **Build**: From `../diarizator` Dockerfile
 - **Purpose**: Speaker diarization using PyAnnote with voice identification
 - **Port**: `8085` (direct access via Tailscale or VPN)
@@ -44,7 +53,10 @@ This directory contains Docker Compose configuration for GPU-accelerated AI serv
 
 ## Setup
 
-For a focused Whisper + authenticated proxy deployment in Portainer, see [PORTAINER.md](PORTAINER.md) and use `docker-compose.portainer.yml`.
+For a focused Whisper + authenticated proxy deployment in Portainer, see
+[PORTAINER.md](PORTAINER.md) and use `docker-compose.portainer.yml`. For remote
+diarization, use [`../diarizator/PORTAINER.md`](../diarizator/PORTAINER.md) and
+`../diarizator/compose.portainer.yml` instead.
 
 Tested with:
 ```

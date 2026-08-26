@@ -3,11 +3,10 @@
 import logging
 import os
 import requests
-import tempfile
-from datetime import datetime, UTC
 from typing import Any, Callable, Dict, Optional
 from pydantic import BaseModel
 
+from lib.diarization_runtime import extract_diarizator_runtime_provenance
 from lib.resources import call_resource
 from speaker_identification.profiles import (
     add_sample_to_profile,
@@ -32,6 +31,7 @@ class EnrollmentJobData(BaseModel):
     start: Optional[float] = None  # Start time for segment extraction
     end: Optional[float] = None  # End time for segment extraction
     diarizationServerUrl: Optional[str] = None
+    routingContext: Optional[Dict[str, Any]] = None
 
 
 def _get_audio_from_chunk(chunk_id: str) -> bytes:
@@ -206,6 +206,15 @@ def process_enrollment_job(
     embedding = embed_result["embedding"]
     duration = embed_result["duration"]
     embedding_space_id = embed_result.get("embeddingSpaceId", "legacy-unknown")
+    runtime_provenance = extract_diarizator_runtime_provenance(embed_result)
+    expected_runtime = data.routingContext or {}
+    for key in ("modelId", "modelVersion", "embeddingSpaceId"):
+        expected = expected_runtime.get(key)
+        if expected and (runtime_provenance or {}).get(key) != expected:
+            raise ValueError(
+                f"Diarizator {key} changed after route admission: "
+                f"{(runtime_provenance or {}).get(key)} != {expected}"
+            )
     
     progress_callback({
         "stage": "saving_profile",
@@ -218,7 +227,17 @@ def process_enrollment_job(
             existing = get_profile_by_id(data.profile_id)
             if not existing:
                 raise ValueError(f"Profile not found: {data.profile_id}")
-            profile = add_sample_to_profile(existing, embedding, duration, embedding_space_id)
+            profile = add_sample_to_profile(
+                existing,
+                embedding,
+                duration,
+                embedding_space_id,
+                **(
+                    {"runtime_provenance": runtime_provenance}
+                    if runtime_provenance
+                    else {}
+                ),
+            )
         else:
             profile = create_or_update_profile(
                 name=data.name,
@@ -226,6 +245,11 @@ def process_enrollment_job(
                 duration=duration,
                 is_primary=data.is_primary,
                 embedding_space_id=embedding_space_id,
+                **(
+                    {"runtime_provenance": runtime_provenance}
+                    if runtime_provenance
+                    else {}
+                ),
             )
     except Exception as e:
         logger.error(f"Failed to save profile: {e}")
@@ -257,4 +281,5 @@ def process_enrollment_job(
         "is_primary": profile.get("is_primary"),
         "embeddingSpaceId": profile.get("embeddingSpaceId"),
         "revision": profile.get("revision", 1),
+        "runtimeProvenance": runtime_provenance,
     }

@@ -14,9 +14,12 @@ import {
   getEnabledLlmProviders,
   LlmProviderLimiter,
   type ResolvedLlmProvider,
-  resolveProviderModel,
   selectLlmProviders,
 } from "./provider-routing.ts";
+import {
+  parseProviderModelIds,
+  resolveProviderModelForRequest,
+} from "./provider-model-catalog.ts";
 
 // Server-wide limiter: every worker call funnels through this backend
 // process, so a single instance enforces the per-provider request budgets.
@@ -134,6 +137,13 @@ const providerModelsRequestSchema = z.object({
   profileId: z.string().optional(),
 });
 
+const providerProbeRequestSchema = z.object({
+  action: z.literal("probe"),
+  baseUrl: z.string().url().optional(),
+  apiKey: z.string().optional(),
+  profileId: z.string().optional(),
+});
+
 const environmentStatusRequestSchema = z.object({
   // The environment route is intentionally inspectable but never editable:
   // its URL, credentials and models belong to the deployment .env.
@@ -144,6 +154,7 @@ const llmRequestSchema = z.discriminatedUnion("action", [
   chatCompletionRequestSchema,
   listModelsRequestSchema,
   providerModelsRequestSchema,
+  providerProbeRequestSchema,
   environmentStatusRequestSchema,
 ]);
 
@@ -161,28 +172,6 @@ function isOpenRouterBaseUrl(baseUrl: string): boolean {
 function readFiniteCost(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return value;
-}
-
-function listedModelIds(body: string): string[] {
-  try {
-    const parsed = JSON.parse(body);
-    const entries: unknown[] = Array.isArray(parsed?.data)
-      ? parsed.data
-      : Array.isArray(parsed?.models)
-      ? parsed.models
-      : [];
-    const modelIds = entries.map((entry: unknown): string => {
-      if (typeof entry === "string") return entry;
-      if (!entry || typeof entry !== "object") return "";
-      const candidate = entry as Record<string, unknown>;
-      return [candidate.id, candidate.model, candidate.name].find(
-        (value): value is string => typeof value === "string",
-      ) || "";
-    }).map((model: string) => model.trim()).filter(Boolean);
-    return [...new Set(modelIds)].sort();
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -326,6 +315,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           large: envAlias("MODEL_LARGE"),
         },
         defaultAlias: "medium",
+        modelSelectionMode: "fixed",
         chatModel: envChatModel || envModel,
         enabled: true,
         priority: config?.llmProfiles?.environmentPriority ?? 50,
@@ -348,6 +338,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           apiKey: profile.apiKey,
           aliases: { ...profile.aliases },
           defaultAlias: profile.defaultAlias ?? "medium",
+          modelSelectionMode: profile.modelSelectionMode ?? "fixed",
           chatModel: profile.chatModel,
           enabled: profile.enabled ?? true,
           priority: profile.priority ?? 50,
@@ -386,6 +377,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
         large: legacyAlias("MODEL_LARGE"),
       },
       defaultAlias: "medium",
+      modelSelectionMode: "fixed",
       chatModel: envChatModel || provider.chatModel?.trim() || legacyModel,
       enabled: true,
       priority: 50,
@@ -583,7 +575,15 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
 
               // Aliases resolve through the provider's alias map. Explicit
               // task models remain explicit and are never silently replaced.
-              resolvedModel = resolveProviderModel(input.model, candidate)!;
+              resolvedModel = await resolveProviderModelForRequest(
+                input.model,
+                candidate,
+              ) as string;
+              if (!resolvedModel) {
+                throw new Error(
+                  `Provider "${candidate.name}" has no available model for "${input.model}"`,
+                );
+              }
               // A caller can explicitly provide a fallback model, or provide an
               // empty string to opt out. Calls that do not declare a policy
               // retain the provider-level fallback for backwards compatibility.
@@ -592,8 +592,10 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
                 ? input.fallbackModel
                 : candidate.fallbackModel;
               const configuredFallback = requestedFallback
-                ? resolveProviderModel(requestedFallback, candidate) ??
-                  undefined
+                ? await resolveProviderModelForRequest(
+                  requestedFallback,
+                  candidate,
+                ) ?? undefined
                 : undefined;
               const fallbackModel = getConfiguredFallback(
                 resolvedModel,
@@ -1088,26 +1090,102 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
           }
 
           const modelsUrl = `${normalizeOpenAIBaseUrl(baseUrl)}/models`;
-          const response = await fetch(modelsUrl, {
-            headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-            signal: AbortSignal.timeout(10_000),
-          });
-          const bodyText = await response.text();
-          const models = response.ok ? listedModelIds(bodyText) : [];
-          return {
-            success: response.ok,
-            status: response.status,
-            message: response.ok
-              ? models.length > 0
-                ? `Found ${models.length} model${
-                  models.length === 1 ? "" : "s"
-                }`
-                : "The provider responded, but advertised no named models"
-              : bodyText.trim().replace(/\s+/g, " ").slice(0, 300) ||
-                `HTTP ${response.status}`,
-            models,
-            modelsUrl,
-          };
+          const startedAt = performance.now();
+          try {
+            const response = await fetch(modelsUrl, {
+              headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+              signal: AbortSignal.timeout(10_000),
+            });
+            const bodyText = await response.text();
+            const models = response.ok ? parseProviderModelIds(bodyText) : [];
+            const modelsLoaded = response.ok && models.length > 0;
+            return {
+              success: modelsLoaded,
+              serverAvailable: true,
+              modelsLoaded,
+              status: response.status,
+              latencyMs: Math.round(performance.now() - startedAt),
+              message: response.ok
+                ? modelsLoaded
+                  ? `Loaded ${models.length} model${
+                    models.length === 1 ? "" : "s"
+                  } from the provider catalogue`
+                  : "The server responded, but advertised no loaded models"
+                : bodyText.trim().replace(/\s+/g, " ").slice(0, 300) ||
+                  `HTTP ${response.status}`,
+              models,
+              modelsUrl,
+            };
+          } catch (error) {
+            return {
+              success: false,
+              serverAvailable: false,
+              modelsLoaded: false,
+              status: null,
+              latencyMs: Math.round(performance.now() - startedAt),
+              message: error instanceof Error ? error.message : String(error),
+              models: [] as string[],
+              modelsUrl,
+            };
+          }
+        }
+        case "probe": {
+          const providers = await this.getInferenceProviders();
+          let baseUrl = input.baseUrl?.trim();
+          let apiKey = input.apiKey;
+          if (input.profileId) {
+            const profile = providers.find((candidate) =>
+              candidate.id === input.profileId
+            );
+            if (!profile) {
+              throw new Error(
+                `LLM provider profile not found: ${input.profileId}`,
+              );
+            }
+            baseUrl = baseUrl || profile.baseUrl;
+            apiKey = apiKey ?? profile.apiKey;
+          }
+          if (!baseUrl) throw new Error("LLM provider URL is required");
+
+          const normalizedBaseUrl = normalizeOpenAIBaseUrl(baseUrl);
+          const parsedBaseUrl = new URL(normalizedBaseUrl);
+          const healthUrl = new URL("/health", parsedBaseUrl.origin).toString();
+          const startedAt = performance.now();
+          try {
+            let response = await fetch(healthUrl, {
+              headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+              signal: AbortSignal.timeout(5_000),
+            });
+            let checkedUrl = healthUrl;
+            if ([404, 405].includes(response.status)) {
+              response.body?.cancel();
+              response = await fetch(normalizedBaseUrl, {
+                headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+                signal: AbortSignal.timeout(5_000),
+              });
+              checkedUrl = normalizedBaseUrl;
+            }
+            response.body?.cancel();
+            return {
+              success: response.ok,
+              available: true,
+              status: response.status,
+              latencyMs: Math.round(performance.now() - startedAt),
+              message: response.ok
+                ? `Server is available (HTTP ${response.status})`
+                : `Server responded with HTTP ${response.status}`,
+              checkedUrl,
+            };
+          } catch (error) {
+            return {
+              success: false,
+              available: false,
+              status: null,
+              latencyMs: Math.round(performance.now() - startedAt),
+              message: error instanceof Error ? error.message : String(error),
+              checkedUrl: healthUrl,
+            };
+          }
         }
         case "environment_status": {
           let config: Awaited<ReturnType<typeof getServerConfig>> | null = null;
@@ -1172,6 +1250,7 @@ export class LLMResource implements Resource<LLMRequest, LLMResponse> {
   extractActions(input: LLMRequest) {
     if (
       input.action === "list" || input.action === "models" ||
+      input.action === "probe" ||
       input.action === "environment_status"
     ) {
       return [{

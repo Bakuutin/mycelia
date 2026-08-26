@@ -27,8 +27,11 @@ import {
   getAvailableForceStartSlots,
 } from "@/lib/jobs/worker-concurrency.ts";
 import {
-  buildTimelineRebuildBatches,
+  buildTimelineRebuildRangeBatches,
+  findTimelineRepairRanges,
+  normalizeTimelineRebuildRanges,
   timelineCampaignStatus,
+  timelineVerificationOutcome,
 } from "@/lib/jobs/timeline-recovery.ts";
 import {
   ensureTimelineCampaignDocument,
@@ -38,7 +41,16 @@ import {
 } from "@/lib/jobs/timeline-campaign-recovery.ts";
 import { resolveLiveJobState } from "@/lib/jobs/job-live-state.ts";
 import { runExactCount } from "@/lib/jobs/exact-count.ts";
+import { deriveDiarizationErrorOutcomes } from "@/lib/jobs/diarization-error-outcome.ts";
 import { buildWorkerCatalog } from "@/lib/jobs/worker-catalog.ts";
+import {
+  assertCanRunWorkerFromJobs,
+  assertCanUseGenericQueueAction,
+  DOMAIN_MANAGED_MEDIA_JOB_TYPES,
+  globalQueueClearJobsQuery,
+  jobTypesForGlobalQueueClear,
+  manualJobSchemas,
+} from "@/lib/jobs/job-action-policy.ts";
 import {
   beginDashboardRefresh,
   completeDashboardRefresh,
@@ -191,6 +203,84 @@ const ListJobsSchema = z.object({
   providerProfileId: z.string().trim().min(1).max(200).optional(),
   campaignId: z.string().trim().min(1).max(200).optional(),
 });
+
+const DEFAULT_HIDDEN_JOB_TYPES = new Set(["mediaRecognition"]);
+const LOGICAL_CAMPAIGN_JOB_TYPES = [
+  "mediaFolderImport",
+  "mediaRecognitionBatch",
+] as const;
+
+export function defaultVisibleJobTypes(types: Iterable<string>): string[] {
+  return [...types].filter((type) => !DEFAULT_HIDDEN_JOB_TYPES.has(type));
+}
+
+export function logicalJobListPipeline(
+  candidateQuery: Record<string, unknown>,
+  visibleQuery: Record<string, unknown>,
+  limit: number,
+) {
+  return [
+    // Exclude internal worker types before grouping/limit so a large child-job
+    // history cannot crowd its logical batch out of the result window.
+    { $match: candidateQuery },
+    {
+      $set: {
+        _jobsLogicalId: {
+          $cond: [
+            { $in: ["$type", LOGICAL_CAMPAIGN_JOB_TYPES] },
+            {
+              $ifNull: [
+                "$data.campaignId",
+                {
+                  $ifNull: [
+                    "$progress.campaignId",
+                    {
+                      $ifNull: [
+                        "$result.campaignId",
+                        {
+                          $ifNull: [
+                            "$data.batchId",
+                            {
+                              $ifNull: [
+                                "$progress.batchId",
+                                {
+                                  $ifNull: [
+                                    "$result.batchId",
+                                    { $toString: "$_id" },
+                                  ],
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            { $toString: "$_id" },
+          ],
+        },
+      },
+    },
+    { $sort: { createdAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: { type: "$type", logicalId: "$_jobsLogicalId" },
+        job: { $first: "$$ROOT" },
+      },
+    },
+    { $replaceRoot: { newRoot: "$job" } },
+    { $project: { _jobsLogicalId: 0 } },
+    // Lifecycle and dismissal belong to the latest logical attempt. Applying
+    // them before grouping lets an old failed recovery attempt leak into the
+    // Failed view after the same campaign has already completed successfully.
+    { $match: visibleQuery },
+    { $sort: { createdAt: -1, _id: -1 } },
+    { $limit: limit },
+  ];
+}
 
 const CancelAllJobsSchema = z.object({
   action: z.literal("cancel_all"),
@@ -391,6 +481,10 @@ const StartTimelineRebuildSchema = z.object({
   action: z.literal("start_timeline_rebuild"),
   start: z.string().datetime({ offset: true }).optional(),
   end: z.string().datetime({ offset: true }).optional(),
+  ranges: z.array(z.object({
+    start: z.string().datetime({ offset: true }),
+    end: z.string().datetime({ offset: true }),
+  })).min(1).max(240).optional(),
   batchDays: z.number().int().min(1).max(62).default(31),
 });
 
@@ -757,7 +851,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
   }
 
   private schemasAction() {
-    return jobRegistry.getJobSchemas();
+    return manualJobSchemas(jobRegistry.getJobSchemas());
   }
 
   private async get(input: z.infer<typeof GetJobSchema>, auth: Auth) {
@@ -877,6 +971,52 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       modelProvenance = entries;
     }
 
+    let diarizationErrorOutcomes:
+      | ReturnType<typeof deriveDiarizationErrorOutcomes>
+      | undefined;
+    const diarizationErrors = job.type === "diarization" &&
+        Array.isArray(job.result?.errors)
+      ? job.result.errors.slice(0, 100)
+      : [];
+    if (diarizationErrors.length > 0) {
+      const errorRanges = diarizationErrors.flatMap((error: any) => {
+        if (
+          typeof error?.originalId !== "string" ||
+          !ObjectId.isValid(error.originalId)
+        ) return [];
+        const start = validDate(error.start);
+        const end = validDate(error.end);
+        if (!start || !end) return [];
+        return [{
+          original_id: new ObjectId(error.originalId),
+          start: { $gte: start, $lte: end },
+          "vad.has_speech": true,
+        }];
+      });
+      const chunks = errorRanges.length > 0
+        ? await mongo({
+          action: "find",
+          collection: "audio_chunks",
+          query: { $or: errorRanges },
+          options: {
+            sort: { start: 1 },
+            limit: Math.min(diarizationErrors.length * 128, 5_000),
+            maxTimeMS: 5_000,
+            projection: {
+              original_id: 1,
+              start: 1,
+              diarized_at: 1,
+              diarizationFailure: 1,
+            },
+          },
+        })
+        : [];
+      diarizationErrorOutcomes = deriveDiarizationErrorOutcomes(
+        diarizationErrors,
+        chunks,
+      );
+    }
+
     return {
       id: job._id.toString(),
       type: job.type,
@@ -898,10 +1038,12 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       queuePresent: queueJob != null,
       queueAdmission: job.queueAdmission,
       ...(modelProvenance && { modelProvenance }),
+      ...(diarizationErrorOutcomes && { diarizationErrorOutcomes }),
     };
   }
 
   private async enqueue(input: z.infer<typeof EnqueueJobSchema>, auth: Auth) {
+    assertCanRunWorkerFromJobs(input.data.type);
     // Access already checked by ResourceManager - escalate to server auth
     const serverAuth = await getServerAuth();
     const options: EnqueueJobOptions = {
@@ -933,6 +1075,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     }
 
     const jobType = jobDoc.type as string;
+    // Domain campaign state, billing fences, and recovery live outside BullMQ.
+    // Reject before queue removal or any Mongo cancellation write.
+    assertCanUseGenericQueueAction(jobType);
     const wasActive = jobDoc.state === "active";
     const queue = getQueue(jobType);
     const job = await queue.getJob(id);
@@ -1050,7 +1195,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     // Never force-remove active BullMQ jobs: their processors keep running
     // without a lock and later surface as stalled, even after committing side
     // effects. Drain only jobs that have not started; active work completes.
-    const types = jobRegistry.getJobTypes();
+    const types = jobTypesForGlobalQueueClear(jobRegistry.getJobTypes());
     for (const type of types) {
       const queue = getQueue(type);
       await queue.drain(true);
@@ -1059,7 +1204,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const result = await mongo({
       action: "updateMany",
       collection: "jobs",
-      query: { state: { $in: ["waiting", "delayed"] } },
+      query: globalQueueClearJobsQuery(),
       update: {
         $set: {
           state: "cancelled",
@@ -1074,6 +1219,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       success: true,
       cancelledCount: result.modifiedCount ?? 0,
       activeJobsContinued: true,
+      protectedJobTypes: [...DOMAIN_MANAGED_MEDIA_JOB_TYPES],
     };
   }
 
@@ -1147,6 +1293,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(input.workerType)) {
       throw new Error(`Unknown worker type: ${input.workerType}`);
     }
+    // Keep domain campaign state and its coordinator/children consistent.
+    // This guard runs before queue.drain and before the Mongo update.
+    assertCanUseGenericQueueAction(input.workerType);
 
     // Drain only work that has not started. Removing an active BullMQ job with
     // obliterate(force) invalidates its lock while its processor is still
@@ -1189,6 +1338,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(input.workerType)) {
       throw new Error(`Unknown worker type: ${input.workerType}`);
     }
+    assertCanRunWorkerFromJobs(input.workerType);
 
     // A manual retry must not create another batch of known provider errors.
     await assertJobServicesHealthy(input.workerType, true);
@@ -2160,17 +2310,27 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     };
   }
 
-  private async timelineSourceStats(auth: Auth) {
+  private async timelineSourceStats(auth: Auth, exactCounts = false) {
     const mongo = await getMongoResource(auth);
     return await Promise.all(
       TIMELINE_SOURCE_COLLECTIONS.map(async ([collection, label]) => {
-        const [collectionStats, first, last] = await Promise.all([
-          mongo({
-            action: "aggregate",
-            collection,
-            pipeline: [{ $collStats: { count: {} } }],
-            options: { maxTimeMS: 5_000 },
-          }),
+        const [countRows, first, last] = await Promise.all([
+          exactCounts
+            ? mongo({
+              action: "aggregate",
+              collection,
+              pipeline: [
+                { $match: { start: { $type: "date" } } },
+                { $count: "count" },
+              ],
+              options: { allowDiskUse: true, maxTimeMS: 60_000 },
+            })
+            : mongo({
+              action: "aggregate",
+              collection,
+              pipeline: [{ $collStats: { count: {} } }],
+              options: { maxTimeMS: 5_000 },
+            }),
           mongo({
             action: "findOne",
             collection,
@@ -2199,16 +2359,108 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         return {
           collection,
           label,
-          // countDocuments({}) walks the entire 949k-chunk collection on the
-          // live database. $collStats reads the maintained collection count
-          // instead, keeping this explicit audit sub-second.
-          documents: Number(collectionStats?.[0]?.count ?? 0),
+          // Campaign planning uses maintained metadata. The operator-triggered
+          // exact audit scans date-bearing rows because $collStats can lag
+          // behind recent bulk ingestion and produce false mismatches.
+          documents: Number(countRows?.[0]?.count ?? 0),
           firstStart: firstStart?.toISOString() ?? null,
           lastStart: lastStart?.toISOString() ?? null,
           lastEnd: lastEnd?.toISOString() ?? null,
         };
       }),
     );
+  }
+
+  private async timelineDailyRepairRanges(auth: Auth) {
+    const mongo = await getMongoResource(auth);
+    const [sourceDays, histogramDays] = await Promise.all([
+      Promise.all(
+        TIMELINE_SOURCE_COLLECTIONS.map(async ([collection]) => ({
+          collection,
+          rows: await mongo({
+            action: "aggregate",
+            collection,
+            pipeline: [
+              { $match: { start: { $type: "date" } } },
+              {
+                $group: {
+                  _id: { $dateTrunc: { date: "$start", unit: "day" } },
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { _id: 1 } },
+            ],
+            options: { allowDiskUse: true, maxTimeMS: 60_000 },
+          }) as Array<{ _id: Date; count: number }>,
+        })),
+      ),
+      mongo({
+        action: "aggregate",
+        collection: "histogram_1day",
+        pipeline: [
+          {
+            $group: {
+              _id: "$start",
+              audio_chunks: {
+                $sum: { $ifNull: ["$totals.audio_chunks.count", 0] },
+              },
+              transcriptions: {
+                $sum: { $ifNull: ["$totals.transcriptions.count", 0] },
+              },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ],
+        options: { allowDiskUse: true, maxTimeMS: 60_000 },
+      }) as Promise<
+        Array<{
+          _id: Date;
+          audio_chunks: number;
+          transcriptions: number;
+        }>
+      >,
+    ]);
+
+    const rawByDay = new Map<
+      number,
+      Record<"audio_chunks" | "transcriptions", number>
+    >();
+    for (const { collection, rows } of sourceDays) {
+      for (const row of rows) {
+        const start = validDate(row._id);
+        if (!start) continue;
+        const counts = rawByDay.get(start.getTime()) ?? {
+          audio_chunks: 0,
+          transcriptions: 0,
+        };
+        counts[collection] = Number(row.count ?? 0);
+        rawByDay.set(start.getTime(), counts);
+      }
+    }
+
+    return findTimelineRepairRanges(
+      [...rawByDay.entries()].map(([start, counts]) => ({
+        start: new Date(start),
+        counts,
+      })),
+      histogramDays.flatMap((row) => {
+        const start = validDate(row._id);
+        return start
+          ? [{
+            start,
+            counts: {
+              audio_chunks: Number(row.audio_chunks ?? 0),
+              transcriptions: Number(row.transcriptions ?? 0),
+            },
+          }]
+          : [];
+      }),
+    ).map((range) => ({
+      start: range.start.toISOString(),
+      end: range.end.toISOString(),
+      days: range.days,
+      differences: range.differences,
+    }));
   }
 
   private async terminalTranscriptionMarkerStats(
@@ -2381,7 +2633,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     });
     const campaignId = latest?.data?.timelineRebuildCampaignId;
     if (!campaignId) return null;
-    await ensureTimelineCampaignDocument(mongo, campaignId);
+    const campaignDocument = await ensureTimelineCampaignDocument(
+      mongo,
+      campaignId,
+    );
     const durableReport = await syncTimelineCampaign(mongo, campaignId);
 
     const jobs = await mongo({
@@ -2466,6 +2721,22 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
             }, null),
           )?.toISOString() ?? null
           : null,
+      mode: campaignDocument?.mode ??
+        (Array.isArray(campaignDocument?.ranges)
+          ? "selected_ranges"
+          : "selected_period"),
+      ranges: Array.isArray(campaignDocument?.ranges)
+        ? campaignDocument.ranges.flatMap((range: any) => {
+          const rangeStart = validDate(range?.start);
+          const rangeEnd = validDate(range?.end);
+          return rangeStart && rangeEnd
+            ? [{
+              start: rangeStart.toISOString(),
+              end: rangeEnd.toISOString(),
+            }]
+            : [];
+        })
+        : [],
       failures: jobs.filter((job) =>
         job.state === "failed" || job.state === "cancelled"
       ).slice(0, 5).map((job) => ({
@@ -2497,6 +2768,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       status: "not_checked",
       sources: [],
       histograms: [],
+      repairPlan: { ranges: [], days: 0 },
       bookkeeping: {
         checked: false,
         terminalSequences: null,
@@ -2566,20 +2838,21 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         operationId,
         report,
       );
-      if (
-        report.status === "healthy" &&
-        report.campaign?.status === "verifying"
-      ) {
+      if (report.campaign?.status === "verifying") {
+        const verification = timelineVerificationOutcome(
+          report.status === "healthy" ? "healthy" : "needs_attention",
+        );
         await mongo({
           action: "updateOne",
           collection: TIMELINE_REBUILD_CAMPAIGNS,
           query: { _id: report.campaign.campaignId },
           update: {
             $set: {
-              status: "completed",
+              ...verification,
               autoRecover: false,
               completedAt: new Date(),
-              blockingReason: null,
+              verifiedAt: new Date(),
+              verificationStatus: report.status,
             },
           },
           options: { touchUpdatedAt: false },
@@ -2615,7 +2888,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       campaign,
       lastBookkeepingRepair,
     ] = await Promise.all([
-      timed("sourceMetadata", () => this.timelineSourceStats(auth)),
+      timed("sourceExactCounts", () => this.timelineSourceStats(auth, true)),
       timed(
         "histogramTotals",
         () =>
@@ -2682,11 +2955,18 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       difference: daily.totals[source.collection as keyof typeof daily.totals] -
         source.documents,
     }));
+    const repairRanges =
+      sourcesWithHistogram.some((source) => source.difference !== 0)
+        ? await timed(
+          "repairRangePlan",
+          () => this.timelineDailyRepairRanges(auth),
+        )
+        : [];
     const issues: Array<{
       severity: "warning" | "error";
       code: string;
       message: string;
-      action: "full_rebuild" | "stale_only" | "resume_campaign";
+      action: "repair_ranges" | "stale_only" | "resume_campaign";
       actionLabel: string;
     }> = [];
     for (const source of sourcesWithHistogram) {
@@ -2695,9 +2975,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           severity: "error",
           code: `histogram_count_${source.collection}`,
           message:
-            `${source.label}: daily histogram differs from raw documents by ${source.difference}.`,
-          action: "full_rebuild",
-          actionLabel: "Rebuild Timeline density",
+            `${source.label}: Timeline density differs from raw documents by ${source.difference}.`,
+          action: "repair_ranges",
+          actionLabel: "Repair affected dates",
         });
       }
     }
@@ -2733,6 +3013,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       status: issues.length === 0 ? "healthy" : "needs_attention",
       sources: sourcesWithHistogram,
       histograms,
+      repairPlan: {
+        ranges: repairRanges,
+        days: repairRanges.reduce((sum, range) => sum + range.days, 0),
+      },
       bookkeeping,
       lastBookkeepingRepair,
       campaign,
@@ -2746,13 +3030,13 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           "latest rebuild campaign completion",
         ],
         note:
-          "Matching totals and ranges are a reconciliation check, not a byte-for-byte proof of every bucket. A full rebuild is the deterministic repair when any difference is found.",
+          "Matching totals and ranges are a reconciliation check, not a byte-for-byte proof of every bucket. When totals differ, the repair plan identifies exact UTC days and rebuilds only those bounded ranges.",
       },
       performance: {
         totalMs: Math.round(performance.now() - auditStartedAt),
         stages: stageMs,
         note:
-          "The main audit uses collection metadata and indexed ranges. Exact terminal-marker reconciliation runs separately so it cannot stall this report.",
+          "The manual audit exactly counts date-bearing raw rows and reads indexed ranges. Exact terminal-marker reconciliation runs separately so it cannot stall this report.",
       },
     };
   }
@@ -2811,20 +3095,37 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       );
     }
 
-    const sources = await this.timelineSourceStats(auth);
-    const earliest = sources.map((source) => validDate(source.firstStart))
-      .filter((date): date is Date => date != null)
-      .sort((a, b) => a.getTime() - b.getTime())[0];
-    const latest = sources.map((source) => validDate(source.lastEnd))
-      .filter((date): date is Date => date != null)
-      .sort((a, b) => b.getTime() - a.getTime())[0];
-    const start = input.start ? new Date(input.start) : earliest;
-    const end = input.end ? new Date(input.end) : latest;
-    if (!start || !end) {
-      throw new Error("No timeline source range is available to rebuild");
+    if (input.ranges && (input.start || input.end)) {
+      throw new Error("Use either Timeline rebuild ranges or start/end");
+    }
+    let mode: "affected_dates" | "selected_period" | "full";
+    let ranges: Array<{ start: Date; end: Date }>;
+    if (input.ranges) {
+      mode = "affected_dates";
+      ranges = normalizeTimelineRebuildRanges(
+        input.ranges.map((range) => ({
+          start: new Date(range.start),
+          end: new Date(range.end),
+        })),
+      );
+    } else {
+      const sources = await this.timelineSourceStats(auth);
+      const earliest = sources.map((source) => validDate(source.firstStart))
+        .filter((date): date is Date => date != null)
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      const latest = sources.map((source) => validDate(source.lastEnd))
+        .filter((date): date is Date => date != null)
+        .sort((a, b) => b.getTime() - a.getTime())[0];
+      const start = input.start ? new Date(input.start) : earliest;
+      const end = input.end ? new Date(input.end) : latest;
+      if (!start || !end) {
+        throw new Error("No timeline source range is available to rebuild");
+      }
+      mode = input.start || input.end ? "selected_period" : "full";
+      ranges = [{ start, end }];
     }
 
-    const batches = buildTimelineRebuildBatches(start, end, input.batchDays);
+    const batches = buildTimelineRebuildRangeBatches(ranges, input.batchDays);
     if (batches.length > 240) {
       throw new Error(
         `Refusing to enqueue ${batches.length} jobs at once; choose a larger batch size or a smaller range.`,
@@ -2834,6 +3135,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const campaignId = new ObjectId().toString();
     const createdAt = new Date();
     const firstBatch = batches[0];
+    const start = ranges[0].start;
+    const end = ranges.at(-1)!.end;
     await mongo({
       action: "insertOne",
       collection: TIMELINE_REBUILD_CAMPAIGNS,
@@ -2848,6 +3151,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         batchDays: input.batchDays,
         start,
         end,
+        mode,
+        ranges,
         createdAt,
         lastActivityAt: createdAt,
       },
@@ -2911,6 +3216,11 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       status: "queued",
       start: start.toISOString(),
       end: end.toISOString(),
+      mode,
+      ranges: ranges.map((range) => ({
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+      })),
       batchDays: input.batchDays,
       plannedJobs: batches.length,
       queuedJobs: 1,
@@ -2976,6 +3286,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(workerType)) {
       throw new Error(`Unknown worker type: ${workerType}`);
     }
+    assertCanRunWorkerFromJobs(workerType);
 
     // Pause first so draining the queue cannot race with a worker taking the
     // next waiting job.
@@ -3178,6 +3489,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     });
     const job = jobs[0];
     if (!job) throw new Error(`Job ${input.id} not found`);
+    assertCanRunWorkerFromJobs(job.type);
     if (job.state !== "active") {
       throw new Error("Only an active job can be restarted");
     }
@@ -3254,6 +3566,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(input.workerType)) {
       throw new Error(`Unknown worker type: ${input.workerType}`);
     }
+    assertCanRunWorkerFromJobs(input.workerType);
     if (this.activeWorkerActions.has(input.workerType)) {
       throw new Error(
         `Another ${input.workerType} launch is already in progress`,
@@ -3320,7 +3633,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
 
     // Legacy types keep historical jobs of removed workers visible.
     const types = input.types ||
-      [...jobRegistry.getJobTypes(), ...LEGACY_JOB_TYPES];
+      [
+        ...defaultVisibleJobTypes(jobRegistry.getJobTypes()),
+        ...LEGACY_JOB_TYPES,
+      ];
     // "cancelled" belongs here: queue maintenance reaps jobs into that state
     // rather than failing them, and omitting it made those jobs vanish from the
     // list along with the only record of why they stopped.
@@ -3348,21 +3664,18 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       : {};
 
     const jobs = await mongo({
-      action: "find",
+      action: "aggregate",
       collection: "jobs",
-      query: {
+      pipeline: logicalJobListPipeline({
         type: { $in: types },
+        ...providerQuery,
+        ...campaignQuery,
+      }, {
         state: { $in: queryStatuses },
         dismissedAt: { $exists: false },
         archivedAt: { $exists: false },
         ...viewQuery,
-        ...providerQuery,
-        ...campaignQuery,
-      },
-      options: {
-        sort: { createdAt: -1 },
-        limit: totalLimit,
-      },
+      }, totalLimit),
     });
 
     // QueueEvents can be missed while the backend reloads, leaving a small
@@ -3791,7 +4104,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       query: {
         state: "failed",
         createdAt: { $gte: since },
-        ...(input.types?.length ? { type: { $in: input.types } } : {}),
+        ...(input.types?.length
+          ? { type: { $in: input.types } }
+          : { type: { $nin: [...DEFAULT_HIDDEN_JOB_TYPES] } }),
       },
       options: {
         sort: { createdAt: -1 },
@@ -3908,7 +4223,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         state: catalogState,
         asOf: catalogAsOf ? new Date(catalogAsOf).toISOString() : undefined,
         workers: catalog,
-        schemas: registeredTypes.length ? jobRegistry.getJobSchemas() : {},
+        schemas: registeredTypes.length
+          ? manualJobSchemas(jobRegistry.getJobSchemas())
+          : {},
         ...(pythonCapabilitiesError
           ? { lastError: pythonCapabilitiesError }
           : {}),

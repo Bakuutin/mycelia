@@ -124,6 +124,16 @@ curl -fsS http://localhost:8085/health | jq
 Ответ должен содержать `status=ok`, `ready=true`, `device=cpu`, fingerprint и
 `embeddingSpaceId`.
 
+Автоматическое live/retroactive-сопоставление допускается только при точном
+совпадении `embeddingSpaceId` сегмента и voice profile. Маршрут или сегмент без
+точного provenance пропускается. Новые `matched_speaker` сохраняют
+использованные `profile_revision` и `embedding_space_id`; старым совпадениям эти
+значения ретроспективно не приписываются, потому что это не доказывает исходную
+revision. Такие совпадения являются лишь некалиброванными кандидатами.
+Проверенной идентификацией считается совместимое решение `speakerIdentity`,
+созданное по валидной calibration; ручные назначения спикеров остаются
+авторитетными.
+
 На Apple Silicon Docker не даёт этому CUDA/PyTorch сервису Apple GPU.
 Используйте CPU image и выделите Docker Desktop минимум 10 GB, лучше 12 GB RAM.
 
@@ -438,6 +448,19 @@ building/interrupted -> failed
 6. После QA нажать **Activate**.
 7. Сохранить superseded generation для rollback.
 
+Activation сначала делает exact preview и блокируется, если target пустой,
+generation не завершена/имеет errors или тот же диапазон использует running
+identity campaign. Replacement segments активируются до supersede старых, чтобы
+Timeline не оставался без покрытия.
+
+Если прежняя версия уже ошибочно активировала пустую generation, откройте
+**Operations & generations → Coverage repair**. Read-only preview показывает
+точное число recoverable segments и predecessor run IDs. После отдельного
+подтверждения `REPAIR <runId> <count>` resume-safe операция восстанавливает
+только доказанные predecessor segments/run metadata и помечает пустой target
+`failed`. Она ничего не удаляет; при неизвестном provenance или более новом
+active coverage автоматический repair запрещён.
+
 Нельзя purge `building` или `active` run. Перед первым purge сделайте Mongo
 backup и проверьте restore. Затем **Preview purge**, сверка точного run/count и
 ручное подтверждение. Raw audio, VAD, STT и transcripts purge не затрагивает.
@@ -455,8 +478,12 @@ backup и проверьте restore. Затем **Preview purge**, сверка
 
 Один и тот же Timeline-интервал можно сначала назначить профилю как label, а
 затем сохранить как voice sample, но не каждая разметка годится для enrollment.
-Короткие обрывки, overlap, шум и мычание можно размечать для Timeline, но не
-следует добавлять в эталонный набор профиля.
+Короткие обрывки, overlap, шум и мычание можно размечать как **Sky · timeline
+only**, но они не входят в calibration и не должны попадать в эталонный набор
+профиля. **Sky · clear** одновременно создаёт manual Timeline identity и
+calibration-positive evidence. **Add clean clip to profile** — отдельное
+действие, которое сохраняет эталонный audio sample и требует последующего
+rebuild.
 
 Для Sky:
 
@@ -465,24 +492,38 @@ backup и проверьте restore. Затем **Preview purge**, сверка
 3. Прикрепите samples к Sky и проверьте карточки внутри профиля.
 4. В **Review & calibration** нажмите **Re-enroll Sky from saved samples**.
 5. Проследите `profileReenrollment` job на **Jobs**.
-6. Проверьте новую revision и текущий `embeddingSpaceId`.
+6. Проверьте новую revision, число sample prototypes и текущую совместимость
+   voice model. Полный `embeddingSpaceId` нужен только в Advanced/диагностике.
 
 Лучше несколько разных 10–30-секундных samples, чем один длинный: разные
 комнаты, микрофоны и манера речи. Избегайте второго говорящего, музыки и
-overlap.
+overlap. Rebuild сохраняет normalized embedding каждого sample как versioned
+prototype и показывает outliers. На Learn сервер сравнивает `centroid`,
+`max prototype` и `top-2 prototype mean`, выбирает максимальный safe recall и
+замораживает стратегию до независимого Check.
 
 ### Sample из Timeline
 
-1. На Timeline выберите 3–120 секунд с одним спикером; лучше 10–30 секунд.
+1. Откройте конкретный speaker interval, привязанный к одной source recording, и
+   выберите 3–120 секунд; лучше 10–30 секунд.
 2. Нажмите **Voice sample**.
 3. Выберите существующий профиль или **New speaker** и введите имя.
 4. Нажмите **Save and rebuild profile** либо **Create speaker and save sample**.
-5. Проследите enrollment job.
+5. Проследите `profileReenrollment` job.
 
-Source interval сохраняется вместе с sample. Другие профили добавляются тем же
-способом, но каждому нужна своя calibration в совместимом embedding space.
+Source recording ID и interval сохраняются вместе с sample и переносятся в
+prototype при rebuild. Эта recording затем автоматически исключается из Learn и
+Check: аудио, из которого создан профиль, не является независимой validation.
+Произвольное Timeline-выделение без однозначной source recording нельзя
+сохранить как voice sample. Mic/file-upload samples считаются внешними и
+recording ID не требуют.
 
-Сохранение audio и постановка enrollment job — два отдельных подтверждаемых
+Старый Timeline-derived prototype без source recording или точного interval
+блокирует новую calibration. Удалите такой sample, добавьте его заново из
+конкретного speaker interval и выполните rebuild. Другие профили добавляются тем
+же способом, но каждому нужна своя calibration в совместимом embedding space.
+
+Сохранение audio и постановка profile rebuild — два отдельных подтверждаемых
 шага. Если все diarizator slots заняты, UI явно показывает, что sample уже
 сохранён и привязан к профилю, и предлагает **Retry profile update** без
 повторной загрузки или дубликата. После закрытия диалога тот же rebuild можно
@@ -510,21 +551,24 @@ Review queue содержит активные unclassified/uncertain segments:
 - undo удаляет последнее ручное решение;
 - **Skip** сохраняется как отдельное review-решение и оставляет segment вне
   training/calibration;
-- autoplay и shortcuts двигают очередь;
+- autoplay и shortcuts двигают очередь; три недавно выбранных других спикера
+  доступны отдельными кнопками и клавишами `1`–`3`, остальные остаются в
+  dropdown; цифровые shortcuts работают и после клика по плееру/кнопке, но не
+  перехватываются во время ввода текста;
 - playback всегда координируется как один активный clip; видимый playhead и
   elapsed time сбрасываются при переходе к следующему segment;
 - review session, небольшое окно из 5/10/20 segments и текущая позиция
   сохраняются на backend, поэтому работу можно продолжить позже;
-- default 10-item window автоматически сменяется следующим после разметки всех
-  элементов; toggle **Rolling** разрешает оставить переход ручным;
+- default 10-item buffer автоматически сменяется следующим после разметки всех
+  элементов; это только preload, а не batch, который надо отдельно завершать;
 - завершение неполной session безопасно: уже сохранённые labels учитываются
   сразу, а unanswered segments могут попасть в следующую session;
 - compact list показывает все элементы текущего небольшого окна;
 - **Edit** доступен и для speaker label, и для Skip: старую метку можно заменить
   другим профилем или шумом;
-- **Reviewed history** показывает последние решения из всех сохранённых окон и
-  сессий. `Listen / edit` повторно открывает audio, а Timeline даёт временной
-  контекст;
+- **Latest saved label** всегда показывает последнее решение. **Show all**
+  раскрывает остальные решения newest-first; выбор строки повторно открывает
+  audio и редактирование, а Timeline даёт временной контекст;
 - соседние короткие segments одного anonymous speaker можно объединить в
   playback group и разметить одним подтверждённым batch.
 
@@ -558,21 +602,24 @@ validation recordings проверяют переносимость.
   выбранного профиля. Этот режим полезен после смены calibration и для поиска
   false positives.
 
-Затем выберите источник и сначала нажмите **Preview source**:
+В обычном режиме нажмите одну кнопку **Start recommended review**. Она сначала
+замораживает рекомендованный source, затем создаёт session и сразу возвращает
+первый clip — refresh страницы не нужен. В Advanced доступны явный preview и
+более узкие source:
 
 - **All matching recordings** — весь совместимый диапазон;
 - **Selected recordings** — сначала показывает найденные recordings, затем
   позволяет отфильтровать и отметить нужные;
 - **Current Timeline range** — на Timeline выделите точный интервал и нажмите
   **Review voices**;
-- **Specific diarization generation** — только одна активная generation в том
-  же embedding space.
+- **Specific diarization generation** — только одна активная generation в том же
+  embedding space.
 
-Preview показывает число подходящих segments и recordings, причины исключения
-коротких/дублирующихся фрагментов и до пяти проигрываемых примеров. Создание
-session использует именно зафиксированный preview scope: изменения периода,
-recordings, run или embedding space требуют нового preview. Эти фильтры также
-применяются ко всем следующим rolling-окнам, а не только к первому.
+Advanced preview показывает число подходящих segments и recordings, причины
+исключения коротких/дублирующихся фрагментов и до пяти проигрываемых примеров.
+Создание session использует именно зафиксированный preview scope: изменения
+периода, recordings, run или embedding space требуют нового preview. Эти фильтры
+также применяются ко всем следующим rolling-окнам, а не только к первому.
 
 Рекомендуемый режим **Clear speech · ≥1s · deduplicate** исключает из новой
 очереди sub-second fragments и почти полностью перекрывающиеся интервалы одной
@@ -587,69 +634,159 @@ recordings, run или embedding space требуют нового preview. Эт
 оставшиеся кандидаты сохраняются в session buffer, а rolling-переход загружает
 следующие 5/10/20 без потери позиции.
 
-Цель auto-Sky precision — не ниже 98%. Precision важнее recall: сомнительные
-случаи должны остаться `uncertain`.
+Рекомендуемая цель auto-Sky precision — 98%. Precision важнее recall:
+сомнительные случаи должны остаться `uncertain`. Для проверки workflow можно
+явно сохранить provisional calibration с целью 95% или 90%, но она разрешает
+только bounded pilot длительностью не более 24 часов и не открывает full
+historical backfill.
+
+Если Check precision остаётся низкой после 100+ labels, сначала откройте **Wrong
+Sky results** и прослушайте каждую ошибку кнопками **Previous problem** / **Next
+problem · autoplay**. Исправляйте только действительно неверные manual labels.
+Если label верна, это уже ошибка профиля или matcher, а не повод менять
+разметку. Затем проверьте сохранённые voice samples: каждый должен содержать
+только одного спикера, без overlap, музыки и длинной тишины, и нормально
+проигрываться. Общей длительности самой по себе недостаточно; полезнее 2–4
+чистых sample по 10–20 секунд из реально разных микрофонов/комнат. Удалите или
+замените загрязнённый sample, выполните **Rebuild profile**, затем заново
+пересчитайте и сохраните calibration. Manual labels при rebuild сохраняются, но
+calibration старой revision закономерно становится stale.
 
 ### Calibration wizard
 
-UI не принимает вручную введённые thresholds или precision. Backend:
+UI позволяет выбрать требуемую precision: 98% для production, готовые 95%/90%
+для provisional pilot или custom значение 90–100% с шагом 0,5%. Это policy
+precision, а не сырой cosine threshold и не подмена результата: backend:
 
 1. Берёт latest manual annotation каждого segment.
 2. Исключает embeddings из несовместимого space.
-3. Считает cosine scores против текущей revision профиля.
-4. Делит source recordings на непересекающиеся **Fit** и **Check** sets.
-5. Подбирает positive/negative thresholds на Fit.
-6. Измеряет precision/coverage на ранее не виденном Check audio.
-7. Разрешает сохранение только при минимум 40 Sky, 40 not-Sky, 100 совместимых
-   labels и auto-Sky precision не ниже 98%.
+3. Исключает source recordings, из которых были построены enrollment prototypes;
+   Timeline prototype без provenance блокирует preview.
+4. Считает cosine scores против текущей revision профиля.
+5. Делит оставшиеся source recordings на непересекающиеся **Fit** и **Check**
+   sets.
+6. Подбирает positive threshold и, когда Fit data это подтверждает, conservative
+   negative threshold.
+7. Измеряет precision/coverage на ранее не виденном Check audio.
+8. Разрешает сохранение только при минимум 40 Sky, 40 not-Sky, 100 совместимых
+   labels, а также минимум 20 Sky, 20 not-Sky и 20 automatic Sky matches именно
+   в независимом Check set; его precision должна быть не ниже выбранной цели.
 
-Карточки recordings показывают дату/время и label mix; raw ObjectId оставлен
-только вторичной ссылкой. Если Check set содержит только Sky или только not-Sky,
-добавьте разметку другого класса из другой записи. Кнопка сохранения показывает
-конкретные blockers и остаётся disabled, пока они не устранены. При сохранении
-backend пересчитывает метрики повторно, поэтому значение из браузера нельзя
-подменить.
+Одного верного automatic match с формальными 100% недостаточно. Минимальная
+поддержка Check нужна, чтобы процент не был случайным результатом слишком
+маленькой выборки. UI отдельно показывает Check support, automatic Sky matches,
+false positives, recall и число clips, оставшихся `uncertain`.
 
-**Recalculate preview** запускает реальный server calculation и показывает
-выполнение, время результата и `Ready to save` либо blockers. Это ещё не
-сохранённая calibration. **Fit thresholds** выбирает recordings, влияющие на
-границы; **Validate on held-out audio** проверяет эти границы на других
-recordings; **Exclude** убирает recording только из текущего расчёта, не удаляя
-labels.
+Для production raw cosine thresholds всегда автоматически вычисляет сервер; UI
+не принимает вручную заданные production-пороги. Единственное исключение — явный
+provisional pilot: сначала сервер всё равно вычисляет recommendation, а оператор
+может только **повысить** positive threshold относительно неё и никогда не может
+его понизить. Если безопасный negative threshold не найден, calibration получает
+`negativeDecisionMode=uncertain_only`: auto not-Sky отключается, а все scores
+ниже positive Sky threshold остаются `uncertain` для ручной проверки. UI
+показывает **Auto not-Sky off · remains uncertain** вместо технического sentinel
+`-1`. Это conservative Sky-first mode, а не failed calibration. Manual not-Sky
+labels при этом сохраняются. Даже если negative threshold выглядит безопасным на
+Learn, сервер оставляет automatic not-Sky выключенным, пока независимый Check не
+подтвердит выбранную precision минимум на 20 rejected decisions. Поэтому
+verified `not-Sky` никогда не строится только на Learn audio.
+
+Для provisional pilot доступен **Advanced · stricter automatic Sky matching**.
+Он позволяет только повысить positive cosine threshold относительно server
+recommendation с шагом `0.005`; понизить порог UI и backend не разрешают.
+Повышение обычно уменьшает число auto-Sky matches, coverage и recall, но может
+улучшить precision. Preview сохраняет исходную рекомендацию отдельно, помечает
+эффективный порог как `positiveThresholdSource=operator_stricter` и
+пересчитывает Check metrics. **Use server recommendation** удаляет override.
+Смена precision target или Fit/Check split также автоматически его сбрасывает.
+
+Для production target ≥98% override недоступен: выбирать порог после просмотра
+Check metrics означало бы подгонять модель по validation data. Operator-stricter
+override поэтому остаётся только явно provisional evidence и не открывает full
+backfill.
+
+Для цели ниже 98% UI требует отдельное подтверждение риска, calibration получает
+policy `pilot`, а Python worker независимо проверяет наличие start/end и
+диапазон не более 24 часов. Поэтому прямой технический запуск job не обходит
+ограничение.
+
+Review работает как непрерывный stream. Внутренний buffer 5/10/20 нужен только
+для preloading; с включённым **Continuous** следующий buffer загружается
+автоматически, без отдельной кнопки завершения batch. Stream progress показывает
+ответы в текущем сохранённом stream, а calibration progress объединяет пригодные
+labels из всех streams. Завершённый stream не теряет ответы: **Continue
+reviewing** создаёт следующий, а старые ответы остаются доступны в Reviewed
+history.
+
+Карточки recordings показывают дату/время и label mix без raw ObjectId. Один
+селектор роли явно предлагает **Learn — choose threshold**, **Check — test
+unseen audio** или **Not used — ignore for now**. Последний вариант исключает
+recording только из текущего расчёта и не удаляет labels. **Review saved
+labels** открывает history, отфильтрованную по этой записи. Если Check содержит
+только Sky или только not-Sky, добавьте другой класс из другой записи.
+
+Смена роли recording пересчитывает preview автоматически. **Refresh result**
+повторяет server calculation с последними saved labels и показывает фактическую
+independent accuracy, false Sky matches и coverage. Это не сохраняет calibration
+и не запускает classification. **Review problem clips** раскрывает конкретные
+false-Sky и missed-Sky segments из Check с waveform, Timeline и тем же
+редактором label. Исправляйте только действительно ошибочную ручную метку; если
+метка верна, проблема относится к threshold/model, а не к review history. Кнопка
+сохранения остаётся disabled, пока blockers не устранены; при сохранении backend
+повторно вычисляет метрики.
 
 Сохранённая calibration считается рабочей только с
 `contractVersion=server-computed-v1`, server provenance, текущими profile
 revision/embedding space, непересекающимися Fit/Check recordings и реально
-измеренной Check precision не ниже цели. Более старые client-asserted records
-показываются как `stale` и не разблокируют pilot. Старые automatic identity
-решения не удаляются, но отдельно считаются как `stale decisions`; Timeline и
-Transcript показывают их как unclassified до новой совместимой классификации.
+измеренной Check precision не ниже выбранной цели. Calibration с целью 98% и
+выше получает policy `full`; явно подтверждённая цель 90–97% — policy `pilot` и
+`maxRangeHours=24`. Более старые client-asserted records показываются как
+`stale` и не разблокируют pilot. Старые automatic identity решения не удаляются,
+но отдельно считаются как `stale decisions`; Timeline и Transcript показывают их
+как unclassified до новой совместимой классификации.
+
+Calibration также привязана к `evidenceSnapshotHash`: digest конкретных latest
+manual decisions, labels и provenance embeddings, которые участвовали в Learn и
+Check. Edit/undo/skip любой такой разметки сразу делает старую calibration stale
+и снимает её с active head профиля. После правки дождитесь автоматического
+preview и снова нажмите Save. Равный digest и те же параметры возвращают уже
+существующую calibration; эквивалентные старые записи становятся `superseded`, а
+не удаляются.
 
 ## 10. Identity pilot и backfill
 
-После актуального Sky profile и validated calibration откройте
-`https://localhost:4433/jobs?type=speakerIdentity` и нажмите play у worker.
-Launcher сам подставляет primary Sky, текущую profile revision,
-server-validated calibration и совместимую active generation; оператор выбирает
-только 24 часа, 7/14 дней или custom range. Raw `profileId`, `runId`, revision,
-calibration ID, cursor и campaign ID вручную вводить не нужно. Те же ссылки
-доступны из Review & calibration, Operations & generations, Audio Pipeline и
-Job Details.
+После актуального Sky profile и validated calibration нажмите **Classify all
+compatible history** на Voice Identity или play у
+`https://localhost:4433/jobs?type=speakerIdentity`. Preflight считает реальные
+active segments до фиксированного cutoff, делит их по совместимым
+`runId + embeddingSpaceId`, исключает пустые generations и показывает объём и
+ожидаемые batches. Raw `profileId`, `runId`, revision, calibration ID, cursor и
+campaign ID вручную вводить не нужно. Custom period находится в Advanced. Для
+provisional calibration он обязателен и не может быть длиннее 24 часов.
+
+Campaign резервирует стабильный job ID до enqueue. Если backend завершился в
+узком промежутке между reservation и BullMQ, maintenance watchdog находит
+отсутствующий job record и повторно ставит тот же ID, не создавая второй
+campaign. Python перед каждым batch и непосредственно перед decision writes
+проверяет, что job всё ещё является текущим владельцем active campaign.
 
 Порядок rollout:
 
-1. **24 hours → Classify existing**.
+1. Для provisional — **24 hours → Start pilot**; для production — **Classify all
+   compatible history**.
 2. Проверить случайные `identified`, `unknown` и все `uncertain`.
 3. Исправить ошибки manual annotations.
 4. Расширить до **7 days**.
 5. Ещё раз проверить distribution и false positives.
-6. Запускать историю bounded ranges.
+6. Для production дождаться одной campaign по всей совместимой истории.
 
 Состояния:
 
 - `identified` — выше positive threshold;
-- `unknown` — ниже conservative negative threshold;
-- `uncertain` — между thresholds;
+- `unknown` — ниже conservative negative threshold только при
+  `negativeDecisionMode=calibrated`;
+- `uncertain` — между thresholds, либо любой score ниже positive threshold при
+  безопасном Sky-first режиме `negativeDecisionMode=uncertain_only`;
 - `unclassified` — identity worker ещё не оценивал segment.
 - `stale decisions` — исторический automatic result с отсутствующей или
   несовместимой текущей server calibration; это не подтверждённый результат.
@@ -660,11 +797,20 @@ calibrated thresholds превращают score в identity decision.
 Cross-space matching блокируется. Если `legacy-unknown` не проходит validation,
 используйте rolling versioned re-diarization, а не принудительный match.
 
-`Classify existing` создаёт identity campaign. В Operations & generations,
-Review & calibration, Jobs и Job Details отображаются общий processed/total,
-текущий batch, Sky, not-Sky, uncertain, incompatible, rate и ETA. Continuation
-сохраняет тот же `campaignId`, поэтому прогресс не возвращается к нулю между
-jobs. После каждого batch Timeline speaker-layer обновляется автоматически.
+`Classify all compatible history` создаёт identity campaign. В Operations &
+generations, Review & calibration, Jobs и Job Details отображаются общий
+processed/total, текущий batch, Sky, not-Sky, uncertain, incompatible, rate и
+ETA. Continuation сохраняет тот же `campaignId`, поэтому прогресс не
+возвращается к нулю между jobs. После каждого batch Timeline speaker-layer
+обновляется автоматически. Завершение разрешено только при фактическом
+`remaining=0` по всем frozen partitions. Если active generation изменилась,
+campaign становится `source_changed`; новый preflight строит оставшиеся
+partitions заново.
+
+После первой успешно завершённой full-history campaign новые завершённые
+diarization batches автоматически запускают маленькую identity campaign с той же
+текущей full calibration. До baseline этот trigger закрыт и не может
+самостоятельно начать исторический backfill.
 
 После pilot:
 
@@ -672,8 +818,11 @@ jobs. После каждого batch Timeline speaker-layer обновляет�
 2. Исправьте ошибки manual annotation; автоматический backfill их не
    перезаписывает.
 3. Если false-positive rate приемлем, расширьте период.
-4. Если precision ниже цели, добавьте разнообразные записи и пересчитайте
-   calibration; не ослабляйте threshold вручную.
+4. Если precision ниже production-цели, добавьте разнообразные записи и
+   пересчитайте calibration. Для диагностики можно выбрать 95%/90% provisional
+   pilot; после него проверьте false positives и вернитесь к 98% перед
+   расширением истории. Production raw cosine threshold задаёт сервер; только в
+   provisional pilot его можно явно повысить, но не понизить.
 5. Histogram/Timeline отдельным job пересчитывать не нужно: speaker track читает
    active diarization segments и сбрасывает frontend cache после identity batch.
 
@@ -686,6 +835,12 @@ Timeline содержит независимые слои:
 
 Нет coverage — нужна diarization. Coverage есть, но segment `unclassified` —
 нужен identity calibration/backfill.
+
+На дальнем масштабе Speaker Identity читает server-side buckets, а на близком —
+точные интервалы. Manual identity всегда перекрывает automatic; решения старой
+или superseded calibration выдаются как `unclassified`. Фильтры **Sky only**,
+**Uncertain** и **Verified / Pilot** работают до агрегации, а loading/error/no
+data видны прямо в track.
 
 На близком масштабе клик по segment открывает аудио, transcript context,
 campaign/job и manual actions. Transcript показывает все пересекающиеся voice
@@ -711,8 +866,22 @@ timestamps отсутствуют.
 - [ ] Profile имеет samples, актуальные revision и embedding space.
 - [ ] Calibration/validation используют разные recordings.
 - [ ] Есть минимум 100 labels, включая 40 Sky и 40 not-Sky.
-- [ ] Backend calibration preview показывает вычисленные thresholds и ≥98% на
-      отдельном validation audio.
+- [ ] В независимом Check есть минимум 20 Sky, 20 not-Sky и 20 automatic Sky
+      matches; процент не основан на единичном совпадении.
+- [ ] Backend calibration preview показывает вычисленные thresholds и выбранную
+      precision на отдельном validation audio.
+- [ ] После последней правки label сохранена новая calibration с текущим
+      evidence snapshot; старая отображается как stale/superseded.
+- [ ] Если preview показывает `Auto not-Sky off`, проверено, что calibration
+      сохраняет `negativeDecisionMode=uncertain_only`, а worker оставляет
+      остальные голоса uncertain.
+- [ ] Automatic not-Sky включён только если Check подтверждает выбранную
+      precision минимум на 20 rejected decisions; иначе используется
+      `uncertain_only`.
+- [ ] Positive threshold override не ниже server recommendation, сбрасывается
+      при смене target/split и используется только в provisional pilot.
+- [ ] Для full backfill сохранена policy `full` с целью ≥98%; sub-98% policy
+      используется только для ≤24-hour pilot.
 - [ ] 24-hour pilot прошёл ручной QA.
 - [ ] Identity campaign дошла до `completed`, а incompatible/remaining понятны.
 - [ ] Timeline и Transcript показывают одинаковые overrides/states.

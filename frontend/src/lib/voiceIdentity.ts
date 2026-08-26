@@ -15,6 +15,16 @@ export type UsableVoiceCalibration = {
   profileId: string;
   profileRevision: number;
   embeddingSpaceId: string;
+  targetPrecision: number;
+  classificationPolicy?: "full" | "pilot";
+  maxRangeHours?: number | null;
+  operatorAcceptedLowerPrecision?: boolean;
+  validationMetrics?: {
+    positivePrecision?: number;
+    positiveRecall?: number;
+    identified?: number;
+    total?: number;
+  };
   updatedAt?: Date;
 };
 
@@ -48,6 +58,7 @@ export type VoiceIdentityStatus = {
   }>;
   usableCalibration: UsableVoiceCalibration | null;
   canClassify: boolean;
+  canRunFullClassification?: boolean;
   blockers: string[];
   latestJob?: {
     _id: unknown;

@@ -3,6 +3,10 @@
 This runbook manages the `gpu-diarization` Docker Compose stack on the remote
 NVIDIA host. The canonical stack file is `compose.portainer.yml`.
 
+This is the only Portainer compose in the repository that should deploy
+diarization. `gpu/docker-compose.portainer.yml` is reserved for the separate
+STT stack (`whisper` plus its authenticated proxy).
+
 The stack exposes independent private endpoints because Mycelia reserves one
 slot per process. All processes share the downloaded-model volume, while each
 process loads a separate model copy into GPU memory.
@@ -52,12 +56,48 @@ Set these variables:
 | `DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE` | `4` | Mycelia per-segment identity embedding batch |
 | `DIARIZATION_REQUEST_CONCURRENCY` | `1` | Shared `/diarize` and `/embed` model executions per process |
 | `DIARIZATION_MAX_QUEUED_REQUESTS` | `1` | Bounded wait slots; valid values are `0` or `1` |
+| `DIARIZATION_IDLE_TIMEOUT_SECONDS` | `120` | Offload models from GPU after this many idle seconds; `0` disables offload |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` | Reduce CUDA allocator fragmentation |
 
 Ports default to `8085` through `8090`. Override `DIARIZATION_PORT_1` through
 `DIARIZATION_PORT_6` only if those ports conflict. All processes default to GPU
 device `0`; a multi-GPU host can override `DIARIZATION_GPU_1` through
 `DIARIZATION_GPU_6`.
+
+Routes intended to share Mycelia's compatible fallback pool must return the
+same `modelId`, `modelVersion`, and `embeddingSpaceId` from `/ready`. Compare all
+three after every image or model change; a healthy response alone is not proof
+of compatibility. Keep any legacy endpoint with a different fingerprint as a
+separate strict-affinity route. Never relabel an old endpoint as compatible from
+its configured image name alone.
+
+The published port is routing, not runtime identity. In particular, `:8085`
+was reused across the 2026-08-23 runtime cutover. The first job with a directly
+observed current `/ready` fingerprint was created at
+`2026-08-23T21:41:53.483Z`; earlier historical jobs on that route belong to
+embedding space
+`20aea32f5e52271131f8957f0ee50d39435e2c4b6d2b9d2670e21f94147696ca`;
+jobs at or after the cutover must use the current pool fingerprint below:
+
+The old and current services used the same Community-1 model revision, but the
+observed old runtime reported Pyannote `4.0.7`, while the current pool reports
+`4.0.1`; lock/config fingerprints also changed. Therefore the two space IDs are
+not interchangeable even though the configured model name is the same.
+
+| Field | Current compatible-pool value |
+| --- | --- |
+| `modelId` | `pyannote/speaker-diarization-community-1` |
+| `modelVersion` | `3533c8cf8e369892e6b79ff1bf80f7b0286a54ee` |
+| `embeddingFingerprint.model` | `pyannote/wespeaker-voxceleb-resnet34-LM` |
+| `embeddingFingerprint.resolvedRevision` | `837717ddb9ff5507820346191109dc79c958d614` |
+| `embeddingFingerprint.dimension` | `256` |
+| `embeddingSpaceId` | `6a1ce44db3601802f6d1d8ee0b2d7e97de1602906ce63c219816087eb7feb09f` |
+
+Mycelia persists the runtime identity returned by `/ready` and the inference
+response on routed jobs, diarization results, and speaker profiles. A historical
+`legacy-unknown` record may be attributed to a known model family when code and
+logs support that inference, but it must not receive an invented exact model
+revision or be treated as compatible with either exact space.
 
 The `8/8/4` defaults are the safe starting point for six simultaneous
 processes on a 24 GiB RTX 4090 that also hosts other GPU services. A segment
@@ -145,11 +185,24 @@ inference check, then enable only the routes for the selected profile.
 The named model volume survives a normal stop, start, or stack update. Do not
 delete the stack or volume merely to release GPU memory.
 
-The current service intentionally keeps models resident for the life of each
-container; it has no idle offload timer. Stopping an unused pool process is the
-reliable way to release its CUDA context and model memory. PyTorch allocator
-cache may remain visible in `nvidia-smi` after a request even though that memory
-can be reused by the same process.
+Each process offloads its model objects after
+`DIARIZATION_IDLE_TIMEOUT_SECONDS` without an active or queued request. The
+default is 120 seconds. It runs garbage collection and releases unused PyTorch
+CUDA cache; the process and its CUDA context remain alive, so a small baseline
+can still be visible in `nvidia-smi`. Set the value to `0` to keep models
+resident indefinitely. Stop the process when every allocation, including its
+CUDA context, must be released.
+
+An idle process deliberately keeps `/ready` at HTTP 200 so Mycelia can route the
+next request to it. `/health` and `/ready` then report `modelState: idle` and
+`modelsLoaded: false`. The first accepted `/diarize` or `/embed` request loads
+the models once while other requests remain behind the bounded inference gate.
+During that cold start `modelState` is `loading`. A load failure changes it to
+`error` and `/ready` to HTTP 503.
+
+To verify offload, finish a real request, wait slightly longer than the timeout,
+and check `/health` plus `nvidia-smi`. Then submit another representative request
+and require `modelState: ready`, `modelsLoaded: true`, and a successful result.
 
 Restart an individual container only to recover that process from a transient
 failure. A restart does not load a new image and does not change pool capacity.
@@ -157,6 +210,13 @@ failure. A restart does not load a new image and does not change pool capacity.
 ## Build and update the image
 
 Use an immutable tag containing the date and source commit:
+
+The checked-in `compose.faeon.yml` is the single-process deployment for the
+current `faeon` host. It fixes the Compose project name to `sky-diarization`,
+uses the external `sky_diarization-models` cache volume, and runs the immutable
+`sky-mycelia-diarization:idle-offload-20260823` image with the 120-second default.
+Keep the existing private `HF_TOKEN` in the server deployment environment; do
+not copy it into the Compose file or source archive.
 
 ### Remote build from a source archive (recommended)
 

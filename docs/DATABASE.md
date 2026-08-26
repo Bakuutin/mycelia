@@ -3,10 +3,17 @@
 ## Voice identity collections
 
 - `diarization_runs`: generation provenance and lifecycle (`building`, `ready`, `active`, `superseded`, `failed`).
-- `diarizations`: intervals with `runId`, `generation`, `embeddingSpaceId`, `lifecycleStatus` and tri-state `speakerIdentity`.
+- `diarizations`: intervals with `runId`, `generation`, `modelId`, `modelVersion`, `embeddingSpaceId`, `lifecycleStatus` and tri-state `speakerIdentity`.
 - `speaker_annotations`: manual interval labels projected by overlap; these override automatic identity.
 - `speaker_calibrations`: thresholds and validation metrics for a profile revision/embedding space.
-- `speaker_profiles`: includes `revision`, `embeddingSpaceId` and enrollment provenance.
+- `speaker_profiles`: includes `revision`, `embeddingSpaceId`, `runtimeProvenance` and enrollment provenance.
+- `jobs`: diarizator-routed jobs snapshot `providerProfileId`, `modelId`, `modelVersion`, and `embeddingSpaceId` in `routingContext` before queue admission.
+
+Migration `0069_diarizator_runtime_provenance` backfills the verified Pyannote
+model ID/revision for historical rows and marks the source as
+`historical_backfill_0069`. It maps the old remote `8085` route to its legacy
+embedding space and the six current pool routes to their shared space; it does
+not invent an embedding space for an unverified local endpoint.
 
 See [VOICE_IDENTITY_RUNBOOK.md](VOICE_IDENTITY_RUNBOOK.md) for migration and purge invariants.
 
@@ -153,6 +160,7 @@ Groups transcriptions into logical conversation chunks for summarization and pro
 - `end`: Date - End timestamp
 - `transcriptionIds`: Array[ObjectId] - References to `transcriptions._id`
 - `totalTextLength`: Number - Total character count
+- `promptChars`: Number - Exact formatted transcript size for size-bounded chunks
 - `transcriptionCount`: Number - Number of transcriptions
 - `state`: String - State ("open", "ready", "processing", "completed", "error", "empty")
 - `lastActivityAt`: Date - Last time a transcription was added
@@ -160,6 +168,7 @@ Groups transcriptions into logical conversation chunks for summarization and pro
 - `summaryPromptId`: ObjectId - Reference to `prompts._id` used for summarization
 - `createdAt`: Date
 - `updatedAt`: Date
+- `splitReason`: String - Boundary that finalized the chunk (`source_change`, `prompt_limit`, or `gap`), when applicable
 
 **Indexes:**
 - `state_last_activity`: Composite index for finding stale open chunks

@@ -3,14 +3,22 @@ from simple_speaker_recognition.provenance import build_runtime_fingerprint
 
 def test_embedding_space_changes_when_preprocessing_changes() -> None:
     first = build_runtime_fingerprint(
-        diarization_model="diar-v1", embedding_model="embed-v1",
-        sample_rate=16000, embedding_dimension=256, preprocessing="soundfile-v1",
+        diarization_model="diar-v1",
+        embedding_model="embed-v1",
+        sample_rate=16000,
+        embedding_dimension=256,
+        preprocessing="soundfile-v1",
     )
     second = build_runtime_fingerprint(
-        diarization_model="diar-v1", embedding_model="embed-v1",
-        sample_rate=8000, embedding_dimension=256, preprocessing="soundfile-v1",
+        diarization_model="diar-v1",
+        embedding_model="embed-v1",
+        sample_rate=8000,
+        embedding_dimension=256,
+        preprocessing="soundfile-v1",
     )
     assert first["embeddingSpaceId"] != second["embeddingSpaceId"]
+    assert first["modelId"] == "diar-v1"
+    assert first["modelVersion"] == "unknown"
     assert first["diarizationFingerprint"]["resolvedRevision"] == "unknown"
 
 
@@ -33,4 +41,6 @@ def test_resolves_model_revisions_from_huggingface_cache(tmp_path, monkeypatch) 
     )
 
     assert result["diarizationFingerprint"]["resolvedRevision"] == "diar-commit"
+    assert result["modelId"] == "pyannote/diar-v1"
+    assert result["modelVersion"] == "diar-commit"
     assert result["embeddingFingerprint"]["resolvedRevision"] == "embed-commit"

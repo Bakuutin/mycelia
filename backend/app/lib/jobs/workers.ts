@@ -1,6 +1,12 @@
 import type { Worker } from "bullmq";
 import { ObjectId } from "bson";
-import { createWorker, enqueueJob, getQueueEvents } from "./queue.ts";
+import {
+  createWorker,
+  drainWaitingDiarizatorJobs,
+  enqueueJob,
+  getQueueEvents,
+  requestDiarizatorAdmissionDrain,
+} from "./queue.ts";
 import { cancelRunningJob, processJob } from "./processor.ts";
 import { discoverJobWorkers, jobRegistry } from "./job-registry.ts";
 import { publishJobUpdate } from "@/lib/events/publisher.ts";
@@ -23,17 +29,61 @@ import {
   invalidateExternalServicesHealthCache,
 } from "./service-health.ts";
 import { isCancelledJobRecord } from "./job-state.ts";
+import { isDiarizatorRoutedJobType } from "./diarizator-admission.ts";
 import { releaseTranscriptionSequenceClaimsForJob } from "./transcription-claim-reaper.ts";
 import {
   reconcileActiveTimelineCampaigns,
   syncTimelineCampaign,
 } from "./timeline-campaign-recovery.ts";
+import { triggerManager } from "./trigger-manager.ts";
 
 const workers = new Map<string, Worker>();
 let timelineRecoveryInterval: ReturnType<typeof setInterval> | null = null;
+const pendingDiarizatorRefillReasons = new Set<string>();
+let diarizatorRefillScheduled = false;
+let diarizatorRefillRunning = false;
 
 const PROVIDER_FAILURE_PATTERN =
   /LLM API error|Failed to call resource llm|LLM_EMPTY_RESPONSE|LLM_INVALID_RESPONSE|No healthy (LLM|STT|provider)|error sending request|Connection refused|ECONNREFUSED|fetch failed/i;
+
+function requestDiarizatorPoolRefill(reason: string): void {
+  pendingDiarizatorRefillReasons.add(reason);
+  if (diarizatorRefillScheduled || diarizatorRefillRunning) return;
+  diarizatorRefillScheduled = true;
+  queueMicrotask(() => void flushDiarizatorPoolRefill());
+}
+
+async function flushDiarizatorPoolRefill(): Promise<void> {
+  diarizatorRefillScheduled = false;
+  diarizatorRefillRunning = true;
+  const reason = [...pendingDiarizatorRefillReasons].sort().join(",") ||
+    "unspecified";
+  pendingDiarizatorRefillReasons.clear();
+  try {
+    // Preserve global admission priority first. If a sensitive pinned job
+    // cannot use the free route, synthesize ordinary historical work for the
+    // remaining provider capacity immediately instead of waiting 10 seconds.
+    await drainWaitingDiarizatorJobs({
+      reason: `slot_release:${reason}`,
+    });
+    await triggerManager.triggerNow(
+      "diarization",
+      `slot_release:${reason}`,
+    );
+  } catch (error) {
+    console.warn(
+      `[DIARIZATION_ADMISSION] Pool refill failed (${reason}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    requestDiarizatorAdmissionDrain(`slot_release.retry:${reason}`);
+  } finally {
+    diarizatorRefillRunning = false;
+    if (pendingDiarizatorRefillReasons.size > 0) {
+      requestDiarizatorPoolRefill("coalesced");
+    }
+  }
+}
 
 export async function startWorkers() {
   console.log("Starting job workers...");
@@ -243,6 +293,14 @@ export async function startWorkers() {
       });
     });
 
+    events.on("removed", ({ jobId, prev }) => {
+      if (!isDiarizatorRoutedJobType(jobType)) return;
+      console.info(
+        `[${jobType}] Job ${jobId} was removed from queue (prev: ${prev})`,
+      );
+      requestDiarizatorPoolRefill(`queue.removed:${jobType}`);
+    });
+
     worker.on("active", (job) => {
       console.log(`[${jobType}] Local worker started job ${job.id}`);
     });
@@ -259,40 +317,85 @@ export async function startWorkers() {
           `[${jobType}] Scheduling another job for ${job.data.type} because hasMore is true`,
         );
         try {
+          const continuationData = getContinuationJobData(
+            job.data,
+            job.returnvalue,
+          ) as typeof job.data;
+          let continuationJobId: string | undefined;
+          let continuationMongo:
+            | Awaited<ReturnType<typeof getMongoResource>>
+            | undefined;
+          if (
+            job.data.type === "speakerIdentity" &&
+            typeof job.data.campaignId === "string"
+          ) {
+            continuationJobId = new ObjectId().toString();
+            const auth = await getServerAuth();
+            continuationMongo = await getMongoResource(auth);
+            const reserved = await continuationMongo({
+              action: "updateOne",
+              collection: "speaker_identity_campaigns",
+              query: {
+                campaignId: job.data.campaignId,
+                active: true,
+                currentJobId: String(job.id),
+              },
+              update: {
+                $set: {
+                  status: "queued",
+                  currentJobId: continuationJobId,
+                  updatedAt: new Date(),
+                },
+              },
+            }) as any;
+            if (reserved?.matchedCount !== 1) {
+              throw new Error(
+                "Speaker identity continuation lost campaign ownership",
+              );
+            }
+          }
           const continuation = await enqueueJob(
-            getContinuationJobData(
-              job.data,
-              job.returnvalue,
-            ) as typeof job.data,
+            continuationData,
             {
+              ...(continuationJobId ? { jobId: continuationJobId } : {}),
               priority: getContinuationPriority(job.data),
               trigger: { type: "auto", reason: "hasMore" },
               reuseHealthyRoute: job.data.type === "diarization",
             },
           );
-          const auth = await getServerAuth();
-          const mongo = await getMongoResource(auth);
-          await mongo({
-            action: "updateOne",
-            collection: "jobs",
-            query: { _id: new ObjectId(job.id!) },
-            update: {
-              $set: {
-                continuation: {
-                  status: "queued",
-                  attemptedAt: new Date(),
-                  jobId: continuation.id,
+          try {
+            const mongo = continuationMongo ?? await getMongoResource(
+              await getServerAuth(),
+            );
+            await mongo({
+              action: "updateOne",
+              collection: "jobs",
+              query: { _id: new ObjectId(job.id!) },
+              update: {
+                $set: {
+                  continuation: {
+                    status: "queued",
+                    attemptedAt: new Date(),
+                    jobId: continuation.id,
+                  },
                 },
               },
-            },
-          });
-          if (
-            job.data.type === "histRecalculation" &&
-            typeof job.data.timelineRebuildCampaignId === "string"
-          ) {
-            await syncTimelineCampaign(
-              mongo,
-              job.data.timelineRebuildCampaignId,
+            });
+            if (
+              job.data.type === "histRecalculation" &&
+              typeof job.data.timelineRebuildCampaignId === "string"
+            ) {
+              await syncTimelineCampaign(
+                mongo,
+                job.data.timelineRebuildCampaignId,
+              );
+            }
+          } catch (persistError) {
+            // The next job already owns the durable campaign reservation.
+            // A telemetry-link failure must not invalidate queued work.
+            console.warn(
+              `[${jobType}] Continuation queued but telemetry link failed`,
+              persistError,
             );
           }
         } catch (error) {
@@ -321,6 +424,34 @@ export async function startWorkers() {
               persistError,
             );
           }
+          if (
+            job.data.type === "speakerIdentity" &&
+            typeof job.data.campaignId === "string"
+          ) {
+            try {
+              const auth = await getServerAuth();
+              const mongo = await getMongoResource(auth);
+              await mongo({
+                action: "updateOne",
+                collection: "speaker_identity_campaigns",
+                query: { campaignId: job.data.campaignId, active: true },
+                update: {
+                  $set: {
+                    status: "queued",
+                    reservationRecoveryError: error instanceof Error
+                      ? error.message
+                      : String(error),
+                    updatedAt: new Date(),
+                  },
+                },
+              });
+            } catch (campaignError) {
+              console.error(
+                "[speakerIdentity] Could not retain continuation reservation",
+                campaignError,
+              );
+            }
+          }
           console.warn(
             `[${jobType}] Deferred hasMore continuation: ${
               error instanceof Error ? error.message : String(error)
@@ -332,13 +463,56 @@ export async function startWorkers() {
           `[${jobType}] Not scheduling another ${job.data.type} job because the previous run made no measurable progress`,
         );
       }
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorPoolRefill(`continuation.checked:${jobType}`);
+      }
+      if (jobType === "diarization") {
+        void triggerManager.triggerNow(
+          "speakerIdentity",
+          `diarization.completed:${job.id}`,
+        );
+      }
     });
 
-    worker.on("failed", (job, err) => {
+    worker.on("failed", async (job, err) => {
       console.error(
         `[${jobType}] Local worker failed job ${job?.id}:`,
         err.message,
       );
+      if (
+        jobType === "speakerIdentity" &&
+        typeof job?.data?.campaignId === "string"
+      ) {
+        try {
+          const auth = await getServerAuth();
+          const mongo = await getMongoResource(auth);
+          await mongo({
+            action: "updateOne",
+            collection: "speaker_identity_campaigns",
+            query: { campaignId: job.data.campaignId, active: true },
+            update: {
+              $set: {
+                status: "failed",
+                active: false,
+                failureReason: err.message,
+                finishedAt: new Date(),
+                updatedAt: new Date(),
+              },
+            },
+          });
+        } catch (campaignError) {
+          console.warn(
+            `[speakerIdentity] Could not close failed campaign ${job.data.campaignId}: ${
+              campaignError instanceof Error
+                ? campaignError.message
+                : String(campaignError)
+            }`,
+          );
+        }
+      }
+      if (isDiarizatorRoutedJobType(jobType)) {
+        requestDiarizatorPoolRefill(`worker.failed:${jobType}`);
+      }
     });
 
     worker.on("progress", async (job, progress) => {

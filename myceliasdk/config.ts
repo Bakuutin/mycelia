@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { zDateOrString, zObjectId } from "./zod-json-schema.ts";
+import { zMediaKnowledgeConfig } from "./media.ts";
 
 export const zProviderConfig = z.object({
   baseUrl: z.string().optional(),
@@ -30,6 +31,10 @@ export const zLlmProviderProfile = z.object({
   apiKey: z.string(),
   aliases: zModelAliasMap,
   defaultAlias: z.enum(["small", "medium", "large"]).default("medium"),
+  // Fixed mode requires a configured alias model to remain available.
+  // Automatic mode treats alias mappings as preferences and selects a live
+  // /models entry when the preferred self-hosted model has changed.
+  modelSelectionMode: z.enum(["fixed", "automatic"]).default("fixed"),
   chatModel: z.string().min(1).optional(),
   enabled: z.boolean().default(true),
   // Lower values are preferred. Providers are tried in priority order and
@@ -225,6 +230,7 @@ export const zServerConfig = z.object({
   transcription: zTranscriptionProviderConfig.optional().nullable(),
   transcriptionProfiles: zTranscriptionProfilesConfig.optional().nullable(),
   diarizationProfiles: zDiarizationProfilesConfig.optional().nullable(),
+  mediaKnowledge: zMediaKnowledgeConfig.optional().nullable(),
   // Deprecated: kept for backward compatibility
   inference: zInferenceProviderConfig.optional().nullable(),
   features: z.object({

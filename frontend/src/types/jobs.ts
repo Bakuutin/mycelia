@@ -25,6 +25,10 @@ export type JobInfo = {
     providerProfileId?: string;
     providerProfileName?: string;
     model?: string;
+    modelId?: string;
+    modelVersion?: string;
+    embeddingSpaceId?: string;
+    runtimeProvenanceSource?: string;
     resolvedAt: string;
   };
   updatedOn?: number;
@@ -37,6 +41,26 @@ export type JobInfo = {
     queuedAt?: string;
     admittedAt?: string;
   };
+  diarizationErrorOutcomes?: Array<{
+    index: number;
+    state:
+      | "recovered"
+      | "retrying"
+      | "needs_attention"
+      | "pending"
+      | "unknown";
+    matchedChunks: number;
+    diarizedChunks: number;
+    recoveredAt?: string;
+    currentFailure?: {
+      status?: string;
+      category?: string;
+      message?: string;
+      route?: string;
+      attempt?: number;
+      retryAt?: string;
+    };
+  }>;
   modelProvenance?: Array<{
     stage: string;
     requestedModel?: string;

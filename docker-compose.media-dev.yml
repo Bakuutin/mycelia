@@ -1,0 +1,32 @@
+name: mycelia-media-89da
+
+services:
+  mongo:
+    ports: !override []
+
+  frontend:
+    image: mycelia-media-89da-frontend:dev
+    build:
+      context: .
+      dockerfile: ./frontend/Dockerfile.dev
+
+  backend:
+    image: mycelia-media-89da-backend:dev
+    command: deno task dev
+    env_file: !override
+      - .env.media.local
+    environment:
+      APP_MODE: dev
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MEDIA_SOURCE_ROOT: /media-source
+    volumes:
+      - ./backend:/app
+      - ./myceliasdk:/myceliasdk
+      - ./docs:/docs:ro
+      - ${MEDIA_SOURCE_HOST_PATH}:/media-source:ro
+
+  nginx:
+    ports: !override
+      - "4443:4433"
+      - "3211:80"

@@ -30,6 +30,15 @@ export type TimelineIntegrityReport = {
     lastStart: string | null;
     totals: Record<"audio_chunks" | "transcriptions", number>;
   }>;
+  repairPlan: {
+    ranges: Array<{
+      start: string;
+      end: string;
+      days: number;
+      differences: Record<"audio_chunks" | "transcriptions", number>;
+    }>;
+    days: number;
+  };
   bookkeeping: {
     checked: boolean;
     terminalSequences: number | null;
@@ -80,12 +89,14 @@ export type TimelineIntegrityReport = {
     canResume?: boolean;
     canPause?: boolean;
     progress?: Record<string, unknown> | null;
+    mode?: "affected_dates" | "selected_period" | "full";
+    ranges?: Array<{ start: string; end: string }>;
   };
   issues: Array<{
     severity: "warning" | "error";
     code: string;
     message: string;
-    action?: "full_rebuild" | "stale_only" | "resume_campaign";
+    action?: "repair_ranges" | "stale_only" | "resume_campaign";
     actionLabel?: string;
   }>;
   scope: {

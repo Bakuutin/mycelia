@@ -3,6 +3,10 @@ import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { enqueueJob, getQueue } from "./queue.ts";
 import { redlock } from "@/lib/redis.ts";
+import {
+  buildTimelineRebuildRangeBatches,
+  deriveTimelineCampaignRecoveryStatus,
+} from "./timeline-recovery.ts";
 
 export const TIMELINE_REBUILD_CAMPAIGNS = "timeline_rebuild_campaigns";
 
@@ -122,18 +126,11 @@ export async function syncTimelineCampaign(
   const lastCompleted = [...byIndex.values()].filter((job) =>
     job.state === "completed"
   ).at(-1);
-  const paused = String(campaign.status).startsWith("paused");
-  const status = paused
-    ? campaign.status
-    : counts.active > 0
-    ? "running"
-    : counts.waiting + counts.delayed > 0
-    ? "queued"
-    : counts.failed + counts.cancelled > 0
-    ? "paused_error"
-    : missingJobs > 0
-    ? "recovering"
-    : "verifying";
+  const status = deriveTimelineCampaignRecoveryStatus({
+    storedStatus: campaign.status,
+    ...counts,
+    missingJobs,
+  });
   const processedThrough = validDate(lastCompleted?.data?.end)?.toISOString() ??
     null;
   const lastActivityAt = validDate(
@@ -159,7 +156,7 @@ export async function syncTimelineCampaign(
     activeJobId: activeJob?._id?.toString() ?? null,
     progress: activeJob?.progress ?? null,
     lastActivityAt: lastActivityAt.toISOString(),
-    canResume: paused || status === "recovering",
+    canResume: status.startsWith("paused") || status === "recovering",
     canPause: ["queued", "running", "recovering"].includes(status),
     blockingReason,
     ...counts,
@@ -294,13 +291,26 @@ export async function reconcileTimelineCampaign(
       const campaignStart = validDate(campaign.start)!;
       const campaignEnd = validDate(campaign.end)!;
       const batchDays = Number(campaign.batchDays ?? 31);
-      const start = validDate(previous?.result?.nextStart) ?? new Date(
+      const selectedRanges = Array.isArray(campaign.ranges)
+        ? campaign.ranges.flatMap((range: any) => {
+          const start = validDate(range?.start);
+          const end = validDate(range?.end);
+          return start && end ? [{ start, end }] : [];
+        })
+        : [];
+      const selectedBatches = selectedRanges.length > 0
+        ? buildTimelineRebuildRangeBatches(selectedRanges, batchDays)
+        : [];
+      const selectedBatch = selectedBatches[nextBatchIndex];
+      const start = selectedBatch?.start ??
+        validDate(previous?.result?.nextStart) ?? new Date(
         campaignStart.getTime() + nextBatchIndex * batchDays * 86_400_000,
       );
-      const end = validDate(previous?.result?.nextEnd) ?? new Date(Math.min(
-        start.getTime() + batchDays * 86_400_000,
-        campaignEnd.getTime(),
-      ));
+      const end = selectedBatch?.end ?? validDate(previous?.result?.nextEnd) ??
+        new Date(Math.min(
+          start.getTime() + batchDays * 86_400_000,
+          campaignEnd.getTime(),
+        ));
       const job = await enqueueJob({
         type: "histRecalculation",
         start,

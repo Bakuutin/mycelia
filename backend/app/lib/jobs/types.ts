@@ -14,6 +14,11 @@ export interface JobRoutingContext {
   providerProfileId?: string;
   providerProfileName?: string;
   model?: string;
+  /** Actual diarizator runtime contract resolved from /ready. */
+  modelId?: string;
+  modelVersion?: string;
+  embeddingSpaceId?: string;
+  runtimeProvenanceSource?: "route_readiness" | "historical_backfill_0069";
   resolvedAt: string;
 }
 

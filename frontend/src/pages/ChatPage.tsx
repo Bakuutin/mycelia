@@ -61,6 +61,11 @@ import {
   messageText,
 } from "@/lib/chat";
 import { useStableChatSessionId } from "@/hooks/useStableChatSessionId";
+import {
+  focusDeepLinkedMessage,
+  messageElementId,
+  normalizeMessageDeepLinkId,
+} from "@/lib/messageDeepLink";
 
 interface ChatErrorState {
   message: string;
@@ -232,10 +237,12 @@ function useIsMobile(): boolean {
 }
 
 export default function ChatPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const params = useParams();
   const navigate = useNavigate();
   const routeChatId = params.chatId ?? searchParams.get("id") ?? undefined;
+  const requestedMessageId = searchParams.get("messageId");
+  const linkedMessageId = normalizeMessageDeepLinkId(requestedMessageId);
   const { chatSessionId: effectiveChatId, resetDraft } = useStableChatSessionId(
     routeChatId,
   );
@@ -282,6 +289,7 @@ export default function ChatPage() {
   const localDraftNavigationRef = useRef<string | undefined>(undefined);
   const selectedModelRef = useRef("");
   const latestRequestRef = useRef<ChatMessageMetadata>({});
+  const focusedDeepLinkRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
@@ -431,9 +439,11 @@ export default function ChatPage() {
       chat.setMessages((result.messages ?? []).map(dbMessageToUIMessage));
       setHistoryChat(result.chat);
       setHistoryState("ready");
-      requestAnimationFrame(() =>
-        messagesEndRef.current?.scrollIntoView({ behavior: "auto" })
-      );
+      if (!requestedMessageId) {
+        requestAnimationFrame(() =>
+          messagesEndRef.current?.scrollIntoView({ behavior: "auto" })
+        );
+      }
     } catch (error) {
       if (
         controller.signal.aborted || version !== historyVersionRef.current
@@ -443,7 +453,7 @@ export default function ChatPage() {
       );
       setHistoryState("error");
     }
-  }, [routeChatId]);
+  }, [requestedMessageId, routeChatId]);
 
   useEffect(() => {
     void loadHistory();
@@ -469,14 +479,39 @@ export default function ChatPage() {
   }, [chat.messages, pendingMessage]);
 
   useEffect(() => {
+    if (!routeChatId || !linkedMessageId || historyState !== "ready") return;
+    if (!chat.messages.some((message) => message.id === linkedMessageId)) {
+      return;
+    }
+    const focusKey = `${routeChatId}:${linkedMessageId}`;
+    if (focusedDeepLinkRef.current === focusKey) return;
+
+    setAtBottom(false);
+    const frame = requestAnimationFrame(() => {
+      if (focusDeepLinkedMessage("chat", linkedMessageId)) {
+        focusedDeepLinkRef.current = focusKey;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chat.messages, historyState, linkedMessageId, routeChatId]);
+
+  useEffect(() => {
     if (!atBottom) return;
+    if (requestedMessageId && historyState === "ready") return;
     const reducedMotion = globalThis.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
     messagesEndRef.current?.scrollIntoView({
       behavior: reducedMotion ? "auto" : "smooth",
     });
-  }, [atBottom, chat.messages, chat.status, pendingMessage]);
+  }, [
+    atBottom,
+    chat.messages,
+    chat.status,
+    historyState,
+    requestedMessageId,
+    pendingMessage,
+  ]);
 
   useEffect(() => {
     if (
@@ -814,6 +849,15 @@ export default function ChatPage() {
   const pinnedMessages = chat.messages.filter((message) =>
     message.metadata?.pinnedAt
   );
+  const linkedMessageUnavailable = requestedMessageId !== null &&
+    historyState === "ready" &&
+    (!linkedMessageId ||
+      !chat.messages.some((message) => message.id === linkedMessageId));
+  const clearMessageDeepLink = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("messageId");
+    setSearchParams(next, { replace: true });
+  };
   const controlsDisabled = creatingDraft || chat.status === "submitted" ||
     chat.status === "streaming" || needsApproval ||
     Boolean(selectedChat?.archivedAt);
@@ -887,10 +931,11 @@ export default function ChatPage() {
           const reducedMotion = globalThis.matchMedia(
             "(prefers-reduced-motion: reduce)",
           ).matches;
-          document.getElementById(`chat-message-${messageId}`)?.scrollIntoView({
-            behavior: reducedMotion ? "auto" : "smooth",
-            block: "center",
-          });
+          document.getElementById(messageElementId("chat", messageId))
+            ?.scrollIntoView({
+              behavior: reducedMotion ? "auto" : "smooth",
+              block: "center",
+            });
         }}
       />
       <div
@@ -950,6 +995,25 @@ export default function ChatPage() {
               </div>
             </div>
           )
+          : linkedMessageUnavailable
+          ? (
+            <div className="flex h-full items-center justify-center text-center">
+              <div role="alert">
+                <AlertCircle className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+                <h2 className="font-medium">Linked message unavailable</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  It was removed or does not belong to this conversation.
+                </p>
+                <Button
+                  className="mt-4"
+                  variant="outline"
+                  onClick={clearMessageDeepLink}
+                >
+                  Open conversation
+                </Button>
+              </div>
+            </div>
+          )
           : chat.messages.length === 0 && !pendingMessage &&
               chat.status === "ready"
           ? (
@@ -968,8 +1032,16 @@ export default function ChatPage() {
               {chat.messages.map((message) => (
                 <div
                   key={message.id}
-                  id={`chat-message-${message.id}`}
-                  className="group/message relative scroll-mt-28"
+                  id={messageElementId("chat", message.id)}
+                  tabIndex={linkedMessageId === message.id ? -1 : undefined}
+                  aria-current={linkedMessageId === message.id
+                    ? "location"
+                    : undefined}
+                  className={cn(
+                    "group/message relative scroll-mt-28",
+                    linkedMessageId === message.id &&
+                      "rounded-lg bg-primary/5 ring-2 ring-primary/60 ring-offset-2 ring-offset-background",
+                  )}
                 >
                   <div className="absolute right-1 top-1 z-10 flex rounded-md border bg-background/90 opacity-0 shadow-sm transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100">
                     <Button

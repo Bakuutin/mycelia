@@ -10,10 +10,17 @@ export interface VoiceSampleSummaryInput {
 
 const RECENT_VOICE_PROFILES_KEY = "mycelia.recentVoiceProfiles";
 const RECENT_VOICE_PROFILES_LIMIT = 12;
+type RecentProfileStorage = Pick<Storage, "getItem" | "setItem">;
 
-export function readRecentVoiceProfileIds(): string[] {
+function defaultRecentProfileStorage(): RecentProfileStorage | null {
+  return typeof localStorage === "undefined" ? null : localStorage;
+}
+
+export function readRecentVoiceProfileIds(
+  storage: RecentProfileStorage | null = defaultRecentProfileStorage(),
+): string[] {
   try {
-    const raw = localStorage.getItem(RECENT_VOICE_PROFILES_KEY);
+    const raw = storage?.getItem(RECENT_VOICE_PROFILES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -25,15 +32,18 @@ export function readRecentVoiceProfileIds(): string[] {
   }
 }
 
-export function rememberVoiceProfile(profileId: string): string[] {
+export function rememberVoiceProfile(
+  profileId: string,
+  storage: RecentProfileStorage | null = defaultRecentProfileStorage(),
+): string[] {
   const normalizedId = profileId.trim();
-  if (!normalizedId) return readRecentVoiceProfileIds();
+  if (!normalizedId) return readRecentVoiceProfileIds(storage);
   const next = [
     normalizedId,
-    ...readRecentVoiceProfileIds().filter((id) => id !== normalizedId),
+    ...readRecentVoiceProfileIds(storage).filter((id) => id !== normalizedId),
   ].slice(0, RECENT_VOICE_PROFILES_LIMIT);
   try {
-    localStorage.setItem(RECENT_VOICE_PROFILES_KEY, JSON.stringify(next));
+    storage?.setItem(RECENT_VOICE_PROFILES_KEY, JSON.stringify(next));
   } catch {
     // Storage may be unavailable. The caller still receives session state.
   }
@@ -76,15 +86,25 @@ export function buildTimelineSampleMetadata(
   profile: VoiceProfileAttachTarget,
   start: Date,
   end: Date,
+  originalId: string,
   source = "timeline_selection",
 ) {
+  const sourceStart = start.toISOString();
+  const sourceEnd = end.toISOString();
   return {
     speaker_name: profile.name,
     profile_id: profile.id,
     duration: Math.max(0, (end.getTime() - start.getTime()) / 1000),
     source,
-    source_start: start.toISOString(),
-    source_end: end.toISOString(),
+    source_original_id: originalId,
+    source_start: sourceStart,
+    source_end: sourceEnd,
+    provenance: {
+      kind: "timeline_interval",
+      source,
+      originalId,
+      interval: { start: sourceStart, end: sourceEnd },
+    },
     uploaded_at: new Date().toISOString(),
   };
 }

@@ -14,6 +14,7 @@ const DEFAULT_VISIBLE_TRACKS: TrackId[] = [
   "diarization-coverage",
   "diarizations",
   "objects",
+  "photos",
 ];
 
 // "locations" is deliberately NOT in DEFAULT_VISIBLE_TRACKS: the track is
@@ -27,6 +28,7 @@ const DEFAULT_HEIGHTS: Record<TrackId, number> = {
   "diarizations": 40,
   "objects": 120,
   "locations": 28,
+  "photos": 48,
 };
 
 const ALL_OBJECT_CATEGORIES: ObjectCategory[] = [
@@ -117,6 +119,18 @@ export const useTrackVisibilityStore = create<TrackVisibilityState>()(
     }),
     {
       name: "track-visibility",
+      version: 2,
+      migrate: (persisted: any, version) => {
+        if (version >= 2) return persisted;
+        const visibleTracks = Array.isArray(persisted?.visibleTracks)
+          ? persisted.visibleTracks
+          : [];
+        return {
+          ...persisted,
+          visibleTracks: [...new Set([...visibleTracks, "photos"])],
+          trackHeights: { photos: 48, ...(persisted?.trackHeights ?? {}) },
+        };
+      },
     },
   ),
 );

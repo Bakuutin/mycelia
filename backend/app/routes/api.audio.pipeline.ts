@@ -1338,6 +1338,50 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
                             null,
                           ],
                         },
+                        {
+                          $or: [
+                            {
+                              $ne: [
+                                { $ifNull: ["$path", null] },
+                                null,
+                              ],
+                            },
+                            {
+                              $ne: [
+                                { $ifNull: ["$platform.importer", null] },
+                                null,
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              blocked: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$ingested", true] },
+                        {
+                          $eq: [
+                            { $ifNull: ["$ingestion.error", null] },
+                            null,
+                          ],
+                        },
+                        {
+                          $eq: [{ $ifNull: ["$path", null] }, null],
+                        },
+                        {
+                          $eq: [
+                            { $ifNull: ["$platform.importer", null] },
+                            null,
+                          ],
+                        },
                       ],
                     },
                     1,
@@ -1528,6 +1572,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       total: sourceTotals.total ?? 0,
       ingested: sourceTotals.ingested ?? 0,
       pending: sourceTotals.pending ?? 0,
+      blocked: sourceTotals.blocked ?? 0,
       errors: sourceTotals.errors ?? 0,
       byKind: sourceKinds.map((row: any) => ({
         kind: row._id ?? "unknown",
@@ -1542,7 +1587,7 @@ export async function apiAudioPipelineHandler(req: Request, res: Response) {
       diarizationCampaign,
     );
     const backlogs: Record<string, number> = {
-      ingestion: sourceFilesStats.pending + sourceFilesStats.errors,
+      ingestion: sourceFilesStats.pending,
       vad: vadStats.chunksAwaitingVad,
       transcription_sequence_creator: pendingSequenceChunks,
       transcription: sequencesReady + sequencesProcessing + sequencesError,

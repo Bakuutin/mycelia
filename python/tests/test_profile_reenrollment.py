@@ -14,7 +14,18 @@ from jobs.profile_reenrollment import (  # noqa: E402
 
 def test_rebuilds_profile_in_one_embedding_space() -> None:
     profile_id = ObjectId()
-    samples = [{"_id": ObjectId()}, {"_id": ObjectId()}]
+    samples = [
+        {
+            "_id": ObjectId(),
+            "metadata": {
+                "source": "review_selection",
+                "source_original_id": "recording-1",
+                "source_start": "2026-08-10T10:00:00.000Z",
+                "source_end": "2026-08-10T10:00:12.500Z",
+            },
+        },
+        {"_id": ObjectId(), "metadata": {"source": "microphone"}},
+    ]
     writes = []
 
     def resource(_name, request):
@@ -23,19 +34,62 @@ def test_rebuilds_profile_in_one_embedding_space() -> None:
         writes.append(request)
         return {"matchedCount": 1}
 
-    embeddings = iter([
-        {"embedding": [1.0, 0.0], "duration": 3.0, "embeddingSpaceId": "space-v1"},
-        {"embedding": [0.8, 0.2], "duration": 4.0, "embeddingSpaceId": "space-v1"},
-    ])
+    embeddings = iter(
+        [
+            {
+                "embedding": [1.0, 0.0],
+                "duration": 3.0,
+                "embeddingSpaceId": "space-v1",
+                "modelId": "diar-v1",
+                "modelVersion": "rev-1",
+            },
+            {
+                "embedding": [0.8, 0.2],
+                "duration": 4.0,
+                "embeddingSpaceId": "space-v1",
+                "modelId": "diar-v1",
+                "modelVersion": "rev-1",
+            },
+        ]
+    )
     with (
-        patch("jobs.profile_reenrollment.get_profile_by_id", return_value={"_id": profile_id, "revision": 1}),
+        patch(
+            "jobs.profile_reenrollment.get_profile_by_id",
+            return_value={"_id": profile_id, "revision": 1},
+        ),
         patch("jobs.profile_reenrollment._get_audio_from_gridfs", return_value=b"wav"),
-        patch("jobs.profile_reenrollment._extract_embedding", side_effect=lambda _audio, **_kwargs: next(embeddings)),
+        patch(
+            "jobs.profile_reenrollment._extract_embedding",
+            side_effect=lambda _audio, **_kwargs: next(embeddings),
+        ),
         patch("jobs.profile_reenrollment.call_resource", side_effect=resource),
     ):
-        result = process_profile_reenrollment_job("job-1", ProfileReenrollmentJobData(profileId=str(profile_id)), lambda _progress: None)
+        result = process_profile_reenrollment_job(
+            "job-1",
+            ProfileReenrollmentJobData(profileId=str(profile_id)),
+            lambda _progress: None,
+        )
 
     assert result["profileRevision"] == 2
     update = writes[-1]["update"]["$set"]
     assert update["embeddingSpaceId"] == "space-v1"
     assert update["sample_count"] == 2
+    assert update["runtimeProvenance"] == {
+        "modelId": "diar-v1",
+        "modelVersion": "rev-1",
+        "embeddingSpaceId": "space-v1",
+        "source": "inference_response",
+    }
+    assert update["embeddingPrototypes"][0]["provenance"] == {
+        "kind": "timeline_interval",
+        "source": "review_selection",
+        "originalId": "recording-1",
+        "interval": {
+            "start": "2026-08-10T10:00:00.000Z",
+            "end": "2026-08-10T10:00:12.500Z",
+        },
+    }
+    assert update["embeddingPrototypes"][1]["provenance"] == {
+        "kind": "saved_voice_sample",
+        "source": "microphone",
+    }

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { UserRound } from "lucide-react";
+import { AlertCircle, UserRound } from "lucide-react";
 import { normalizeObjectId } from "@/lib/diarization";
 import {
   loadVoiceIdentityStatus,
@@ -8,6 +8,7 @@ import {
   voiceIdentityKeys,
 } from "@/lib/voiceIdentity";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -37,6 +38,10 @@ export function VoiceIdentityStatusCard() {
     },
   });
   const status = statusQuery.data;
+  const calibrationPolicy = status?.usableCalibration
+    ? status.usableCalibration.classificationPolicy ??
+      (status.usableCalibration.targetPrecision >= 0.98 ? "full" : "pilot")
+    : null;
 
   return (
     <Card data-testid="voice-identity-status">
@@ -46,8 +51,9 @@ export function VoiceIdentityStatusCard() {
           Voice identity
         </CardTitle>
         <CardDescription>
-          Sky-first identity is configured in Settings. Classification reuses
-          stored embeddings; re-diarization remains an isolated generation.
+          Identify Sky in already diarized audio. Calibration teaches the
+          matcher which similarity scores mean Sky, not Sky, or uncertain; it
+          does not rerun diarization.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -75,7 +81,9 @@ export function VoiceIdentityStatusCard() {
                   : "bg-amber-500/10 text-amber-600"}
               >
                 {status?.canClassify
-                  ? "Ready to classify"
+                  ? calibrationPolicy === "pilot"
+                    ? "24h pilot ready"
+                    : "Ready to classify"
                   : "Calibration needed"}
               </Badge>
               {status?.latestCampaign && (
@@ -85,10 +93,64 @@ export function VoiceIdentityStatusCard() {
               )}
             </div>
           )}
-        {(status?.blockers?.length ?? 0) > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {status?.blockers.join(" · ")}
-          </p>
+        {primaryId && statusQuery.isError && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            Voice identity readiness could not be loaded. Open calibration to
+            inspect the profile and try again.
+          </div>
+        )}
+        {status?.canClassify && calibrationPolicy === "pilot" && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+            Provisional calibration at {Math.round(
+              (status.usableCalibration?.targetPrecision ?? 0) * 100,
+            )}% is ready for a maximum 24-hour pilot. Review its false matches,
+            then return to calibration and reach 98% before historical
+            classification.
+          </div>
+        )}
+        {primaryId && !statusQuery.isLoading && !statusQuery.isError &&
+          !status?.canClassify && (
+          <div
+            className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3"
+            data-testid="voice-identity-calibration-needed"
+          >
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium">
+                  Calibrate {primary?.name ?? "the primary voice"}{" "}
+                  before classification
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Review clear Sky / not-Sky examples, use different recordings
+                  to fit and check the thresholds, then save the validated
+                  calibration. You choose the required precision; the server
+                  recalculates the actual thresholds and shows the resulting
+                  coverage and false matches.
+                </p>
+              </div>
+            </div>
+            {(status?.blockers?.length ?? 0) > 0 && (
+              <div className="text-xs">
+                <p className="font-medium">Current blockers</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">
+                  {status?.blockers.map((blocker) => (
+                    <li key={blocker}>{blocker}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <Button asChild size="sm">
+                <Link to="/settings/voice-identity#calibration">
+                  Open calibration setup
+                </Link>
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Next: label → fit → validate → save → classify
+              </span>
+            </div>
+          </div>
         )}
         <div className="flex flex-wrap gap-4 text-sm font-medium">
           <Link
@@ -99,9 +161,9 @@ export function VoiceIdentityStatusCard() {
           </Link>
           <Link
             className="text-primary hover:underline"
-            to="/settings/voice-identity"
+            to="/settings/voice-identity#calibration"
           >
-            Review & calibration →
+            Calibration details →
           </Link>
           <Link
             className="text-primary hover:underline"

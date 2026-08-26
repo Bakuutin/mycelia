@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
-import {
+import capability, {
   buildConversationChunkClaimQuery,
+  buildConversationChunkClaimRequest,
   mergedResponseSchema,
   parseMergedResponse,
   schema,
@@ -22,6 +23,8 @@ Deno.test("merged extractor defaults and schema", () => {
   const input = schema.parse({ type: "conversation_extractor_merged" });
   expect(input.limit).toBe(1);
   expect(input.force).toBe(false);
+  expect(input.maxTokens).toBe(8192);
+  expect(input.maxPromptChars).toBe(32_000);
   expect(input.merged_system_prompt).toContain("segments");
   expect(input.merged_system_prompt).toContain("entities");
 
@@ -62,6 +65,53 @@ Deno.test("merged extractor shares retry and stale claim eligibility", () => {
 
   const retryNow = buildConversationChunkClaimQuery({ retryNow: true }, now);
   expect((retryNow.$or as any[])[1]).toEqual({ state: "error" });
+});
+
+Deno.test("merged extractor atomically claims the newest eligible chunk", () => {
+  const now = new Date("2026-08-15T04:00:00.000Z");
+  const request = buildConversationChunkClaimRequest(
+    {
+      start: new Date("2026-08-01T00:00:00.000Z"),
+      end: new Date("2026-08-02T00:00:00.000Z"),
+    },
+    "extractor-job-1",
+    now,
+  ) as any;
+
+  expect(request.action).toBe("findOneAndUpdate");
+  expect(request.collection).toBe("conversation_chunks");
+  expect(request.options).toEqual({
+    sort: { start: -1 },
+    returnDocument: "before",
+  });
+  expect(request.query.start).toEqual({
+    $gte: new Date("2026-08-01T00:00:00.000Z"),
+    $lt: new Date("2026-08-02T00:00:00.000Z"),
+  });
+  expect(request.update.$set).toEqual({
+    state: "processing",
+    processingStartedAt: now,
+    processedByJobId: "extractor-job-1",
+  });
+});
+
+Deno.test("merged extractor pending work allows runtime concurrency fan-out", async () => {
+  const calls: any[] = [];
+  const pending = await capability.hasPendingWork!({
+    reason: "test",
+    mongo: async (input: any) => {
+      calls.push(input);
+      return [{ _id: "ready-chunk" }];
+    },
+  });
+
+  expect(pending).toBe(true);
+  expect(typeof pending).toBe("boolean");
+  expect(calls).toHaveLength(1);
+  expect(calls[0].options).toMatchObject({
+    projection: { _id: 1 },
+    limit: 1,
+  });
 });
 
 Deno.test("merged response parses segments with metadata and boundaries", () => {

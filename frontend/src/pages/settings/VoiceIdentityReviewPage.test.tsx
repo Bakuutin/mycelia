@@ -5,8 +5,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "@/lib/api";
 import VoiceIdentityReviewPage from "./VoiceIdentityReviewPage";
 
-vi.mock("@/lib/api", () => ({ callResource: vi.fn() }));
+vi.mock("@/lib/api", () => ({
+  callResource: vi.fn(),
+  apiClient: {
+    fetch: vi.fn(async () =>
+      new Response(new ArrayBuffer(0), {
+        headers: { "content-type": "audio/wav" },
+      })
+    ),
+  },
+}));
 vi.mock("./VoiceIdentityReviewPlayer", () => ({
+  buildVoiceReviewAudioUrl: () => "/api/audio/review",
   VoiceIdentityReviewPlayer: (props: any) => (
     <div data-testid="review-player">
       <span>active:{String(props.segment._id)}</span>
@@ -14,6 +24,12 @@ vi.mock("./VoiceIdentityReviewPlayer", () => ({
       <span>session:{props.sessionAnswered}/{props.sessionTotal}</span>
       <span>editing:{props.editingLabel ?? "no"}</span>
       <button type="button" onClick={() => props.onDecision("me")}>Sky</button>
+      <button
+        type="button"
+        onClick={() => props.onDecision("me-timeline-only")}
+      >
+        Sky Timeline only
+      </button>
       <button type="button" onClick={() => props.onDecision("not-me")}>
         Not Sky
       </button>
@@ -76,6 +92,13 @@ const emptyPreview = {
   blockers: ["100 more compatible labels needed in total"],
   canValidate: false,
 };
+const validationIssueSegment = {
+  _id: "66b000000000000000000099",
+  original_id: "66b000000000000000000012",
+  start: "2026-08-09T10:05:00.000Z",
+  end: "2026-08-09T10:05:04.000Z",
+  speaker: "SPEAKER_01",
+};
 const readyPreview = {
   ...emptyPreview,
   counts: {
@@ -121,6 +144,24 @@ const readyPreview = {
     positiveRecall: 0.8,
     negativePrecision: 1,
     negativeRecall: 0.65,
+    falsePositive: 1,
+  },
+  validationIssues: {
+    falsePositive: [{
+      kind: "false_positive",
+      segmentId: validationIssueSegment._id,
+      recordingId: validationIssueSegment.original_id,
+      decisionId: "66b000000000000000000098",
+      sessionId: "66b000000000000000000097",
+      assignedProfileId: null,
+      excludedProfileIds: [profile._id],
+      updatedAt: "2026-08-09T10:06:00.000Z",
+      label: "negative",
+      score: 0.81,
+      decision: "identified",
+      segment: validationIssueSegment,
+    }],
+    missedPositive: [],
   },
   blockers: [],
   canValidate: true,
@@ -144,8 +185,48 @@ describe("VoiceIdentityReviewPage", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps session discovery stable and offers an explicit first session", async () => {
+  it("shows a continuous review stream instead of a required 10-item batch", async () => {
     let sessionListCalls = 0;
+    const first = {
+      _id: "66b000000000000000000001",
+      original_id: "66b000000000000000000011",
+      start: "2026-08-10T10:00:00.000Z",
+      end: "2026-08-10T10:00:05.000Z",
+      speaker: "SPEAKER_00",
+    };
+    const createdSession = {
+      _id: "66b000000000000000000050",
+      name: "Rolling review",
+      status: "active",
+      revision: 1,
+      targetProfileIds: [profile._id],
+      window: [{ segmentId: first._id, groupId: "g1", status: "pending" }],
+      groups: [{
+        groupId: "g1",
+        segmentIds: [first._id],
+        start: first.start,
+        end: first.end,
+        durationSeconds: 5,
+      }],
+      segments: [first],
+      activeSegmentId: first._id,
+      loadedCount: 1,
+      reviewedCount: 0,
+      skippedCount: 0,
+      backlogEstimate: 1,
+      hasMore: false,
+      preferences: {
+        autoPlay: true,
+        autoAdvanceWindow: true,
+        groupMode: true,
+        compactMode: true,
+      },
+      querySnapshot: {
+        rangeMode: "fixed",
+        start: "2026-08-07T10:00:00.000Z",
+        end: "2026-08-21T10:00:00.000Z",
+      },
+    };
     mockCallResource.mockImplementation((resource, input: any) => {
       if (resource === "mongo") return Promise.resolve([profile]);
       if (resource === "jobs") {
@@ -163,59 +244,90 @@ describe("VoiceIdentityReviewPage", () => {
         sessionListCalls += 1;
         return Promise.resolve([]);
       }
-      if (input.action === "create-review-session") {
+      if (input.action === "preview-review-session") {
         return Promise.resolve({
-          _id: "66b000000000000000000050",
-          name: "Rolling review",
-          status: "active",
-          revision: 1,
-          targetProfileIds: [profile._id],
-          window: [],
-          groups: [],
-          segments: [],
-          loadedCount: 0,
-          reviewedCount: 0,
-          skippedCount: 0,
-          backlogEstimate: 0,
-          hasMore: false,
-          preferences: {
-            autoPlay: true,
-            autoAdvanceWindow: true,
-            groupMode: true,
-            compactMode: true,
+          sourceMode: "all_matching",
+          range: {
+            start: "2026-08-07T10:00:00.000Z",
+            end: "2026-08-21T10:00:00.000Z",
           },
-          querySnapshot: {
+          embeddingSpaceIds: ["space-v1"],
+          runIds: [],
+          recordingIds: [],
+          scope: {
+            sourceMode: "all_matching",
+            targetProfileIds: [profile._id],
+            embeddingSpaceIds: ["space-v1"],
+            runIds: [],
+            recordingIds: [],
+            candidateMode: "reviewable",
+            quality: { minDurationSeconds: 1, deduplicateOverlaps: true },
             rangeMode: "fixed",
             start: "2026-08-07T10:00:00.000Z",
             end: "2026-08-21T10:00:00.000Z",
           },
+          counts: {
+            eligibleSegments: 42,
+            recordings: 3,
+            scannedSegments: 42,
+            capped: false,
+          },
+          qualityStats: {
+            input: 42,
+            accepted: 42,
+            shortExcluded: 0,
+            duplicateExcluded: 0,
+          },
+          recordings: [],
+          sampleSegments: [],
         });
+      }
+      if (input.action === "create-review-session") {
+        return Promise.resolve(createdSession);
       }
       return Promise.resolve({});
     });
 
     renderPage();
 
-    await screen.findByRole("button", { name: "Start review" });
+    await screen.findByRole("button", {
+      name: "Start recommended review",
+    });
     await waitFor(() => expect(sessionListCalls).toBe(1));
-    expect(screen.getByText(/Saved sessions resume on any device/i))
+    await waitFor(() =>
+      expect(screen.getByRole("button", {
+        name: "Start recommended review",
+      })).toBeEnabled()
+    );
+    expect(screen.getByText(/One continuous stream/i))
       .toBeInTheDocument();
     expect(screen.getByRole("option", { name: "No saved sessions" }))
       .toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
-    await waitFor(() =>
-      expect(mockCallResource).toHaveBeenCalledWith(
-        "speaker-segments",
-        expect.objectContaining({
-          action: "create-review-session",
-          limit: 10,
-          preferences: expect.objectContaining({
-            autoAdvanceWindow: true,
-          }),
-        }),
-      )
+    fireEvent.click(screen.getByRole("button", {
+      name: "Start recommended review",
+    }));
+    await screen.findByText(`active:${first._id}`);
+    expect(sessionListCalls).toBe(1);
+    expect(mockCallResource).toHaveBeenCalledWith(
+      "speaker-segments",
+      expect.objectContaining({
+        action: "create-review-session",
+        sourceMode: "all_matching",
+        candidateMode: "reviewable",
+        quality: { minDurationSeconds: 1, deduplicateOverlaps: true },
+        limit: 10,
+      }),
     );
+    expect(mockCallResource).not.toHaveBeenCalledWith(
+      "speaker-segments",
+      expect.objectContaining({ action: "preview-review-session" }),
+      expect.anything(),
+    );
+    expect(document.body.textContent).toContain(
+      "Timeline-only and Noise / unclear do not",
+    );
+    expect(screen.queryByText("Rolling window")).not.toBeInTheDocument();
   });
 
   it("runs the global identity classification only from the manual button", async () => {
@@ -262,6 +374,52 @@ describe("VoiceIdentityReviewPage", () => {
       profileId: profile._id,
     });
     expect(screen.getByText("10")).toBeInTheDocument();
+  });
+
+  it("does not show a stale remaining estimate for a finished stream", async () => {
+    const finishedSession = {
+      _id: "66b000000000000000000051",
+      name: "Finished review",
+      status: "completed",
+      revision: 4,
+      targetProfileIds: [profile._id],
+      window: [],
+      groups: [],
+      segments: [],
+      loadedCount: 0,
+      reviewedCount: 6,
+      skippedCount: 2,
+      backlogEstimate: 200,
+      hasMore: true,
+      querySnapshot: {
+        rangeMode: "fixed",
+        start: "2026-08-07T10:00:00.000Z",
+        end: "2026-08-21T10:00:00.000Z",
+      },
+    };
+    mockCallResource.mockImplementation((resource, input: any) => {
+      if (resource === "mongo") return Promise.resolve([profile]);
+      if (resource === "jobs") return Promise.resolve({ services: [] });
+      if (input.action === "identity-status") {
+        return Promise.resolve(emptyStatus);
+      }
+      if (input.action === "calibration-preview") {
+        return Promise.resolve(emptyPreview);
+      }
+      if (input.action === "list-review-sessions") {
+        return Promise.resolve([finishedSession]);
+      }
+      if (input.action === "get-review-session") {
+        return Promise.resolve(finishedSession);
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("8 saved answers · stream finished"))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/estimated remaining/i)).not.toBeInTheDocument();
   });
 
   it("resumes a server session, commits a decision, advances, and undoes it", async () => {
@@ -390,6 +548,20 @@ describe("VoiceIdentityReviewPage", () => {
       sessionId,
       revision: 2,
     });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sky Timeline only" }),
+    );
+    await waitFor(() =>
+      expect(mockCallResource).toHaveBeenCalledWith(
+        "speaker-segments",
+        expect.objectContaining({
+          action: "commit-review-decision",
+          profileId: profile._id,
+          calibrationUse: "timeline_only",
+        }),
+      )
+    );
   });
 
   it("shows manual profile labels and revises one reviewed segment without changing counts", async () => {
@@ -561,8 +733,16 @@ describe("VoiceIdentityReviewPage", () => {
     renderPage();
 
     await screen.findByText("Minimum reached");
+    await screen.findByText("Ready to save and classify");
     await screen.findByText("98.5%");
+    expect(screen.getByText("How this check works")).toBeInTheDocument();
+    expect(screen.getByText("Independent check")).toBeInTheDocument();
     expect(screen.getByText("0.720")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Review 1 problem clips",
+    }));
+    expect(screen.getByText(/Labeled Not Sky, matcher predicted Sky/i))
+      .toBeInTheDocument();
     expect(screen.queryByLabelText(/positive threshold/i)).not
       .toBeInTheDocument();
     expect(screen.getByRole("button", {
@@ -595,11 +775,14 @@ describe("VoiceIdentityReviewPage", () => {
 
     renderPage();
 
-    await screen.findByText("Split blocked");
-    for (const blocker of blockedPreview.blockers) {
-      expect(screen.getAllByText(blocker).length).toBeGreaterThan(0);
-    }
-    expect(screen.getByText(/Only 3 source recordings/i)).toBeInTheDocument();
+    await screen.findByText("Check needs attention");
+    expect(screen.getByText(
+      "Check needs both Sky and not-Sky examples. Move a different mixed source group to Check.",
+    )).toBeInTheDocument();
+    expect(screen.getByText(blockedPreview.blockers[1])).toBeInTheDocument();
+    expect(screen.getByText(/Independent accuracy is below 98%/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Only 3 source groups/i)).toBeInTheDocument();
   });
 
   it("marks a validated calibration as ready for the 24-hour pilot", async () => {

@@ -53,6 +53,7 @@ def create_or_update_profile(
     duration: float,
     is_primary: bool = False,
     embedding_space_id: str = "legacy-unknown",
+    runtime_provenance: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new speaker profile or update existing via weighted average.
@@ -107,6 +108,20 @@ def create_or_update_profile(
             "total_duration": new_duration,
             "updated_at": now,
             "revision": int(existing.get("revision", 1)) + 1,
+            **(
+                {
+                    "runtimeProvenance": {
+                        "source": "inference_response",
+                        **runtime_provenance,
+                    },
+                    "enrollmentProvenance": {
+                        "source": "enrollment",
+                        **runtime_provenance,
+                    },
+                }
+                if runtime_provenance
+                else {}
+            ),
         }
 
         # If setting as primary, also update that field
@@ -155,7 +170,21 @@ def create_or_update_profile(
             "updated_at": now,
             "embeddingSpaceId": embedding_space_id,
             "revision": 1,
-            "enrollmentProvenance": {"source": "enrollment", "embeddingSpaceId": embedding_space_id},
+            "enrollmentProvenance": {
+                "source": "enrollment",
+                "embeddingSpaceId": embedding_space_id,
+                **(runtime_provenance or {}),
+            },
+            **(
+                {
+                    "runtimeProvenance": {
+                        "source": "inference_response",
+                        **runtime_provenance,
+                    },
+                }
+                if runtime_provenance
+                else {}
+            ),
         }
 
         result = call_resource("mongo", {
@@ -175,6 +204,7 @@ def add_sample_to_profile(
     embedding: List[float],
     duration: float,
     embedding_space_id: str = "legacy-unknown",
+    runtime_provenance: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Update an existing profile by ID without changing its identity flags."""
     existing_embedding = profile.get("embedding")
@@ -206,6 +236,20 @@ def add_sample_to_profile(
         "embeddingSpaceId": embedding_space_id,
         "revision": int(profile.get("revision", 1)) + 1,
         "enrollmentStatus": "ready",
+        **(
+            {
+                "runtimeProvenance": {
+                    "source": "inference_response",
+                    **runtime_provenance,
+                },
+                "enrollmentProvenance": {
+                    "source": "enrollment",
+                    **runtime_provenance,
+                },
+            }
+            if runtime_provenance
+            else {}
+        ),
     }
     result = call_resource("mongo", {
         "action": "updateOne",

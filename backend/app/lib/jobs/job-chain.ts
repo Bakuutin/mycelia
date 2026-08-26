@@ -9,9 +9,9 @@ export function shouldContinueJobChain(
   if (!result || typeof result !== "object") return false;
   const value = result as Record<string, unknown>;
   return value.hasMore === true &&
-    typeof value.processed === "number" &&
-    Number.isFinite(value.processed) &&
-    value.processed > 0;
+    ((typeof value.processed === "number" &&
+      Number.isFinite(value.processed) &&
+      value.processed > 0) || value.advancePartition === true);
 }
 
 /**
@@ -23,6 +23,9 @@ export function shouldScheduleGenericContinuation(
   data: Record<string, unknown>,
   result: unknown,
 ): boolean {
+  if (data.type === "mediaRecognitionBatch") {
+    return false;
+  }
   if (
     data.type === "histRecalculation" &&
     typeof data.timelineRebuildCampaignId === "string"
@@ -50,6 +53,16 @@ export function getContinuationJobData(
     typeof result?.campaignId === "string" && result.campaignId.length > 0
   ) {
     continuation.campaignId = result.campaignId;
+  }
+  if (
+    data.type === "speakerIdentity" &&
+    typeof result?.nextRunId === "string" && result.nextRunId.length > 0
+  ) {
+    continuation.runId = result.nextRunId;
+    if (typeof result.nextPartitionIndex === "number") {
+      continuation.partitionIndex = result.nextPartitionIndex;
+    }
+    delete continuation.cursor;
   }
   if (
     data.type !== "histRecalculation" &&

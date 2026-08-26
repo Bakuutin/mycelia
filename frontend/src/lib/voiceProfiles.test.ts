@@ -57,6 +57,7 @@ describe("timeline voice samples", () => {
       { id: "profile-1", name: "Sky", isPrimary: true },
       new Date("2026-08-10T10:00:00.000Z"),
       new Date("2026-08-10T10:00:12.500Z"),
+      "recording-1",
     );
 
     expect(metadata).toMatchObject({
@@ -64,28 +65,47 @@ describe("timeline voice samples", () => {
       profile_id: "profile-1",
       duration: 12.5,
       source: "timeline_selection",
+      source_original_id: "recording-1",
       source_start: "2026-08-10T10:00:00.000Z",
       source_end: "2026-08-10T10:00:12.500Z",
+      provenance: {
+        kind: "timeline_interval",
+        source: "timeline_selection",
+        originalId: "recording-1",
+        interval: {
+          start: "2026-08-10T10:00:00.000Z",
+          end: "2026-08-10T10:00:12.500Z",
+        },
+      },
     });
   });
 });
 
 describe("recent voice profiles", () => {
   it("keeps the most recently assigned speakers first across review clips", () => {
-    localStorage.clear();
-    rememberVoiceProfile("profile-belka");
-    rememberVoiceProfile("profile-andrew");
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    rememberVoiceProfile("profile-belka", storage);
+    rememberVoiceProfile("profile-andrew", storage);
 
-    expect(readRecentVoiceProfileIds()).toEqual([
+    const recent = readRecentVoiceProfileIds(storage);
+    expect(recent).toEqual([
       "profile-andrew",
       "profile-belka",
     ]);
     expect(
-      orderVoiceProfilesByRecent([
-        { id: "profile-belka", name: "Belka" },
-        { id: "profile-bowie", name: "Bowie" },
-        { id: "profile-andrew", name: "Andrew" },
-      ], (profile) => profile.id).map((profile) => profile.id),
+      orderVoiceProfilesByRecent(
+        [
+          { id: "profile-belka", name: "Belka" },
+          { id: "profile-bowie", name: "Bowie" },
+          { id: "profile-andrew", name: "Andrew" },
+        ],
+        (profile) => profile.id,
+        recent,
+      ).map((profile) => profile.id),
     ).toEqual([
       "profile-andrew",
       "profile-belka",

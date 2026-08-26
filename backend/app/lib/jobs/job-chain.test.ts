@@ -57,6 +57,32 @@ Deno.test("cursor-based workers advance their continuation cursor", () => {
   });
 });
 
+Deno.test("speakerIdentity continuation advances partitions without retaining an old cursor", () => {
+  const data = {
+    type: "speakerIdentity",
+    runId: "legacy-v0",
+    partitionIndex: 0,
+    cursor: "68abcdefabcdefabcdefabcd",
+    campaignId: "identity-1",
+  };
+  const result = {
+    hasMore: true,
+    processed: 0,
+    advancePartition: true,
+    nextRunId: "generation-9",
+    nextPartitionIndex: 1,
+    campaignId: "identity-1",
+    cursor: null,
+  };
+  expect(shouldContinueJobChain(result)).toBe(true);
+  expect(getContinuationJobData(data, result)).toEqual({
+    type: "speakerIdentity",
+    runId: "generation-9",
+    partitionIndex: 1,
+    campaignId: "identity-1",
+  });
+});
+
 Deno.test("timeline rebuild continuation advances the bounded range", () => {
   const data = {
     type: "histRecalculation",
@@ -95,6 +121,15 @@ Deno.test("timeline campaign continuation is owned by the durable reconciler", (
   expect(
     shouldScheduleGenericContinuation({ type: "histRecalculation" }, result),
   ).toBe(true);
+});
+
+Deno.test("media recognition coordinator owns its polling loop", () => {
+  expect(
+    shouldScheduleGenericContinuation(
+      { type: "mediaRecognitionBatch", batchId: "batch-1" },
+      { hasMore: true, processed: 16 },
+    ),
+  ).toBe(false);
 });
 
 Deno.test("diarization continuation adopts the campaign created by the first batch", () => {

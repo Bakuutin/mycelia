@@ -47,6 +47,65 @@ your own words.
   derived from your movements; manual location assignment for ranges without
   data. See [LOCATIONS.md](docs/LOCATIONS.md) for the full manual.
 
+### Photo & PDF Knowledge
+
+- Preview-first import from a read-only mounted folder. Originals stay outside
+  Mycelia by default; the database keeps a content hash, source-relative path,
+  extracted metadata, and compact GridFS WebP previews.
+- Direct drag-and-drop/file-picker import is also available. Upload analysis
+  stages originals in a separate `media_originals` store. An untouched preview
+  expires after one hour; confirmation makes the files canonical, while an
+  interrupted confirmation has a bounded seven-day recovery lease. Originals
+  can later be removed with a preview-and-confirm receipt while previews,
+  metadata, and analysis remain.
+- Recognition is provider-neutral and can be queued separately from import. Its
+  primary Google preset uses multimodal Gemini Flash-Lite through Vertex AI in
+  the EU multi-region for Russian structured visual descriptions, plus
+  `gemini-embedding-001` in `europe-west4` for semantic search. The same Open
+  Media API contract supports a self-hosted visual model.
+- Bulk Photo analysis uses one fixed package: visual understanding plus OCR. A
+  Google profile runs Vertex visual understanding/embedding and strict-EU Cloud
+  Vision OCR; a self-hosted profile requests the same two features only from its
+  configured endpoint and does not call Google. Global Vision labels/objects are
+  excluded from this batch action. Versioned descriptions, embeddings, OCR
+  pages, annotations, provenance, usage, deduplication, an app-side gross-cost
+  ledger, and independent removal of previews, derived analysis, or the source
+  reference are stored separately. See
+  [MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+- Photo events locally cluster nearby owned images by capture time and EXIF GPS,
+  then use a separate preview-and-confirm step before a Google or self-hosted
+  provider can analyze a displayed, bounded set of sanitized thumbnails (eight
+  by default, at most twelve). Ready results can be reviewed and explicitly
+  published as idempotent Mycelia Event Objects on the Timeline;
+  audio/transcription/Object links stay local and identity recognition is
+  forbidden. Media uses a responsive photo gallery with a focused detail
+  viewer, while `/media/analysis` provides server-side status, placement,
+  filename, and capture-date filters. Recognition batches can target the
+  current explicit selection or every eligible asset matching the server-side
+  filters without being limited to the visible page. Unmatched event candidates
+  remain visible as single photos instead of being silently omitted.
+- Large mounted folders use a visual folder picker and resumable scan → review →
+  confirm campaigns. The mounted root is selected by default and subfolders are
+  browsable without typing paths. One `mediaFolderImport` job reports live
+  checked/total progress, speed and ETA while committing durable 25-file steps.
+  The gallery is cursor-paginated and refreshes while folder imports or
+  recognition jobs advance. An exact SHA-bound provider batch on the Analysis
+  page can process every eligible photo matching the server-side filters with
+  one visible **Photo analysis batch** row and aggregate progress in Jobs.
+  Per-photo recognition jobs remain internal recovery details and do not flood
+  the default Jobs list; active batches do not lock browsing or local import.
+  Generic Jobs launch/restart/cancel/clear actions cannot recreate or remove
+  folder-import or paid recognition campaigns; their lifecycle stays under the
+  Media library and Photo analysis controls.
+  Individual photos have a default Photos map layer and adaptive Photos Timeline
+  track. Nearby map markers and overlapping Timeline markers expand into a
+  captioned photo list with links to the library; wide Timeline density bars
+  open the same bounded capture-window view. Missing time/GPS stays visible as
+  Unplaced and can be assigned locally with audit history.
+- Google media billing supports a fail-closed 24-hour Free Trial confirmation
+  or an explicit persistent paid-account acknowledgement bound to one project;
+  both retain the application monthly, daily, per-asset, and per-event limits.
+
 ### AI Chat
 
 - Chat with your memory using a curated tool catalogue, with Auto, No tools, and
@@ -56,6 +115,22 @@ your own words.
 - Searchable chat history with favorites and a separate archive, compact
   message/pin counts, actual-model labels, unread states, resizable navigation,
   rename, and previous/next navigation across pinned messages.
+
+### Hybrid Knowledge Search
+
+- Optional Qdrant-backed dense + sparse search across transcriptions, messages,
+  objects, and active media descriptions. Typed date/source/message platform and
+  sender filters are revalidated against current MongoDB records; results are
+  capped per chat/recording/source and link back to canonical Mycelia records.
+- Independent projection lifecycle with durable checkpoints, source/chunk
+  ledger, incremental change-stream updates, periodic reconciliation, and
+  blue/green rebuilds that keep the previous active generation searchable.
+- Dedicated Search page and Knowledge settings page for status, progress,
+  freshness, errors, chunk inspection, reconcile, pause/resume, and confirmed
+  rebuild operations. Chat receives only the read-only search tool.
+- Separate `mycelia-rag` Compose project and volumes; Qdrant is additional
+  rebuildable storage and never replaces canonical MongoDB. See
+  [RAG_QDRANT.md](docs/RAG_QDRANT.md).
 
 ### Object Management
 
@@ -77,13 +152,18 @@ your own words.
   advanced controls.
 - Persistent manual snapshots for exact backlog, incremental run history, and
   Timeline integrity; refresh failures retain the last successful values.
-- Durable, pausable Timeline density rebuild campaigns with bounded batches,
-  progress, missing-successor recovery, and explicit final verification.
+- Durable, pausable Timeline density repair campaigns for exact affected dates
+  or a selected period, with bounded batches, progress, missing-successor
+  recovery, and explicit final verification.
 - Lightweight live diarization campaign, five-minute rolling throughput, queue,
   and dynamic route-capacity status, with corpus-wide pipeline and identity
   counts available through explicit calculate buttons instead of dashboard
   polling.
 - Pipeline ordering and progress tracking.
+- Sky-first Voice Identity workflow with rolling review, independent calibration
+  checks, resumable all-history classification campaigns, safe empty-generation
+  repair preview, and current/manual speaker projection on Timeline. See the
+  [Voice Identity runbook](docs/VOICE_IDENTITY_RUNBOOK.md).
 - Configurable worker defaults and prompt templates.
 - Failed-job bulk retry, obsolete-failure dismissal, VAD queue recovery, and
   historical conversation repair:
@@ -105,7 +185,8 @@ your own words.
 ### Integrations
 
 - Messenger platform import (Telegram, Signal).
-- LLM provider configuration with model aliases (small / medium / large).
+- LLM provider configuration with model aliases (small / medium / large),
+  independent host/catalog checks, and fixed or automatic live-model selection.
 - OpenAI-compatible API endpoints (`/v1/audio/transcriptions`,
   `/llm/chat/completions`).
 - MongoDB full-text search alongside GridFS-backed storage.
@@ -118,12 +199,13 @@ your own words.
   memories and wearable capture back into Mycelia.
 - GPU diarization stack replacing the current batch-only flow (`diarizator/`
   Helm charts + WebUI).
-- Semantic search + vector memory integration connecting Qdrant-backed pipelines
-  and the OpenMemory MCP bridges into the main timeline.
+- Qdrant retrieval evaluation and owner-scoped authorization hardening.
 
 **Planned**
 
 - Multi-device & multi-modal capture (health, geolocation, photos, sensors).
+- Mem0/OpenMemory and graph-memory integrations built as separate projections
+  after the Qdrant retrieval contract is validated.
 - Privacy + usage dashboards, token metering, and export flows.
 - Processing / artifact templates, batch operations, and backup automation.
 
@@ -149,6 +231,30 @@ The setup script automatically:
 - Starts all services with Docker Compose
 
 Open [http://localhost:3210](http://localhost:3210) in your browser.
+
+#### Optional Qdrant RAG stack
+
+The vector projection is intentionally not part of the main startup. Run it as
+an isolated stack after Mycelia's MongoDB is available:
+
+```bash
+cp .env.rag.example .env.rag.local
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  up -d --build
+```
+
+Then set `RAG_URL` in the main ignored `.env` and recreate only the backend.
+The default standalone ports are `48091` (RAG API), `46333` (Qdrant
+REST/dashboard), and `46334` (Qdrant gRPC).
+
+The default is a local pinned MiniLM + BM25 FastEmbed baseline with no reranker.
+Its model/tokenizer/instruction/dimension/normalization/chunker contract is visible
+in **Settings → Knowledge index** and enforced by the projection fingerprint.
+Qwen3-Embedding-0.6B at 768 dimensions on an RTX 4090 is reserved as a later
+remote-executor projection; Qdrant itself stays on the current host and no GPU or
+remote inference service is started by this Compose file.
 
 #### CLI/Python Daemon Users
 
@@ -177,9 +283,9 @@ checker reports only key names and line numbers; it never prints values:
 
 The main stack, standalone diarizator, and remote GPU stack intentionally use
 separate templates. `--all` checks `.env`, `diarizator/.env`, and `gpu/.env`
-when present; an absent optional deployment is reported as not configured.
-Use `--fix --prune-undocumented` only after reviewing the listed key names: it
-backs up the selected file and removes keys that its template no longer owns.
+when present; an absent optional deployment is reported as not configured. Use
+`--fix --prune-undocumented` only after reviewing the listed key names: it backs
+up the selected file and removes keys that its template no longer owns.
 
 > **Note**: For local development, Mycelia uses a self-signed certificate. You
 > may need to click "Advanced" and "Proceed" in your browser. See
@@ -239,7 +345,21 @@ uv run daemon.py --reset-errors
 
 #### Run the Complete Automatic Pipeline
 
-The recommended end-to-end command is:
+For an always-on macOS installation, install the host ingestion service once:
+
+```bash
+bash scripts/install-ingestion-service.sh
+curl -fsS http://localhost:8001/health
+```
+
+The LaunchAgent starts at login, discovers local recordings every 10 seconds,
+and ingests bounded batches on the host. The Jobs page's ingestion **Run now**
+button calls the same serialized service, so it cannot overlap the automatic
+cycle. Ingestion remains host-side because local source paths are deliberately
+not mounted into the Docker Python worker. Grant Full Disk Access to the
+background process if Apple Voice Memos reports permission errors.
+
+For a foreground session instead, use:
 
 ```bash
 cd /path/to/mycelia
@@ -249,6 +369,10 @@ cd /path/to/mycelia
 It starts the Docker services and then runs local discovery/import on the host,
 where Apple Voice Memos and other local files are accessible. After each audio
 chunk is inserted, the backend automatically runs the remaining stages:
+
+The foreground wrapper waits up to three minutes for backend readiness before
+starting the host daemon. Do not run it while the LaunchAgent is active, because
+both processes would discover and ingest the same source files.
 
 ```text
 daemon import -> VAD -> speech sequence creation -> remote STT -> conversations
@@ -422,7 +546,10 @@ To change it, for example to `large-v3-turbo`:
    In the repository's `gpu/docker-compose.portainer.yml`, the two service
    entries use `${ASR_MODEL:-large-v3-turbo}`. They are references to one
    Portainer variable, not three independent settings, so normally you change
-   only the `ASR_MODEL` value under **Environment variables**.
+   only the `ASR_MODEL` value under **Environment variables**. This compose is
+   intentionally STT-only. Remote diarization is deployed from
+   `diarizator/compose.portainer.yml`, which is the canonical one-to-six process
+   pool definition.
 3. Choose **Update the stack** and confirm the redeploy. Both
    `mycelia-stt-whisper-1` and `mycelia-stt-proxy-1` must be recreated.
 4. In Portainer, inspect both containers and confirm their environment has

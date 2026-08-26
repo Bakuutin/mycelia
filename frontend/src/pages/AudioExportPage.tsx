@@ -2,16 +2,18 @@ import { useState } from "react";
 import { apiClient } from "@/lib/api";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SmartBackButton } from "@/components/SmartBackButton";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Download } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 
 const AudioExportPage = () => {
   const { timeFormat } = useSettingsStore();
-  const [startDate, setStartDate] = useState<Date | null>(new Date(Date.now() - 3600000));
+  const [startDate, setStartDate] = useState<Date | null>(
+    new Date(Date.now() - 3600000),
+  );
   const [endDate, setEndDate] = useState<Date | null>(new Date());
   const [originalId, setOriginalId] = useState<string>("");
   const [downloading, setDownloading] = useState(false);
@@ -35,8 +37,10 @@ const AudioExportPage = () => {
       const startParam = (startDate.getTime() / 1000).toString();
       const endParam = (endDate.getTime() / 1000).toString();
 
-      let url = `/api/audio/wav?start=${encodeURIComponent(startParam)}&end=${encodeURIComponent(endParam)}`;
-      
+      let url = `/api/audio/wav?start=${encodeURIComponent(startParam)}&end=${
+        encodeURIComponent(endParam)
+      }`;
+
       if (originalId.trim()) {
         url += `&original_id=${encodeURIComponent(originalId.trim())}`;
       }
@@ -46,15 +50,15 @@ const AudioExportPage = () => {
       const downloadUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = downloadUrl;
-      
+
       const startISO = startDate.toISOString().replace(/[:.]/g, "-");
       const endISO = endDate.toISOString().replace(/[:.]/g, "-");
       link.download = `audio_${startISO}_${endISO}.wav`;
-      
+
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
+
       URL.revokeObjectURL(downloadUrl);
     } catch (err) {
       console.error("Failed to download audio:", err);
@@ -80,21 +84,18 @@ const AudioExportPage = () => {
 
       <div className="border rounded-lg p-6 space-y-6">
         <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="start">Start Time *</Label>
-            <DateTimePicker
-              value={startDate || undefined}
-              onChange={(date) => setStartDate(date)}
+          {startDate && endDate && (
+            <DateRangePicker
+              label="Audio range *"
+              value={{ start: startDate, end: endDate }}
+              onChange={(value) => {
+                setStartDate(value.start);
+                if (value.end) setEndDate(value.end);
+              }}
+              precision="second"
+              showAudioTimeline
             />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="end">End Time *</Label>
-            <DateTimePicker
-              value={endDate || undefined}
-              onChange={(date) => setEndDate(date)}
-            />
-          </div>
+          )}
 
           {startDate && endDate && endDate > startDate && (
             <div className="text-sm text-muted-foreground">
@@ -130,20 +131,23 @@ const AudioExportPage = () => {
         <div className="flex justify-end pt-4">
           <Button
             onClick={handleDownload}
-            disabled={!startDate || !endDate || endDate <= startDate || downloading}
+            disabled={!startDate || !endDate || endDate <= startDate ||
+              downloading}
             size="lg"
           >
-            {downloading ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Downloading...
-              </>
-            ) : (
-              <>
-                <Download className="w-4 h-4 mr-2" />
-                Download WAV
-              </>
-            )}
+            {downloading
+              ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Downloading...
+                </>
+              )
+              : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download WAV
+                </>
+              )}
           </Button>
         </div>
       </div>
@@ -152,4 +156,3 @@ const AudioExportPage = () => {
 };
 
 export default AudioExportPage;
-

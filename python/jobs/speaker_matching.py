@@ -9,12 +9,18 @@ from pydantic import BaseModel
 
 from lib.resources import call_resource
 from speaker_identification.profiles import get_all_profiles
-from speaker_identification.matching import match_segments_batch, DEFAULT_SIMILARITY_THRESHOLD
+from speaker_identification.matching import (
+    DEFAULT_SIMILARITY_THRESHOLD,
+    UNKNOWN_EMBEDDING_SPACES,
+    match_segments_batch,
+)
 
 logger = logging.getLogger(__name__)
 
 # Get similarity threshold from env var or use default
-SIMILARITY_THRESHOLD = float(os.environ.get("SPEAKER_SIMILARITY_THRESHOLD", DEFAULT_SIMILARITY_THRESHOLD))
+SIMILARITY_THRESHOLD = float(
+    os.environ.get("SPEAKER_SIMILARITY_THRESHOLD", DEFAULT_SIMILARITY_THRESHOLD)
+)
 
 
 class SpeakerMatchingJobData(BaseModel):
@@ -96,11 +102,32 @@ def process_speaker_matching_job(
         if not profiles:
             raise ValueError(f"Profile not found: {data.profile_id}")
         logger.info(f"Matching only for profile: {profiles[0]['name']}")
+
+    profiles = [
+        profile
+        for profile in profiles
+        if profile.get("embeddingSpaceId") not in UNKNOWN_EMBEDDING_SPACES
+        and isinstance(profile.get("revision"), int)
+        and not isinstance(profile.get("revision"), bool)
+        and profile["revision"] > 0
+    ]
+    if not profiles:
+        logger.warning("No speaker profiles have exact versioned embedding provenance")
+        return {
+            "processed": 0,
+            "matched": 0,
+            "duration": time.time() - start_time,
+            "message": "No compatible speaker profiles enrolled",
+        }
     
     # Build query for unmatched diarizations
     query = {
         "matched_speaker": {"$exists": False},
         "embedding": {"$exists": True},
+        "embeddingSpaceId": {
+            "$exists": True,
+            "$nin": ["", "unknown", "legacy-unknown"],
+        },
     }
     if data.start or data.end:
         query["start"] = {}

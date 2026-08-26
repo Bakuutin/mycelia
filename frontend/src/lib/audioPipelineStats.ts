@@ -4,6 +4,7 @@ export interface AudioSourceFileStats {
   total: number;
   ingested: number;
   pending: number;
+  blocked: number;
   errors: number;
   byKind: Array<{ kind: string; count: number }>;
 }
@@ -16,6 +17,7 @@ export function normalizeAudioSourceFileStats(
     total: totalSessions,
     ingested: 0,
     pending: 0,
+    blocked: 0,
     errors: 0,
     byKind: [],
   };

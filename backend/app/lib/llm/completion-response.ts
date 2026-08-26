@@ -32,7 +32,9 @@ function describeResponseShape(response: unknown): string {
     ? record.usage as Record<string, unknown>
     : undefined;
   const usageDescription = usage
-    ? `; prompt_tokens: ${JSON.stringify(usage.prompt_tokens)}; completion_tokens: ${JSON.stringify(usage.completion_tokens)}`
+    ? `; prompt_tokens: ${
+      JSON.stringify(usage.prompt_tokens)
+    }; completion_tokens: ${JSON.stringify(usage.completion_tokens)}`
     : "";
 
   return `response keys: ${responseKeys}; first choice keys: ${choiceKeys}${finishReasonDescription}${usageDescription}`;
@@ -94,9 +96,9 @@ export function normalizeChatCompletionResponse<T>(
 
 /**
  * Fail loudly when the provider stopped generating because the output-token
- * budget ran out. A truncated response is a configuration error (the worker's
- * maxTokens is too small for this prompt), and for structured calls the
- * truncated JSON would otherwise surface as a confusing parse failure.
+ * budget ran out. This may mean that the output cap is too small, the input is
+ * too dense, or the model repeated itself. For structured calls the truncated
+ * JSON would otherwise surface as a confusing parse failure.
  */
 export function assertCompletionNotTruncated(
   response: unknown,
@@ -119,7 +121,7 @@ export function assertCompletionNotTruncated(
       outputTokens != null ? ` after ${outputTokens} output tokens` : ""
     } (max_tokens=${context.maxTokens ?? "unset"}; ${
       getContextDescription(context)
-    }). Raise the worker's maxTokens setting or shorten the prompt.`,
+    }). Retry once; if it repeats, reduce the input/window size. Increase maxTokens only when the expected output size justifies it.`,
   );
 }
 

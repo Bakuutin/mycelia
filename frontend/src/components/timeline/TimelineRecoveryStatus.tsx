@@ -20,8 +20,9 @@ export function TimelineRecoveryStatus() {
       }) as TimelineIntegrityReport,
     staleTime: 30_000,
     refetchInterval: (query) => {
-      const status = (query.state.data as TimelineIntegrityReport | undefined)
-        ?.campaign?.status;
+      const report = query.state.data as TimelineIntegrityReport | undefined;
+      if (report?.snapshot?.state === "refreshing") return 2_000;
+      const status = report?.campaign?.status;
       return status === "queued" || status === "running" ||
           status === "recovering"
         ? 10_000
@@ -38,6 +39,7 @@ export function TimelineRecoveryStatus() {
   const campaign = data?.campaign;
   const campaignBusy = campaign?.status === "queued" ||
     campaign?.status === "running" || campaign?.status === "recovering";
+  const verificationRequired = campaign?.status === "verifying";
   const completedPercent = campaign && campaign.plannedJobs > 0
     ? Math.round(campaign.completed / campaign.plannedJobs * 100)
     : 0;
@@ -62,17 +64,19 @@ export function TimelineRecoveryStatus() {
           <div className="flex flex-wrap items-center gap-2">
             {campaignBusy
               ? <Activity className="h-4 w-4 text-blue-500" />
-              : data?.status === "needs_attention"
+              : verificationRequired || data?.status === "needs_attention"
               ? <AlertTriangle className="h-4 w-4 text-amber-500" />
               : <CheckCircle2 className="h-4 w-4 text-green-500" />}
             <span className="text-sm font-medium">Timeline processing</span>
             <Badge variant="secondary" className="text-[11px]">
               {campaignBusy
                 ? "rebuild running"
+                : verificationRequired
+                ? "verification required"
                 : data?.status === "needs_attention"
                 ? "action required"
                 : data
-                ? "audit passed"
+                ? "density current"
                 : "checking"}
             </Badge>
           </div>
@@ -91,19 +95,28 @@ export function TimelineRecoveryStatus() {
           )}
           {data && histogramIssues.length > 0 && !campaignBusy && (
             <div className="mt-1 text-xs text-muted-foreground">
-              Full histogram rebuild is recommended. Persisted totals differ
-              from raw sources: {data.sources.filter((source) =>
-                source.difference !== 0
-              ).map((source) =>
+              Timeline density repair is recommended. Jobs will identify and
+              rebuild only affected dates. Current differences:{" "}
+              {data.sources.filter((source) => source.difference !== 0).map((
+                source,
+              ) =>
                 `${source.label} ${source.difference > 0 ? "+" : ""}${
                   formatCount(source.difference)
                 }`
               ).join(" · ")}.
             </div>
           )}
+          {verificationRequired && campaign && (
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              All {campaign.plannedJobs}{" "}
+              rebuild batches finished. Run exact verification to compare the
+              rebuilt totals with the current raw sources and release the
+              campaign.
+            </p>
+          )}
           {data && histogramIssues.length === 0 && !campaignBusy && (
             <p className="mt-1 text-xs text-muted-foreground">
-              Raw source totals match the persisted daily histogram and no stale
+              Raw source totals match the persisted daily density and no stale
               buckets were found.
             </p>
           )}
@@ -139,12 +152,14 @@ export function TimelineRecoveryStatus() {
 
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button
-            variant="ghost"
+            variant={verificationRequired ? "outline" : "ghost"}
             size="sm"
             onClick={() => refreshMutation.mutate()}
             disabled={isFetching || refreshMutation.isPending ||
               data?.snapshot?.state === "refreshing"}
-            title="Refresh timeline integrity status"
+            title={verificationRequired
+              ? "Run exact Timeline verification"
+              : "Refresh timeline integrity status"}
           >
             <RefreshCw
               className={`h-3.5 w-3.5 ${
@@ -154,6 +169,9 @@ export function TimelineRecoveryStatus() {
                   : ""
               }`}
             />
+            {verificationRequired && (
+              <span className="ml-2">Run exact verification</span>
+            )}
           </Button>
           <Button
             asChild

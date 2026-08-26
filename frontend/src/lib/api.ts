@@ -29,6 +29,27 @@ function omitUndefinedObjectProperties(value: unknown): unknown {
   );
 }
 
+async function readApiError(response: Response): Promise<string> {
+  const fallback =
+    `API request failed: ${response.status} ${response.statusText}`;
+  try {
+    const payload = await response.json();
+    const candidate = payload?.error ?? payload?.message;
+    if (typeof candidate === "string" && candidate.trim()) {
+      return `${fallback} — ${candidate.trim()}`;
+    }
+    if (Array.isArray(candidate)) {
+      const firstMessage = candidate.find((entry) =>
+        typeof entry?.message === "string"
+      )?.message;
+      if (firstMessage) return `${fallback} — ${firstMessage}`;
+    }
+  } catch {
+    // Preserve the status fallback for empty or non-JSON error responses.
+  }
+  return fallback;
+}
+
 export class ApiClient {
   private jwtCache: { token: string | null; expiry: number } | null = null;
 
@@ -87,7 +108,7 @@ export class ApiClient {
     }
 
     if (
-      !headers.has("Content-Type")
+      !headers.has("Content-Type") && !(options.body instanceof FormData)
     ) {
       headers.set("Content-Type", "application/json");
     }
@@ -102,27 +123,7 @@ export class ApiClient {
     const response = await this.fetchRaw(path, options);
 
     if (!response.ok) {
-      let detail = "";
-      try {
-        const payload = await response.clone().json();
-        const rawDetail = payload?.error ?? payload?.detail ?? payload?.message;
-        if (typeof rawDetail === "string") {
-          detail = rawDetail;
-        } else if (rawDetail !== undefined) {
-          detail = JSON.stringify(rawDetail);
-        }
-      } catch {
-        try {
-          detail = (await response.clone().text()).trim();
-        } catch {
-          // The status and status text remain useful when no body is readable.
-        }
-      }
-      throw new Error(
-        `API request failed: ${response.status} ${response.statusText}${
-          detail ? ` — ${detail}` : ""
-        }`,
-      );
+      throw new Error(await readApiError(response));
     }
 
     return response;
@@ -139,6 +140,21 @@ export class ApiClient {
       body: JSON.stringify(data),
     });
     return response.json();
+  }
+
+  async postForm<T>(path: string, data: FormData): Promise<T> {
+    const response = await this.fetchRaw(path, {
+      method: "POST",
+      body: data,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = typeof payload?.error === "string"
+        ? payload.error
+        : `API request failed: ${response.status} ${response.statusText}`;
+      throw new Error(message);
+    }
+    return payload as T;
   }
 
   async getBlob(path: string): Promise<Blob> {

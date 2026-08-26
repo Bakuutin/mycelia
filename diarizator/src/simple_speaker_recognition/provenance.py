@@ -84,6 +84,10 @@ def build_runtime_fingerprint(
         "configHash": _hash({"diarization": diarization_model, "embedding": embedding}),
     }
     return {
+        # Compact aliases are the stable scheduler/storage contract. The full
+        # fingerprints remain available for audits and future compatibility.
+        "modelId": diarization["model"],
+        "modelVersion": diarization["resolvedRevision"],
         "diarizationFingerprint": diarization,
         "embeddingFingerprint": embedding,
         "embeddingSpaceId": _hash(embedding),

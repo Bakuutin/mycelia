@@ -1,5 +1,7 @@
 """FastAPI service for pyannote diarization with embeddings and speaker identification."""
 
+import asyncio
+import gc
 import json
 import logging
 import os
@@ -18,7 +20,10 @@ from simple_speaker_recognition.api.inference_gate import (
     InferenceGate,
     InferenceGateFull,
 )
-from simple_speaker_recognition.core.audio_backend import AudioBackend
+from simple_speaker_recognition.core.audio_backend import (
+    AudioBackend,
+    _run_in_executor_to_completion,
+)
 from simple_speaker_recognition.provenance import build_runtime_fingerprint
 
 
@@ -79,8 +84,16 @@ elif compute_mode == "gpu" and not torch.cuda.is_available():
 else:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Global variable for audio backend
+# Model lifecycle state. The lock is created lazily so tests using separate
+# event loops do not inherit a lock bound to an earlier loop.
 audio_backend: Optional[AudioBackend] = None
+model_lock: Optional[asyncio.Lock] = None
+idle_unload_task: Optional[asyncio.Task] = None
+model_state = "starting"
+model_error: Optional[str] = None
+last_model_activity = time.monotonic()
+cached_runtime_fingerprint: Dict = {}
+cached_batching: Optional[Dict[str, int]] = None
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -94,6 +107,22 @@ def _positive_int_env(name: str, default: int) -> int:
         return default
     if value < 1:
         log.warning("%s must be positive; using %d", name, default)
+        return default
+    return value
+
+
+def _nonnegative_int_env(name: str, default: int) -> int:
+    """Read an integer timeout where zero explicitly disables the feature."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Invalid %s=%r; using %d", name, raw, default)
+        return default
+    if value < 0:
+        log.warning("%s must be non-negative; using %d", name, default)
         return default
     return value
 
@@ -129,10 +158,19 @@ inference_gate = InferenceGate(
         maximum=1,
     ),
 )
+idle_timeout_seconds = _nonnegative_int_env(
+    "DIARIZATION_IDLE_TIMEOUT_SECONDS",
+    0,
+)
 
 
 def _elapsed_ms(started_at: float) -> float:
     return round((time.perf_counter() - started_at) * 1000, 2)
+
+
+def _mark_model_activity() -> None:
+    global last_model_activity
+    last_model_activity = time.monotonic()
 
 
 def _finish_timings(
@@ -156,25 +194,125 @@ def _runtime_fingerprint(backend: AudioBackend) -> Dict:
     )
 
 
+def _backend_batching(backend: AudioBackend) -> Dict[str, int]:
+    return {
+        "segmentation": backend.segmentation_batch_size,
+        "pipeline_embeddings": backend.embedding_batch_size,
+        "segment_embeddings": backend.segment_embedding_batch_size,
+    }
+
+
+def _get_model_lock() -> asyncio.Lock:
+    global model_lock
+    if model_lock is None:
+        model_lock = asyncio.Lock()
+    return model_lock
+
+
+def _create_audio_backend() -> AudioBackend:
+    return AudioBackend(hf_token, device)
+
+
+async def _ensure_audio_backend() -> AudioBackend:
+    """Return the loaded backend, single-flight loading it after idle offload."""
+    global audio_backend, cached_batching, cached_runtime_fingerprint
+    global last_model_activity, model_error, model_state
+
+    if audio_backend is not None:
+        return audio_backend
+
+    async with _get_model_lock():
+        if audio_backend is not None:
+            return audio_backend
+
+        model_state = "loading"
+        model_error = None
+        log.info("Loading diarization models on %s", device)
+        try:
+            backend = await _run_in_executor_to_completion(_create_audio_backend)
+            cached_runtime_fingerprint = _runtime_fingerprint(backend)
+            cached_batching = _backend_batching(backend)
+            audio_backend = backend
+            last_model_activity = time.monotonic()
+            model_state = "ready"
+            log.info("Models ready ✔ – device=%s", device)
+            return backend
+        except asyncio.CancelledError:
+            model_state = "idle"
+            raise
+        except Exception as error:
+            model_error = str(error)
+            model_state = "error"
+            log.error("Failed to load diarization models", exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Diarization model load failed: {error}",
+            ) from error
+
+
+async def _unload_audio_backend_if_idle(*, now: Optional[float] = None) -> bool:
+    """Release model references and cached CUDA allocations after inactivity."""
+    global audio_backend, model_state
+
+    if idle_timeout_seconds <= 0:
+        return False
+
+    async with _get_model_lock():
+        if audio_backend is None or model_state != "ready":
+            return False
+        snapshot = await inference_gate.snapshot()
+        if snapshot.inflight or snapshot.queued:
+            return False
+        checked_at = time.monotonic() if now is None else now
+        if checked_at - last_model_activity < idle_timeout_seconds:
+            return False
+
+        backend = audio_backend
+        audio_backend = None
+        model_state = "idle"
+        del backend
+        gc.collect()
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        log.info(
+            "Unloaded idle diarization models after %ds",
+            idle_timeout_seconds,
+        )
+        return True
+
+
+async def _idle_unload_loop() -> None:
+    interval = max(1.0, min(5.0, idle_timeout_seconds / 2))
+    while True:
+        await asyncio.sleep(interval)
+        await _unload_audio_backend_if_idle()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan event handler for startup and shutdown."""
-    global audio_backend
+    global idle_unload_task, model_lock
 
-    # Startup: Load models
     log.info("=== PyAnnote Diarization Service Starting ===")
     log.debug(f"HF_TOKEN present: {bool(hf_token)}")
     log.debug(f"Device: {device}")
-    log.info("Loading models...")
-    audio_backend = AudioBackend(hf_token, device)
-    log.info("Models ready ✔ – device=%s", device)
-    log.debug(f"AudioBackend initialized with device: {device}")
+    model_lock = asyncio.Lock()
+    await _ensure_audio_backend()
+    if idle_timeout_seconds > 0:
+        idle_unload_task = asyncio.create_task(_idle_unload_loop())
+        log.info("Idle model offload enabled: timeout=%ds", idle_timeout_seconds)
 
-    # Yield control to the application
-    yield
-
-    # Shutdown: Clean up resources if needed
-    log.info("Shutting down diarization service")
+    try:
+        yield
+    finally:
+        if idle_unload_task is not None:
+            idle_unload_task.cancel()
+            try:
+                await idle_unload_task
+            except asyncio.CancelledError:
+                pass
+            idle_unload_task = None
+        log.info("Shutting down diarization service")
 
 
 app = FastAPI(title="PyAnnote Diarization Service", version="1.0.0", lifespan=lifespan)
@@ -206,12 +344,12 @@ async def inference_capacity_exhausted(
 
 async def _health_payload() -> Dict:
     snapshot = await inference_gate.snapshot()
-    runtime_ready = audio_backend is not None and not (
-        compute_mode == "gpu" and device.type != "cuda"
+    device_ready = not (compute_mode == "gpu" and device.type != "cuda")
+    model_ready = model_state in {"idle", "loading"} or (
+        model_state == "ready" and audio_backend is not None
     )
-    fingerprint = (
-        _runtime_fingerprint(audio_backend) if audio_backend is not None else {}
-    )
+    runtime_ready = device_ready and model_ready
+    idle_seconds = max(0.0, time.monotonic() - last_model_activity)
     return {
         "status": "ok",
         "version": "1.0.0",
@@ -219,20 +357,17 @@ async def _health_payload() -> Dict:
         "computeMode": compute_mode,
         "service": "pyannote-diarization",
         "ready": runtime_ready,
+        "modelState": model_state,
+        "modelsLoaded": audio_backend is not None,
+        "idleTimeoutSeconds": idle_timeout_seconds,
+        "idleSeconds": round(idle_seconds, 1),
+        "modelError": model_error,
         "concurrency": snapshot.concurrency,
         "inflight": snapshot.inflight,
         "queued": snapshot.queued,
         "maxQueued": snapshot.max_queued,
-        "batching": (
-            {
-                "segmentation": audio_backend.segmentation_batch_size,
-                "pipeline_embeddings": audio_backend.embedding_batch_size,
-                "segment_embeddings": audio_backend.segment_embedding_batch_size,
-            }
-            if audio_backend is not None
-            else None
-        ),
-        **fingerprint,
+        "batching": cached_batching,
+        **cached_runtime_fingerprint,
     }
 
 
@@ -244,7 +379,7 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """Readiness endpoint that fails until the inference models are loaded."""
+    """Report whether the process can accept work, including cold-start work."""
     payload = await _health_payload()
     if not payload["ready"]:
         return JSONResponse(status_code=503, content=payload)
@@ -281,14 +416,15 @@ async def embed(
     timings: Dict[str, float] = {}
     log.debug(f"Received embedding request: filename={file.filename}")
 
-    if audio_backend is None:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
     lease = None
+    backend = None
     audio_data = b""
     try:
         lease = await inference_gate.acquire()
         timings["queue_ms"] = round(lease.queue_seconds * 1000, 2)
+        load_started = time.perf_counter()
+        backend = await _ensure_audio_backend()
+        timings["model_load_ms"] = _elapsed_ms(load_started)
 
         # Do not copy the upload into process memory until capacity is reserved.
         upload_started = time.perf_counter()
@@ -299,7 +435,7 @@ async def embed(
 
         # Decode the upload once in memory and preserve the existing crop behavior.
         decode_started = time.perf_counter()
-        wav = await audio_backend.async_load_wave_bytes(
+        wav = await backend.async_load_wave_bytes(
             audio_data,
             start=start,
             end=end,
@@ -320,7 +456,7 @@ async def embed(
         # Extract embedding
         log.debug("Extracting embedding...")
         embedding_started = time.perf_counter()
-        emb = await audio_backend.async_embed(wav)
+        emb = await backend.async_embed(wav)
         timings["embedding_ms"] = _elapsed_ms(embedding_started)
         emb_flat = emb.flatten()
 
@@ -352,7 +488,7 @@ async def embed(
             "dimension": len(emb_flat),
             "duration": round(duration, 3),
             "timings": timings,
-            **_runtime_fingerprint(audio_backend),
+            **_runtime_fingerprint(backend),
         }
 
     except InferenceGateFull:
@@ -374,6 +510,7 @@ async def embed(
         )
     finally:
         if lease is not None:
+            _mark_model_activity()
             await inference_gate.release()
 
 
@@ -416,9 +553,6 @@ async def diarize(
         f"Similarity threshold: {similarity_threshold}, clusters provided: {clusters is not None}"
     )
 
-    if audio_backend is None:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
     # Parse clusters if provided
     cluster_list: Optional[List[Dict]] = None
     if clusters:
@@ -451,10 +585,14 @@ async def diarize(
             raise HTTPException(status_code=400, detail=str(e))
 
     lease = None
+    backend = None
     audio_data = b""
     try:
         lease = await inference_gate.acquire()
         timings["queue_ms"] = round(lease.queue_seconds * 1000, 2)
+        load_started = time.perf_counter()
+        backend = await _ensure_audio_backend()
+        timings["model_load_ms"] = _elapsed_ms(load_started)
 
         # Do not copy the upload into process memory until capacity is reserved.
         log.debug("Reading audio file data")
@@ -479,12 +617,12 @@ async def diarize(
             f"Diarization params: min_speakers={min_speakers}, max_speakers={max_speakers}, collar={collar}, min_duration_off={min_duration_off}"
         )
         decode_started = time.perf_counter()
-        full_waveform = await audio_backend.async_load_wave_bytes(audio_data)
+        full_waveform = await backend.async_load_wave_bytes(audio_data)
         timings["decode_ms"] = _elapsed_ms(decode_started)
         payload_duration = full_waveform.shape[-1] / 16000.0
 
         diarize_started = time.perf_counter()
-        segments = await audio_backend.async_diarize(
+        segments = await backend.async_diarize(
             Path(file.filename or "upload.wav"),
             min_speakers=min_speakers,
             max_speakers=max_speakers,
@@ -525,7 +663,7 @@ async def diarize(
                     "reason": "No segments detected in audio",
                 },
                 "timings": response_timings,
-                **_runtime_fingerprint(audio_backend),
+                **_runtime_fingerprint(backend),
             }
 
         log.debug(
@@ -548,13 +686,13 @@ async def diarize(
             try:
                 # Preserve the detected timestamps, but add surrounding context when
                 # the embedding model cannot process a very short turn directly.
-                wav = audio_backend.crop_waveform(
+                wav = backend.crop_waveform(
                     full_waveform,
                     start=segment["start"],
                     end=segment["end"],
                     min_duration=0.5,
                 )
-                if wav.shape[-1] < audio_backend.min_embedding_samples:
+                if wav.shape[-1] < backend.min_embedding_samples:
                     raise ValueError(
                         f"cropped segment has only {wav.shape[-1]} samples"
                     )
@@ -583,13 +721,13 @@ async def diarize(
             )
             valid_segments.append(segment)
 
-        embedding_batch_size = audio_backend.segment_embedding_batch_size
+        embedding_batch_size = backend.segment_embedding_batch_size
         for offset in range(0, len(embedding_candidates), embedding_batch_size):
             batch_candidates = embedding_candidates[
                 offset : offset + embedding_batch_size
             ]
             try:
-                batch_embeddings = await audio_backend.async_embed_batch(
+                batch_embeddings = await backend.async_embed_batch(
                     [candidate[2] for candidate in batch_candidates]
                 )
                 for (_, segment, _), embedding in zip(
@@ -604,7 +742,7 @@ async def diarize(
                 )
                 for index, segment, wav in batch_candidates:
                     try:
-                        embedding = await audio_backend.async_embed(wav)
+                        embedding = await backend.async_embed(wav)
                         append_embedding(segment, embedding)
                     except Exception as segment_error:
                         log.error(
@@ -646,7 +784,7 @@ async def diarize(
                     "reason": "All segments were too short or invalid",
                 },
                 "timings": response_timings,
-                **_runtime_fingerprint(audio_backend),
+                **_runtime_fingerprint(backend),
             }
 
         log.debug(
@@ -697,7 +835,7 @@ async def diarize(
                         "reason": "All segments produced NaN embeddings",
                     },
                     "timings": response_timings,
-                    **_runtime_fingerprint(audio_backend),
+                    **_runtime_fingerprint(backend),
                 }
 
         # Preserve Pyannote's speaker labels. Known-speaker matching must annotate
@@ -725,7 +863,7 @@ async def diarize(
                 centroid_norm = np.linalg.norm(centroid)
                 if centroid_norm > 0:
                     centroid = centroid / centroid_norm
-                match = audio_backend.match_clusters(
+                match = backend.match_clusters(
                     centroid, cluster_list, similarity_threshold
                 )
                 if match:
@@ -840,7 +978,7 @@ async def diarize(
             "segments": result_segments,
             "summary": summary,
             "timings": response_timings,
-            **_runtime_fingerprint(audio_backend),
+            **_runtime_fingerprint(backend),
         }
 
     except InferenceGateFull:
@@ -857,6 +995,7 @@ async def diarize(
         raise HTTPException(status_code=500, detail=f"Diarization failed: {str(e)}")
     finally:
         if lease is not None:
+            _mark_model_activity()
             await inference_gate.release()
 
 

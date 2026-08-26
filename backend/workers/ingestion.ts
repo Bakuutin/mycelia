@@ -4,20 +4,22 @@ import { NetworkJobCapability } from "./python.ts";
 /** Schema for ingestion job data */
 export const schema = z.object({
   type: z.literal("ingestion"),
-  source: z.string().optional(),
+  limit: z.number().int().min(1).max(100).default(20),
 });
 
-const PYTHON_WORKER_URL = Deno.env.get("PYTHON_WORKER_URL") || "http://localhost:8000";
+// Ingestion must run on the host because source_files paths refer to macOS
+// files that are intentionally not mounted into the Docker Python worker.
+const INGESTION_WORKER_URL = Deno.env.get("INGESTION_WORKER_URL") ||
+  "http://host.docker.internal:8001";
 
 export default new NetworkJobCapability({
   name: "ingestion",
   schema,
-  url: `${PYTHON_WORKER_URL}/jobs/ingestion`,
+  url: `${INGESTION_WORKER_URL}/jobs/ingestion`,
   policies: [
-    { resource: "db/audio_chunks", action: "read", effect: "allow" },
-    { resource: "db/audio_chunks", action: "write", effect: "allow" },
+    { resource: "db/source_files", action: "*", effect: "allow" },
+    { resource: "db/audio_chunks", action: "*", effect: "allow" },
   ],
+  maxConcurrency: 1,
+  allowedHosts: [new URL(INGESTION_WORKER_URL).host],
 });
-
-
-

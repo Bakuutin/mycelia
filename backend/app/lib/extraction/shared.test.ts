@@ -1,10 +1,12 @@
 import { expect } from "@std/expect";
 import { buildJsonSchemaResponseFormat } from "../llm/worker-response.ts";
 import {
+  bisectPromptWindow,
   createSegmentParser,
   formatChunkAsPrompt,
   getExtractionRetryDelayMs,
   normalizeEmoji,
+  partitionTranscriptionsForPrompt,
   transcriptionToUtterances,
 } from "./shared.ts";
 
@@ -40,6 +42,110 @@ Deno.test("STT segments become timestamped prompt utterances", () => {
   expect(formatChunkAsPrompt(utterances).prompt).toContain(
     "[time: 2026-07-10T10:00:10.000Z]\nSecond topic",
   );
+});
+
+Deno.test("prompt partitioner enforces source-file boundaries", () => {
+  const windows = partitionTranscriptionsForPrompt([
+    {
+      _id: "first",
+      original: "source-a",
+      start: "2026-07-10T10:00:00.000Z",
+      end: "2026-07-10T10:00:10.000Z",
+      text: "first",
+    },
+    {
+      _id: "second",
+      original: "source-b",
+      start: "2026-07-10T10:00:11.000Z",
+      end: "2026-07-10T10:00:20.000Z",
+      text: "second",
+    },
+  ], 32_000);
+
+  expect(windows).toHaveLength(2);
+  expect(windows.map((window) => window.sourceKey)).toEqual([
+    "source-a",
+    "source-b",
+  ]);
+  expect(windows[1].boundaryReason).toBe("source_change");
+});
+
+Deno.test("prompt partitioner keeps every transcription once under the cap", () => {
+  const transcriptions = ["a", "b", "c"].map((id, index) => ({
+    _id: id,
+    original: "source-a",
+    start: new Date(Date.UTC(2026, 6, 10, 10, index)).toISOString(),
+    end: new Date(Date.UTC(2026, 6, 10, 10, index, 30)).toISOString(),
+    text: id.repeat(150),
+  }));
+  const windows = partitionTranscriptionsForPrompt(transcriptions, 400);
+
+  expect(windows.length).toBeGreaterThan(1);
+  expect(windows.every((window) => window.promptChars <= 400)).toBe(true);
+  expect(
+    windows.flatMap((window) =>
+      window.transcriptions.map((transcription) => transcription._id)
+    ),
+  ).toEqual(["a", "b", "c"]);
+});
+
+Deno.test("one oversized transcription is divided at STT utterances", () => {
+  const windows = partitionTranscriptionsForPrompt([{
+    _id: "large",
+    original: "source-a",
+    start: "2026-07-10T10:00:00.000Z",
+    end: "2026-07-10T10:01:00.000Z",
+    segments: [
+      { start: 0, end: 10, text: "a".repeat(140) },
+      { start: 10, end: 20, text: "b".repeat(140) },
+      { start: 20, end: 30, text: "c".repeat(140) },
+    ],
+  }], 300);
+
+  expect(windows.length).toBeGreaterThan(1);
+  expect(windows.every((window) => window.promptChars <= 300)).toBe(true);
+  expect(windows.every((window) => window.transcriptions[0]._id === "large"))
+    .toBe(true);
+});
+
+Deno.test("truncated prompt windows bisect their actual utterances", () => {
+  const [window] = partitionTranscriptionsForPrompt([{
+    _id: "large",
+    original: "source-a",
+    start: "2026-07-10T10:00:00.000Z",
+    end: "2026-07-10T10:01:00.000Z",
+    segments: [
+      { start: 0, end: 10, text: "a".repeat(100) },
+      { start: 10, end: 20, text: "b".repeat(200) },
+      { start: 20, end: 30, text: "c".repeat(300) },
+    ],
+  }], 2_000);
+
+  const children = bisectPromptWindow(window);
+  expect(children).not.toBeNull();
+  const [left, right] = children!;
+  expect(left.promptChars).toBeLessThan(window.promptChars);
+  expect(right.promptChars).toBeLessThan(window.promptChars);
+  expect(right.boundaryReason).toBe("adaptive_truncation");
+  expect([...left.utterances, ...right.utterances]).toEqual(window.utterances);
+});
+
+Deno.test("one long utterance can still be bisected after truncation", () => {
+  const [window] = partitionTranscriptionsForPrompt([{
+    _id: "single",
+    original: "source-a",
+    start: "2026-07-10T10:00:00.000Z",
+    end: "2026-07-10T10:01:00.000Z",
+    text: "first half of a long utterance second half of a long utterance",
+  }], 2_000);
+
+  const children = bisectPromptWindow(window);
+  expect(children).not.toBeNull();
+  const [left, right] = children!;
+  expect(left.utterances[0].text.length).toBeGreaterThan(0);
+  expect(right.utterances[0].text.length).toBeGreaterThan(0);
+  expect(left.end).toEqual(right.start);
+  expect(right.boundaryReason).toBe("adaptive_truncation");
 });
 
 Deno.test("segment parser resolves phrase boundaries through prompt time markers", () => {

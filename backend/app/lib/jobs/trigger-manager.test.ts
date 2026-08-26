@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import {
   acquireTriggerRun,
   buildTriggeredJobData,
+  getDiarizatorTriggerFreeSlots,
   getTriggerFreeSlots,
   isCapacityBlockedEnqueueError,
   isHealthBlockedEnqueueError,
@@ -19,6 +20,22 @@ Deno.test("scheduled triggers fill remaining concurrency while work is active", 
   expect(getTriggerFreeSlots(6, 0, true)).toBe(6);
   expect(getTriggerFreeSlots(3, 1, 1)).toBe(1);
   expect(getTriggerFreeSlots(3, 3)).toBe(0);
+});
+
+Deno.test("boolean pending work preserves higher LLM worker concurrency", () => {
+  // A local route can keep the worker at one, while an OpenRouter-backed
+  // deployment can raise the same runtime worker limit without changing the
+  // extractor implementation.
+  expect(getTriggerFreeSlots(1, 0, true)).toBe(1);
+  expect(getTriggerFreeSlots(8, 1, true)).toBe(7);
+  expect(getTriggerFreeSlots(8, 1, 1)).toBe(1);
+});
+
+Deno.test("diarization trigger uses real queue reservations and provider capacity", () => {
+  expect(getDiarizatorTriggerFreeSlots(6, 4, 2, true)).toBe(2);
+  expect(getDiarizatorTriggerFreeSlots(6, 4, 1, true)).toBe(1);
+  expect(getDiarizatorTriggerFreeSlots(5, 4, 2, true)).toBe(1);
+  expect(getDiarizatorTriggerFreeSlots(6, 4, 2, 1)).toBe(1);
 });
 
 Deno.test("trigger payload can scope an automatic job", async () => {

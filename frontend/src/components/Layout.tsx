@@ -4,10 +4,12 @@ import {
   Clock,
   FileText,
   Home,
+  Images,
   Map as MapIcon,
   MessageSquare,
   Mic,
   Package,
+  Search,
   Settings,
 } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
@@ -96,6 +98,28 @@ const Layout = () => {
                     Objects
                   </Link>
                   <Link
+                    to="/search"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname === "/search"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    }`}
+                  >
+                    <Search className="w-4 h-4" />
+                    Search
+                  </Link>
+                  <Link
+                    to="/media"
+                    className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
+                      location.pathname.startsWith("/media")
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    }`}
+                  >
+                    <Images className="w-4 h-4" />
+                    Media
+                  </Link>
+                  <Link
                     to="/jobs"
                     className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
                       location.pathname === "/jobs"
@@ -140,7 +164,7 @@ const Layout = () => {
                   <Link
                     to="/settings"
                     className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors relative ${
-                      location.pathname === "/settings"
+                      location.pathname.startsWith("/settings")
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                     }`}

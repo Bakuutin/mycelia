@@ -1,0 +1,57 @@
+name: sky-diarization
+
+services:
+  diarization:
+    image: sky-mycelia-diarization:idle-offload-20260823
+    pull_policy: never
+    command:
+      - uv
+      - run
+      - --no-sync
+      - --extra
+      - cu126
+      - --no-dev
+      - simple-speaker-service
+    init: true
+    stop_grace_period: 5m
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "${DIARIZATION_BIND_ADDRESS:-0.0.0.0}:${DIARIZATION_PORT:-8085}:8085"
+    environment:
+      HF_HOME: /models
+      HF_TOKEN: ${HF_TOKEN:?Set HF_TOKEN in the deployment environment}
+      DIARIZATION_MODEL: pyannote/speaker-diarization-community-1
+      DIARIZATION_SEGMENTATION_BATCH_SIZE: "${DIARIZATION_SEGMENTATION_BATCH_SIZE:-8}"
+      DIARIZATION_EMBEDDING_BATCH_SIZE: "${DIARIZATION_EMBEDDING_BATCH_SIZE:-8}"
+      DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE: "${DIARIZATION_SEGMENT_EMBEDDING_BATCH_SIZE:-4}"
+      DIARIZATION_REQUEST_CONCURRENCY: "${DIARIZATION_REQUEST_CONCURRENCY:-1}"
+      DIARIZATION_MAX_QUEUED_REQUESTS: "${DIARIZATION_MAX_QUEUED_REQUESTS:-1}"
+      DIARIZATION_IDLE_TIMEOUT_SECONDS: "${DIARIZATION_IDLE_TIMEOUT_SECONDS:-120}"
+      PYTORCH_CUDA_ALLOC_CONF: "${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+      COMPUTE_MODE: gpu
+      SPEAKER_SERVICE_HOST: 0.0.0.0
+      SPEAKER_SERVICE_PORT: "8085"
+      LOG_LEVEL: INFO
+    volumes:
+      - diarization-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10m
+    restart: unless-stopped
+
+volumes:
+  diarization-models:
+    external: true
+    name: sky_diarization-models

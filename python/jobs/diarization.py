@@ -369,6 +369,11 @@ def process_diarization_job(
         "range": {"start": data.start, "end": data.end},
         "originalId": data.originalId,
         "route": data.diarizationServerUrl,
+        "runtimeProvenance": {
+            key: (data.routingContext or {}).get(key)
+            for key in ("modelId", "modelVersion", "embeddingSpaceId")
+            if (data.routingContext or {}).get(key)
+        },
         "status": "running",
         "totalChunks": total_chunks,
         "totalEstimated": total_chunks is None,
@@ -457,6 +462,7 @@ def process_diarization_job(
     route_disabled = False
     cancelled = False
     provider_profile_id = (data.routingContext or {}).get("providerProfileId")
+    runtime_provenance: Optional[Dict[str, str]] = None
 
     def emit_stopping(message: str) -> None:
         progress_callback({
@@ -484,6 +490,7 @@ def process_diarization_job(
         nonlocal successful_sequences, failed_sequences, chunk_claim_skips
         nonlocal last_error, provider_unavailable, cursor, elapsed_seconds
         nonlocal processed_range_start, processed_range_end
+        nonlocal runtime_provenance
 
         sample_timings = result.get("stage_timings_ms")
         if isinstance(sample_timings, dict):
@@ -494,6 +501,21 @@ def process_diarization_job(
             if result.get("skip_reason") == "chunk_claim":
                 chunk_claim_skips += 1
             return False
+
+        result_provenance = result.get("runtimeProvenance")
+        if isinstance(result_provenance, dict):
+            normalized = {
+                key: str(result_provenance[key])
+                for key in ("modelId", "modelVersion", "embeddingSpaceId")
+                if result_provenance.get(key)
+            }
+            if len(normalized) == 3:
+                if runtime_provenance and runtime_provenance != normalized:
+                    raise ValueError(
+                        "Diarizator runtime changed inside one job: "
+                        f"{normalized} != {runtime_provenance}"
+                    )
+                runtime_provenance = normalized
 
         sequences_processed += 1
         chunks_processed += int(result.get("chunks_diarized", 0))
@@ -678,8 +700,11 @@ def process_diarization_job(
             max_sequence_length=effective_max_sequence_chunks,
         )
 
+    routing_context = data.routingContext or {}
     speaker_profiles_snapshot = (
-        get_speaker_profiles_snapshot()
+        get_speaker_profiles_snapshot(
+            routing_context.get("embeddingSpaceId"),
+        )
         if not building_generation and not route_disabled
         else []
     )
@@ -706,7 +731,9 @@ def process_diarization_job(
             mark_chunks=not building_generation,
             expected_embedding_space_id=(run or {}).get("embeddingSpaceId")
             if building_generation
-            else None,
+            else routing_context.get("embeddingSpaceId"),
+            expected_model_id=routing_context.get("modelId"),
+            expected_model_version=routing_context.get("modelVersion"),
             server_url=data.diarizationServerUrl,
             prepared=prepared,
             provider_session=provider_session,
@@ -1092,4 +1119,5 @@ def process_diarization_job(
         "campaignId": campaign_id,
         "batchNumber": batch_number,
         "estimatedBatches": estimated_batches,
+        "runtimeProvenance": runtime_provenance,
     }

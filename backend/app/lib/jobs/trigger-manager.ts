@@ -6,13 +6,19 @@ import {
   JobRegistryEntry,
   JobTriggerSource,
 } from "./job-registry.ts";
-import { enqueueJob } from "./queue.ts";
+import {
+  drainWaitingDiarizatorJobs,
+  enqueueJob,
+  getDiarizatorCapacitySnapshot,
+  getReservedDiarizatorQueueJobCount,
+} from "./queue.ts";
 import { EnqueueJobOptions } from "./types.ts";
 import { getServerAuth } from "@/lib/auth/core.server.ts";
 import { getMongoResource, sift } from "@/lib/mongo/core.server.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
 import { normalizeWorkerConcurrency } from "./worker-concurrency.ts";
 import { getContinuationPriority } from "./job-chain.ts";
+import { ObjectId } from "bson";
 
 // Logging helper for consistent format
 const log = (level: string, msg: string, data?: Record<string, unknown>) => {
@@ -55,6 +61,22 @@ export function getTriggerFreeSlots(
     : available;
 }
 
+export function getDiarizatorTriggerFreeSlots(
+  maxConcurrency: number,
+  reservedDiarizationJobs: number,
+  freeProviderSlots: number,
+  pendingWork?: boolean | number,
+): number {
+  return Math.min(
+    freeProviderSlots,
+    getTriggerFreeSlots(
+      maxConcurrency,
+      reservedDiarizationJobs,
+      pendingWork,
+    ),
+  );
+}
+
 export function acquireTriggerRun(
   triggersInFlight: Set<string>,
   jobName: string,
@@ -73,6 +95,18 @@ export class TriggerManager {
   private triggersInFlight = new Set<string>();
 
   constructor(private registry: typeof jobRegistry) {}
+
+  async triggerNow(
+    jobName: string,
+    reason: string,
+    payload?: unknown,
+  ): Promise<boolean> {
+    if (!this.isRunning) return false;
+    const capability = this.registry.get(jobName);
+    if (!capability?.manifest.triggers) return false;
+    await this.checkAndTrigger(capability, reason, payload);
+    return true;
+  }
 
   async start() {
     if (this.isRunning) return;
@@ -258,7 +292,43 @@ export class TriggerManager {
         jobName,
         config?.workers?.[jobName]?.concurrency,
       );
-      const activeJobs = await mongo({
+      let diarizatorRuntime = jobName === "diarization"
+        ? await Promise.all([
+          getReservedDiarizatorQueueJobCount("diarization"),
+          getDiarizatorCapacitySnapshot(auth),
+        ]).then(([reservedJobs, capacity]) => ({ reservedJobs, capacity }))
+        : undefined;
+      if (diarizatorRuntime?.capacity.free) {
+        try {
+          // Interval/startup checks are watchdogs, not competing producers.
+          // Give already-persisted priority/FIFO continuations the newly free
+          // route before synthesizing another archive-wide job.
+          await drainWaitingDiarizatorJobs({
+            reason: `trigger.preflight:${reason}`,
+            auth,
+          });
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          if (message.includes("admission drain is temporarily busy")) {
+            log("DEBUG", "Skipping trigger while admission drain is active", {
+              jobName,
+              reason,
+            });
+            return;
+          }
+          throw error;
+        }
+        diarizatorRuntime = await Promise.all([
+          getReservedDiarizatorQueueJobCount("diarization"),
+          getDiarizatorCapacitySnapshot(auth),
+        ]).then(([reservedJobs, capacity]) => ({ reservedJobs, capacity }));
+      }
+      // Persisted admission-waiting jobs do not reserve a BullMQ/GPU slot.
+      // For diarization, use the queue reservation and route-capacity truth so
+      // a hard-pinned waiting job cannot suppress work on another free GPU.
+      const activeJobs = diarizatorRuntime?.reservedJobs ?? await mongo({
         action: "count",
         collection: "jobs",
         query: {
@@ -294,11 +364,18 @@ export class TriggerManager {
       // claims, while STT additionally reserves a provider-profile slot for
       // each queued job. A worker reporting a numeric backlog caps the
       // fan-out so no slot is burned on a job that would find nothing.
-      const freeSlots = getTriggerFreeSlots(
-        maxConcurrency,
-        activeJobs,
-        pendingWork,
-      );
+      const freeSlots = diarizatorRuntime
+        ? getDiarizatorTriggerFreeSlots(
+          maxConcurrency,
+          activeJobs,
+          diarizatorRuntime.capacity.free,
+          pendingWork,
+        )
+        : getTriggerFreeSlots(
+          maxConcurrency,
+          activeJobs,
+          pendingWork,
+        );
       log("INFO", `Enqueuing jobs`, { jobName, reason, freeSlots });
       const triggeredJobData = await buildTriggeredJobData(
         implementation,
@@ -306,26 +383,88 @@ export class TriggerManager {
         reason,
         mongo,
       );
+      const automaticIdentity = triggeredJobData.type === "speakerIdentity" &&
+        triggeredJobData.campaignMode === "classify_automatic" &&
+        typeof triggeredJobData.campaignId === "string";
+      const reservedIdentityJobId = automaticIdentity
+        ? new ObjectId().toString()
+        : undefined;
+      if (automaticIdentity) {
+        const reserved = await mongo({
+          action: "updateOne",
+          collection: "speaker_identity_campaigns",
+          query: {
+            campaignId: triggeredJobData.campaignId,
+            active: true,
+            status: "queued",
+            currentJobId: { $exists: false },
+          },
+          update: {
+            $set: {
+              currentJobId: reservedIdentityJobId,
+              firstJobId: reservedIdentityJobId,
+              updatedAt: new Date(),
+            },
+          },
+        }) as any;
+        if (reserved?.matchedCount !== 1) {
+          throw new Error(
+            "Automatic speaker identity campaign lost its queue reservation",
+          );
+        }
+      }
       const enqueueOptions: EnqueueJobOptions = {
+        ...(reservedIdentityJobId ? { jobId: reservedIdentityJobId } : {}),
         priority: getContinuationPriority(triggeredJobData),
         trigger: {
           type: "auto",
           reason,
         },
       };
+      const retainAutomaticIdentityReservation = async (
+        failureReason: string,
+      ) => {
+        if (
+          triggeredJobData.type !== "speakerIdentity" ||
+          triggeredJobData.campaignMode !== "classify_automatic" ||
+          typeof triggeredJobData.campaignId !== "string"
+        ) return;
+        await mongo({
+          action: "updateOne",
+          collection: "speaker_identity_campaigns",
+          query: { campaignId: triggeredJobData.campaignId, active: true },
+          update: {
+            $set: {
+              status: "queued",
+              reservationRecoveryError: failureReason,
+              updatedAt: new Date(),
+            },
+          },
+        });
+      };
       let enqueued = 0;
       for (let index = 0; index < freeSlots; index += 1) {
         try {
-          await enqueueJob(
+          const job = await enqueueJob(
             triggeredJobData as any,
             enqueueOptions,
           );
           enqueued += 1;
+          if (
+            reservedIdentityJobId && String(job.id) !== reservedIdentityJobId
+          ) {
+            throw new Error(
+              "Speaker identity queue returned a different job id",
+            );
+          }
         } catch (error) {
           const message = error instanceof Error
             ? error.message
             : String(error);
-          if (!isCapacityBlockedEnqueueError(message)) throw error;
+          if (!isCapacityBlockedEnqueueError(message)) {
+            await retainAutomaticIdentityReservation(message);
+            throw error;
+          }
           log("DEBUG", "Provider capacity reached while filling worker slots", {
             jobName,
             reason,
@@ -333,6 +472,11 @@ export class TriggerManager {
           });
           break;
         }
+      }
+      if (enqueued === 0) {
+        await retainAutomaticIdentityReservation(
+          "No worker slot accepted the automatic campaign",
+        );
       }
       log("INFO", `Jobs enqueued successfully`, {
         jobName,
