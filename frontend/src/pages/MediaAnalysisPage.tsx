@@ -80,6 +80,7 @@ interface Asset {
   safeError?: string;
   source?: { relativePath?: string };
   storageMode?: string;
+  managedOriginal?: { fileId?: unknown };
   metadata?: Record<string, unknown>;
   inventory?: {
     shortCaption?: string;
@@ -108,6 +109,12 @@ const PROCESSABLE_STATES = new Set([
   "budget_blocked",
   "recognition_disabled",
 ]);
+
+interface SingleAssetEligibility {
+  eligible: boolean;
+  title: string;
+  description: string;
+}
 
 function idOf(value: unknown): string {
   if (typeof value === "string") return value;
@@ -185,6 +192,67 @@ function resultCopy(asset: Asset): string {
       : "No visual description yet");
 }
 
+function singleAssetEligibility(asset: Asset): SingleAssetEligibility {
+  if (asset.status === "ready") {
+    return {
+      eligible: false,
+      title: "Photo analysis is already ready",
+      description:
+        "Ready photos are skipped by recognition batches. Stored provider results and history are shown below; a missing visual description is not queued again while this photo remains ready.",
+    };
+  }
+  if (asset.status === "queued" || asset.status === "processing") {
+    return {
+      eligible: false,
+      title: "Description is already in progress",
+      description:
+        "This photo is already queued or processing, so it cannot be added to another recognition batch.",
+    };
+  }
+  if (asset.status === "source_missing") {
+    return {
+      eligible: false,
+      title: "Original photo is unavailable",
+      description: asset.safeError ??
+        "The mounted original cannot be found. Restore it at the imported path before requesting a description.",
+    };
+  }
+  if (asset.status === "source_changed") {
+    return {
+      eligible: false,
+      title: "Original photo changed",
+      description: asset.safeError ??
+        "The file at the mounted path no longer matches the imported photo. Sync the folder again before requesting a description.",
+    };
+  }
+  if (!PROCESSABLE_STATES.has(asset.status)) {
+    return {
+      eligible: false,
+      title: "Photo is not eligible for analysis",
+      description:
+        "Its current state is not accepted by a new recognition batch.",
+    };
+  }
+  const hasOriginalReference = (asset.storageMode === "managed_original" &&
+    Boolean(asset.managedOriginal?.fileId)) ||
+    (asset.storageMode === "external_reference" &&
+      Boolean(asset.source?.relativePath));
+  if (!hasOriginalReference) {
+    return {
+      eligible: false,
+      title: "No retained original is available",
+      description:
+        "This record has a preview but no managed original or mounted-file reference that recognition can read.",
+    };
+  }
+  return {
+    eligible: true,
+    title: "Ready to review one photo",
+    description:
+      "Only this photo is selected. Reviewing creates a local receipt and verifies the original; it does not call the provider.",
+  };
+}
+
 export default function MediaAnalysisPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const inventoryFilterParam = searchParams.get("status");
@@ -207,6 +275,7 @@ export default function MediaAnalysisPage() {
   ]);
   const viewMode = searchParams.get("view") === "table" ? "table" : "grid";
   const selectedAssetId = searchParams.get("assetId") ?? "";
+  const selectRequested = searchParams.get("select") === "1";
 
   const [queryDraft, setQueryDraft] = useState(filters.query);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -236,6 +305,8 @@ export default function MediaAnalysisPage() {
   const [batchAction, setBatchAction] = useState("");
   const [detail, setDetail] = useState<any>();
   const [detailLoading, setDetailLoading] = useState(false);
+  const autoSelectionRef = useRef("");
+  const reviewBatchButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => setQueryDraft(filters.query), [filters.query]);
 
@@ -442,6 +513,7 @@ export default function MediaAnalysisPage() {
       return;
     }
     let current = true;
+    setDetail(undefined);
     setDetailLoading(true);
     callResource("media", { action: "getAsset", assetId: selectedAssetId })
       .then((result) => current && setDetail(result))
@@ -457,6 +529,31 @@ export default function MediaAnalysisPage() {
       current = false;
     };
   }, [selectedAssetId]);
+
+  useEffect(() => {
+    if (!selectRequested || !selectedAssetId) {
+      autoSelectionRef.current = "";
+      return;
+    }
+    setSelectionMode("explicit");
+    setSelectedIds(new Set());
+    setPreview(undefined);
+    autoSelectionRef.current = "";
+  }, [selectRequested, selectedAssetId]);
+
+  useEffect(() => {
+    if (!selectRequested || !selectedAssetId || !detail?.asset) return;
+    if (idOf(detail.asset._id) !== selectedAssetId) return;
+    const selectionKey = `${selectedAssetId}:select=1`;
+    if (autoSelectionRef.current === selectionKey) return;
+    autoSelectionRef.current = selectionKey;
+    const eligibility = singleAssetEligibility(detail.asset as Asset);
+    setSelectionMode("explicit");
+    setSelectedIds(
+      eligibility.eligible ? new Set([selectedAssetId]) : new Set(),
+    );
+    setPreview(undefined);
+  }, [detail, selectRequested, selectedAssetId]);
 
   const processableAssets = assets.filter((asset) =>
     PROCESSABLE_STATES.has(asset.status)
@@ -576,11 +673,25 @@ export default function MediaAnalysisPage() {
     }
   };
 
-  const openAsset = (assetId: string) => updateParams({ assetId });
-  const closeAsset = () => updateParams({ assetId: "" });
+  const openAsset = (assetId: string) => updateParams({ assetId, select: "" });
+  const closeAsset = () => updateParams({ assetId: "", select: "" });
   const selectedIndex = assets.findIndex((asset) =>
     idOf(asset._id) === selectedAssetId
   );
+  const detailEligibility = detail?.asset
+    ? singleAssetEligibility(detail.asset as Asset)
+    : undefined;
+
+  const continueToBatchReview = () => {
+    closeAsset();
+    globalThis.setTimeout(() => {
+      reviewBatchButtonRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "center",
+      });
+      reviewBatchButtonRef.current?.focus();
+    }, 0);
+  };
 
   const assetCheckbox = (asset: Asset) => {
     const assetId = idOf(asset._id);
@@ -821,6 +932,7 @@ export default function MediaAnalysisPage() {
                 ))}
               </select>
               <Button
+                ref={reviewBatchButtonRef}
                 size="sm"
                 disabled={previewing || !profileId || selectedCount === 0}
                 onClick={previewBatch}
@@ -858,6 +970,14 @@ export default function MediaAnalysisPage() {
                   {Number(preview.authorizedGrossUsd ?? 0).toFixed(2)}{" "}
                   · no provider call yet
                 </div>
+                {Number(preview.missingOriginalCount ?? 0) > 0 && (
+                  <div className="text-sm text-amber-700 dark:text-amber-300">
+                    {Number(preview.missingOriginalCount)} selected original(s)
+                    {" "}
+                    could not be read and were excluded. No provider call was
+                    made.
+                  </div>
+                )}
                 {Number(preview.reservedByActiveBatchCount ?? 0) > 0 && (
                   <div className="text-sm text-amber-700 dark:text-amber-300">
                     {Number(preview.reservedByActiveBatchCount)}{" "}
@@ -1274,6 +1394,51 @@ export default function MediaAnalysisPage() {
                     </Button>
                   </div>
                 </div>
+                {selectRequested && detailEligibility && (
+                  <section
+                    className={cn(
+                      "space-y-3 rounded-xl border p-4",
+                      detailEligibility.eligible
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-amber-500/40 bg-amber-500/5",
+                    )}
+                    aria-label="Single photo description request"
+                  >
+                    <div className="flex items-start gap-3">
+                      {detailEligibility.eligible
+                        ? <Sparkles className="mt-0.5 h-5 w-5 text-primary" />
+                        : (
+                          <AlertTriangle className="mt-0.5 h-5 w-5 text-amber-600" />
+                        )}
+                      <div className="space-y-1">
+                        <div className="font-semibold">
+                          {detailEligibility.title}
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          {detailEligibility.description}
+                        </p>
+                      </div>
+                    </div>
+                    {detailEligibility.eligible && (
+                      <div className="space-y-2">
+                        <Button
+                          className="w-full sm:w-auto"
+                          disabled={!profileId}
+                          onClick={continueToBatchReview}
+                        >
+                          <Sparkles className="mr-2 h-4 w-4" />
+                          Continue to Review analysis batch (1)
+                        </Button>
+                        {!profileId && (
+                          <p className="text-xs text-amber-700 dark:text-amber-300">
+                            Enable an analysis provider in Settings before
+                            preparing the local review.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                )}
                 {detail.visual?.visualUnderstanding && (
                   <section className="space-y-3 rounded-xl border p-4">
                     <div className="font-semibold">AI analysis</div>
