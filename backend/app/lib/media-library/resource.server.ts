@@ -35,6 +35,7 @@ import {
   type MediaRecognitionSelection,
   zMediaRecognitionSelection,
 } from "@myceliasdk/media-library.ts";
+import { mediaRecognitionAssetReservationId } from "./recognition-reservation-fence.server.ts";
 
 export const FOLDER_CHUNK_SIZE = 25;
 const MAX_FOLDER_FILES = 20_000;
@@ -1549,6 +1550,9 @@ export function recognitionEligibilityQuery(owner: string) {
   return {
     owner,
     kind: "image",
+    "preview.fileId": { $type: "objectId" },
+    derivedDeletionPending: { $exists: false },
+    originalDeletionPending: { $exists: false },
     status: {
       $in: ["staged", "failed", "budget_blocked", "recognition_disabled"],
     },
@@ -1689,18 +1693,16 @@ type RecognitionReservationRef = {
   sha256: string;
 };
 
-function recognitionReservationId(owner: string, assetId: ObjectId): ObjectId {
-  return deterministicObjectId([
-    "media-recognition-asset-reservation-v1",
-    owner,
-    assetId,
-  ]);
-}
-
 async function cleanupExpiredRecognitionReservations(db: Db, now: Date) {
   await db.collection("media_recognition_asset_reservations").deleteMany({
-    state: "preparing",
     expiresAt: { $lte: now },
+    $or: [
+      { state: "preparing" },
+      {
+        state: "deleting",
+        deletionTarget: "managed_original",
+      },
+    ],
   });
 }
 
@@ -1738,7 +1740,7 @@ export async function reserveRecognitionAssets(
         page.map((entry) => ({
           updateOne: {
             filter: {
-              _id: recognitionReservationId(owner, entry.assetId),
+              _id: mediaRecognitionAssetReservationId(owner, entry.assetId),
               state: "preparing",
               expiresAt: { $lte: now },
             },
@@ -1769,7 +1771,7 @@ export async function reserveRecognitionAssets(
     }
   }
   const ids = assetRefs.map((entry) =>
-    recognitionReservationId(owner, entry.assetId)
+    mediaRecognitionAssetReservationId(owner, entry.assetId)
   );
   const current = await reservations.find(
     { _id: { $in: ids } },
@@ -2321,6 +2323,24 @@ async function ensureRecognitionBatchItems(
   }
 }
 
+async function exactEligibleRecognitionRefs(
+  db: Db,
+  owner: string,
+  assetRefs: RecognitionReservationRef[],
+): Promise<RecognitionReservationRef[]> {
+  if (assetRefs.length === 0) return [];
+  const assets = await db.collection<any>("media_assets").find({
+    _id: { $in: assetRefs.map((entry) => entry.assetId) },
+    ...recognitionEligibilityQuery(owner),
+  }, { projection: { _id: 1, sha256: 1 } }).toArray();
+  const shaById = new Map(
+    assets.map((asset) => [String(asset._id), String(asset.sha256)]),
+  );
+  return assetRefs.filter((entry) =>
+    shaById.get(String(entry.assetId)) === entry.sha256
+  );
+}
+
 export async function materializeRecognitionBatch(
   db: Db,
   batch: any,
@@ -2344,6 +2364,22 @@ export async function materializeRecognitionBatch(
     throw new Error(
       `${safeError}. Build a new preview to process only the remaining photos.`,
     );
+  }
+  const exactRefs = await exactEligibleRecognitionRefs(
+    db,
+    batch.owner,
+    assetRefs,
+  );
+  if (exactRefs.length !== assetRefs.length) {
+    await releaseRecognitionReservations(db, batch._id);
+    const changedCount = assetRefs.length - exactRefs.length;
+    const safeError =
+      `${changedCount} photo(s) changed, lost their sanitized preview, or became ineligible before batch materialization`;
+    await db.collection("media_recognition_batches").updateOne(
+      { _id: batch._id, materializedAt: { $exists: false } },
+      { $set: { status: "paused", safeError, updatedAt: new Date() } },
+    );
+    throw new Error(`${safeError}. Build a new batch preview.`);
   }
   await ensureRecognitionBatchItems(
     db,
@@ -2388,6 +2424,28 @@ export async function materializeRecognitionBatch(
     return current;
   }
   throw new Error("Recognition batch materialization lost its durable claim");
+}
+
+export async function claimRecognitionBatchAssetForQueue(
+  db: Db,
+  owner: string,
+  assetId: ObjectId,
+  sha256: string,
+  expectedStatus: string,
+) {
+  return await db.collection<any>("media_assets").findOneAndUpdate(
+    {
+      _id: assetId,
+      ...recognitionEligibilityQuery(owner),
+      sha256,
+      status: expectedStatus,
+    },
+    {
+      $set: { status: "queued", updatedAt: new Date() },
+      $unset: { safeError: "" },
+    },
+    { returnDocument: "after" },
+  );
 }
 
 async function confirmRecognitionBatch(
@@ -2729,14 +2787,14 @@ export async function processRecognitionBatch(
       { _id: item._id, state: "claiming" },
       { $set: { jobId, consentReceiptId, updatedAt: new Date() } },
     );
-    const assetClaim = await db.collection("media_assets").updateOne(
-      { _id: item.assetId, owner: batch.owner, status: asset.status },
-      {
-        $set: { status: "queued", updatedAt: new Date() },
-        $unset: { safeError: "" },
-      },
+    const assetClaim = await claimRecognitionBatchAssetForQueue(
+      db,
+      batch.owner,
+      item.assetId,
+      item.sha256,
+      asset.status,
     );
-    if (assetClaim.modifiedCount !== 1) {
+    if (!assetClaim) {
       await items.updateOne(
         { _id: item._id, state: "claiming" },
         {

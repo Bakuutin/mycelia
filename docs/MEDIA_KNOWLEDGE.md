@@ -52,6 +52,24 @@ source files are never deleted; forgetting their reference only changes the
 asset to `preview_only`. A preview-only asset cannot be reprocessed unless an
 original is imported again.
 
+The Media detail view groups retention controls under one **Storage &
+deletion…** panel. This is not a whole-asset delete: Mycelia does not yet offer
+an action that removes the canonical Media Library record and every layer in
+one step. **Forget mounted original reference** removes only Mycelia's pointer;
+the read-only mounted file is never modified or deleted, while existing
+previews, metadata, and results remain. **Delete Mycelia previews** removes only
+the compact WebP files; the original or its reference, metadata, and results
+remain, but the item can no longer be viewed in the gallery or sent for photo
+analysis. Resetting visual/OCR results remains an advanced, separate action.
+
+Storage mutations are mutually exclusive with recognition. An active
+recognition reservation, or a queued/processing asset, locks the panel and is
+also rejected by the backend until the item finishes or the batch stops
+starting new provider calls. Reviewing deletion of a Mycelia-managed original
+claims the asset for that preview-and-confirm operation; **Cancel original
+deletion review** releases the claim immediately so the asset does not remain
+locked until the preview expires.
+
 If a mounted original is moved or removed, recognition stops before any
 provider or budget call and the asset becomes `source_missing`; if its bytes
 change, it becomes `source_changed`. Uploading the same SHA-256 through the
@@ -402,14 +420,23 @@ older attempts remain provenance history. Gallery checkboxes select photos only
 for explicit local event grouping and never start cloud recognition.
 
 `/media/analysis` is the recognition workspace. Status, placement, filename,
-and capture-date filters run on the server. A batch can contain the explicit
-loaded selection or **all eligible assets matching the current server-side
-filters**, so selection is not capped by the 100-card page. Preparing a preview
-sends nothing to a provider; the exact cutoff, asset IDs/SHA-256 values, tasks,
-provider snapshot, and gross ceiling are fixed before one confirmation. Existing
-batches keep updating in the background without blocking library browsing,
-local import, filter changes, or preparation of another batch from
-still-eligible photos.
+and capture-date filters run on the server. The shared date-range picker applies
+an inclusive capture-date range in the configured application timezone. The
+prominent **Unprocessed by capture-date range** workflow changes the status to
+**Unprocessed** and selects every match across all server pages; it is not
+capped by the 100 cards currently loaded. **Select loaded** includes only
+recognition-eligible rows that still have a managed original or mounted-file
+reference. While a changed filter scope is reloading, the previous result set
+cannot be selected or reviewed as though it matched the new URL.
+
+A batch can contain that all-matching scope or an explicit eligible selection.
+Preparing a preview sends nothing to a provider: the server rechecks the
+retained-original reference and required sanitized WebP pointer, excludes active
+reservations, and returns the exact eligible count, cutoff, asset IDs/SHA-256
+values, tasks, provider snapshot, and gross ceiling.
+Only **Confirm exact batch** authorizes provider work. Existing batches keep
+updating in the background without blocking library browsing, local import,
+filter changes, or preparation of another batch from still-eligible photos.
 
 The batch action first creates a local preview receipt with a cutoff, exact
 asset IDs/SHA-256 values, the pinned provider profile, tasks, per-photo estimate,

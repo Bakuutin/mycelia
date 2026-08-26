@@ -306,10 +306,13 @@ Deno.test("explicit recognition selection is unique, normalized, and ID-scoped",
   );
 });
 
-Deno.test("recognition eligibility excludes ready and active assets", () => {
+Deno.test("recognition eligibility excludes ready, active, and deleting assets", () => {
   assertEquals(recognitionEligibilityQuery("admin"), {
     owner: "admin",
     kind: "image",
+    "preview.fileId": { $type: "objectId" },
+    derivedDeletionPending: { $exists: false },
+    originalDeletionPending: { $exists: false },
     status: {
       $in: ["staged", "failed", "budget_blocked", "recognition_disabled"],
     },

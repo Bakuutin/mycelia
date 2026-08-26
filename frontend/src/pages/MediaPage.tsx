@@ -51,6 +51,17 @@ type InventoryFilter =
   | "ready"
   | "errors";
 
+type BoundOriginalDeletionPreview = {
+  assetId: string;
+  preview: any;
+};
+
+type OriginalDeletionOperation = {
+  assetId: string;
+  generation: number;
+  action: "prepare" | "confirm" | "cancel";
+};
+
 function mediaMetadataSummary(asset: any) {
   const metadata = asset?.metadata ?? {};
   const exif = metadata.exif ?? {};
@@ -218,11 +229,29 @@ export default function MediaPage() {
   const [results, setResults] = useState<any[]>([]);
   const [detail, setDetail] = useState<any>();
   const [detailReloadVersion, setDetailReloadVersion] = useState(0);
-  const [deletionPreview, setDeletionPreview] = useState<any>();
+  const [deletionPreview, setDeletionPreview] = useState<
+    BoundOriginalDeletionPreview | undefined
+  >();
+  const [originalDeletionOperation, setOriginalDeletionOperation] = useState<
+    OriginalDeletionOperation | undefined
+  >();
+  const [
+    releasingOriginalDeletionAssetIds,
+    setReleasingOriginalDeletionAssetIds,
+  ] = useState<Set<string>>(() => new Set());
+  const [storagePanelOpen, setStoragePanelOpen] = useState(false);
   const inventoryRequestGeneration = useRef(0);
   const inventoryRequestActive = useRef(false);
   const nextCursorRef = useRef<string | undefined>(undefined);
   const loadedAssetCountRef = useRef(0);
+  const selectedAssetIdRef = useRef("");
+  const originalDeletionRequestGeneration = useRef(0);
+  const deletionPreviewRef = useRef<
+    BoundOriginalDeletionPreview | undefined
+  >(undefined);
+  const originalDeletionReleasePromises = useRef(
+    new Map<string, Promise<boolean>>(),
+  );
 
   const load = useCallback(async (
     options: { append?: boolean; silent?: boolean } = {},
@@ -345,6 +374,17 @@ export default function MediaPage() {
   );
   const filteredAssets = assets;
   const selectedAssetId = searchParams.get("assetId") ?? "";
+  selectedAssetIdRef.current = selectedAssetId;
+  deletionPreviewRef.current = deletionPreview;
+  const currentDeletionPreview = deletionPreview?.assetId === selectedAssetId
+    ? deletionPreview.preview
+    : undefined;
+  const currentOriginalDeletionBusy =
+    originalDeletionOperation?.assetId === selectedAssetId;
+  const currentOriginalDeletionReleasePending =
+    releasingOriginalDeletionAssetIds.has(selectedAssetId);
+  const storageActionsBusy = busy || currentOriginalDeletionBusy ||
+    currentOriginalDeletionReleasePending;
   const recognitionRuns = Array.isArray(detail?.runs) ? detail.runs : [];
   const activeRecognitionRun = detail?.asset?.currentRunId
     ? recognitionRuns.find((run: any) =>
@@ -364,6 +404,38 @@ export default function MediaPage() {
         : displayedProviderType === "self-hosted"
         ? "Self-hosted provider"
         : "Unknown provider");
+  const recognitionReservation = detail?.recognitionReservation;
+  const reservationState = String(
+    recognitionReservation?.state ??
+      recognitionReservation?.reservationState ??
+      "",
+  );
+  const reservationItemState = String(
+    recognitionReservation?.itemState ??
+      recognitionReservation?.item?.state ??
+      "",
+  );
+  const reservationBatchStatus = String(
+    recognitionReservation?.batchStatus ??
+      recognitionReservation?.batch?.status ??
+      "",
+  );
+  const storageMutationLocked = Boolean(
+    recognitionReservation &&
+      recognitionReservation.active !== false &&
+      (
+        recognitionReservation.active === true ||
+        ["preparing", "active"].includes(reservationState) ||
+        ["pending", "claiming", "queued", "processing"].includes(
+          reservationItemState,
+        ) ||
+        ["queued", "running", "cancelling"].includes(
+          reservationBatchStatus,
+        ) ||
+        (!reservationState && !reservationItemState &&
+          !reservationBatchStatus)
+      ),
+  ) || ["queued", "processing"].includes(String(detail?.asset?.status ?? ""));
 
   const analyzeUploads = async (files: File[]) => {
     if (files.length === 0 || busy || Boolean(preview)) return;
@@ -447,7 +519,79 @@ export default function MediaPage() {
     }
   };
 
+  const releaseOriginalDeletionPreview = useCallback(
+    async (boundPreview: BoundOriginalDeletionPreview): Promise<boolean> => {
+      const assetId = boundPreview.assetId;
+      const deletionPreviewId = String(
+        boundPreview.preview?.deletionPreviewId ?? "",
+      );
+      if (!deletionPreviewId) return true;
+      const releaseKey = `${assetId}:${deletionPreviewId}`;
+      const existing = originalDeletionReleasePromises.current.get(
+        releaseKey,
+      );
+      if (existing) return await existing;
+
+      setReleasingOriginalDeletionAssetIds((current) => {
+        const next = new Set(current);
+        next.add(assetId);
+        return next;
+      });
+      const release = (async () => {
+        try {
+          await callResource("media", {
+            action: "cancelOriginalDeletionPreview",
+            deletionPreviewId,
+          });
+          if (
+            deletionPreviewRef.current?.assetId === assetId &&
+            String(
+                deletionPreviewRef.current.preview?.deletionPreviewId,
+              ) === deletionPreviewId
+          ) {
+            deletionPreviewRef.current = undefined;
+          }
+          setDeletionPreview((current) =>
+            current?.assetId === assetId &&
+              String(current.preview?.deletionPreviewId) === deletionPreviewId
+              ? undefined
+              : current
+          );
+          return true;
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : "Failed to release the original deletion review";
+          toast.error(
+            `${message}. The reservation is bounded and will expire automatically within 10 minutes.`,
+          );
+          return false;
+        } finally {
+          originalDeletionReleasePromises.current.delete(releaseKey);
+          setReleasingOriginalDeletionAssetIds((current) => {
+            const stillReleasing = [...originalDeletionReleasePromises.current
+              .keys()].some((key) => key.startsWith(`${assetId}:`));
+            if (stillReleasing) return current;
+            const next = new Set(current);
+            next.delete(assetId);
+            return next;
+          });
+        }
+      })();
+      originalDeletionReleasePromises.current.set(releaseKey, release);
+      return await release;
+    },
+    [],
+  );
+
   const openAsset = (assetId: string) => {
+    if (selectedAssetIdRef.current !== assetId) {
+      const currentPreview = deletionPreviewRef.current;
+      if (currentPreview) void releaseOriginalDeletionPreview(currentPreview);
+      originalDeletionRequestGeneration.current += 1;
+      selectedAssetIdRef.current = assetId;
+      setDeletionPreview(undefined);
+    }
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.set("assetId", assetId);
@@ -456,9 +600,21 @@ export default function MediaPage() {
   };
 
   useEffect(() => {
+    return () => {
+      const currentPreview = deletionPreviewRef.current;
+      if (currentPreview?.assetId === selectedAssetId) {
+        void releaseOriginalDeletionPreview(currentPreview);
+      }
+    };
+  }, [releaseOriginalDeletionPreview, selectedAssetId]);
+
+  useEffect(() => {
+    const currentPreview = deletionPreviewRef.current;
+    if (currentPreview) void releaseOriginalDeletionPreview(currentPreview);
+    originalDeletionRequestGeneration.current += 1;
+    setDeletionPreview(undefined);
     if (!selectedAssetId) {
       setDetail(undefined);
-      setDeletionPreview(undefined);
       return;
     }
     let current = true;
@@ -467,7 +623,6 @@ export default function MediaPage() {
         ? existing
         : undefined
     );
-    setDeletionPreview(undefined);
     callResource("media", {
       action: "getAsset",
       assetId: selectedAssetId,
@@ -483,30 +638,45 @@ export default function MediaPage() {
     return () => {
       current = false;
     };
-  }, [detailReloadVersion, selectedAssetId]);
+  }, [detailReloadVersion, releaseOriginalDeletionPreview, selectedAssetId]);
+
+  useEffect(() => {
+    setStoragePanelOpen(false);
+  }, [selectedAssetId]);
 
   const closeAsset = useCallback(() => {
+    const currentPreview = deletionPreviewRef.current;
+    if (currentPreview) void releaseOriginalDeletionPreview(currentPreview);
+    originalDeletionRequestGeneration.current += 1;
+    selectedAssetIdRef.current = "";
+    setDeletionPreview(undefined);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("assetId");
       return next;
     }, { replace: true });
-  }, [setSearchParams]);
+  }, [releaseOriginalDeletionPreview, setSearchParams]);
 
   const deleteDerived = async (
     target: "previews" | "analysis" | "source_reference",
   ) => {
     if (!selectedAssetId) return;
-    const label = target === "previews"
-      ? "stored previews"
+    if (currentOriginalDeletionBusy) {
+      toast.error("Another storage change is already in progress");
+      return;
+    }
+    if (storageMutationLocked) {
+      toast.error(
+        "Storage changes are locked while this asset belongs to an active recognition batch",
+      );
+      return;
+    }
+    const confirmation = target === "previews"
+      ? "Delete the Mycelia WebP previews? The original will not be touched. This asset will no longer have a viewable photo preview or be eligible for photo analysis."
       : target === "analysis"
-      ? "derived visual/OCR analysis"
-      : "the stored original-file reference";
-    if (
-      !globalThis.confirm(
-        `Delete ${label}? The referenced original will not be touched.`,
-      )
-    ) return;
+      ? "Reset the derived visual/OCR analysis? The original and Mycelia previews will be retained."
+      : "Forget the mounted original reference? The mounted file will not be deleted. Mycelia previews will be retained, but this asset cannot be reanalyzed.";
+    if (!globalThis.confirm(confirmation)) return;
     setBusy(true);
     try {
       await callResource("media", {
@@ -517,14 +687,18 @@ export default function MediaPage() {
       });
       toast.success(
         target === "source_reference"
-          ? "Forgot the stored reference; the original file was not touched"
-          : `Deleted ${label}; original file and reference were not touched`,
+          ? "Forgot the mounted reference; the original file was not touched"
+          : target === "previews"
+          ? "Deleted Mycelia previews; the original file and reference were not touched"
+          : "Reset derived analysis; the original and previews were not touched",
       );
       await load();
       setDetailReloadVersion((current) => current + 1);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : `Failed to delete ${label}`,
+        error instanceof Error
+          ? error.message
+          : "The requested storage change failed",
       );
     } finally {
       setBusy(false);
@@ -533,48 +707,139 @@ export default function MediaPage() {
 
   const prepareOriginalDeletion = async () => {
     if (!selectedAssetId) return;
-    setBusy(true);
+    if (currentOriginalDeletionBusy) return;
+    if (
+      [...originalDeletionReleasePromises.current.keys()].some((key) =>
+        key.startsWith(`${selectedAssetId}:`)
+      )
+    ) {
+      toast.error("The previous deletion review is still being released");
+      return;
+    }
+    if (storageMutationLocked) {
+      toast.error(
+        "Storage changes are locked while this asset belongs to an active recognition batch",
+      );
+      return;
+    }
+    const assetId = selectedAssetId;
+    const generation = ++originalDeletionRequestGeneration.current;
+    setDeletionPreview(undefined);
+    setOriginalDeletionOperation({ assetId, generation, action: "prepare" });
     try {
       const result = await callResource("media", {
         action: "previewOriginalDeletion",
-        assetId: selectedAssetId,
+        assetId,
       });
-      setDeletionPreview(result);
+      const boundPreview = { assetId, preview: result };
+      if (
+        generation !== originalDeletionRequestGeneration.current ||
+        selectedAssetIdRef.current !== assetId
+      ) {
+        await releaseOriginalDeletionPreview(boundPreview);
+        return;
+      }
+      if (result.assetId && String(result.assetId) !== assetId) {
+        await releaseOriginalDeletionPreview(boundPreview);
+        throw new Error(
+          "Original deletion preview did not match the selected asset",
+        );
+      }
+      setDeletionPreview(boundPreview);
       if (!result.canDelete) {
         toast.error(
           result.blockers?.join("; ") ?? "Original cannot be deleted",
         );
       }
     } catch (error) {
+      if (
+        generation !== originalDeletionRequestGeneration.current ||
+        selectedAssetIdRef.current !== assetId
+      ) return;
       toast.error(
         error instanceof Error ? error.message : "Deletion preview failed",
       );
     } finally {
-      setBusy(false);
+      setOriginalDeletionOperation((current) =>
+        current?.generation === generation ? undefined : current
+      );
     }
   };
 
   const confirmOriginalDeletion = async () => {
-    if (!deletionPreview?.canDelete) return;
-    setBusy(true);
+    const boundPreview = deletionPreview;
+    if (
+      !boundPreview?.preview?.canDelete ||
+      boundPreview.assetId !== selectedAssetId ||
+      selectedAssetIdRef.current !== boundPreview.assetId
+    ) return;
+    if (storageMutationLocked) {
+      toast.error(
+        "Storage changes are locked while this asset belongs to an active recognition batch",
+      );
+      return;
+    }
+    const assetId = boundPreview.assetId;
+    const deletionPreviewId = String(
+      boundPreview.preview.deletionPreviewId,
+    );
+    const generation = ++originalDeletionRequestGeneration.current;
+    setOriginalDeletionOperation({ assetId, generation, action: "confirm" });
     try {
       await callResource("media", {
         action: "confirmOriginalDeletion",
-        deletionPreviewId: String(deletionPreview.deletionPreviewId),
+        deletionPreviewId,
         confirm: true,
       });
       toast.success(
         "Managed original deleted; preview, metadata, analysis, and search data were retained",
       );
-      setDeletionPreview(undefined);
+      if (
+        deletionPreviewRef.current?.assetId === assetId &&
+        String(deletionPreviewRef.current.preview?.deletionPreviewId) ===
+          deletionPreviewId
+      ) {
+        deletionPreviewRef.current = undefined;
+      }
+      setDeletionPreview((current) =>
+        current?.assetId === assetId &&
+          String(current.preview?.deletionPreviewId) === deletionPreviewId
+          ? undefined
+          : current
+      );
       await load();
-      setDetailReloadVersion((current) => current + 1);
+      if (selectedAssetIdRef.current === assetId) {
+        setDetailReloadVersion((current) => current + 1);
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Original deletion failed",
       );
     } finally {
-      setBusy(false);
+      setOriginalDeletionOperation((current) =>
+        current?.generation === generation ? undefined : current
+      );
+    }
+  };
+
+  const cancelOriginalDeletionPreview = async () => {
+    const boundPreview = deletionPreview;
+    if (
+      !boundPreview?.preview?.deletionPreviewId ||
+      boundPreview.assetId !== selectedAssetId ||
+      selectedAssetIdRef.current !== boundPreview.assetId
+    ) return;
+    const assetId = boundPreview.assetId;
+    const generation = ++originalDeletionRequestGeneration.current;
+    setOriginalDeletionOperation({ assetId, generation, action: "cancel" });
+    try {
+      if (await releaseOriginalDeletionPreview(boundPreview)) {
+        toast.success("Managed original deletion review cancelled");
+      }
+    } finally {
+      setOriginalDeletionOperation((current) =>
+        current?.generation === generation ? undefined : current
+      );
     }
   };
 
@@ -588,6 +853,12 @@ export default function MediaPage() {
     detailHasRecognitionSource &&
     !detail?.visual?.visualUnderstanding &&
     DESCRIPTION_REQUESTABLE_STATUSES.has(detail.asset.status);
+  const detailStorageDescription = detail?.asset?.storageMode ===
+      "external_reference"
+    ? detail.asset.source?.relativePath ?? "mounted original"
+    : detail?.asset?.storageMode === "managed_original"
+    ? "Mycelia-managed original"
+    : "no retained original";
   const detailAnalysisHref = detail?.asset
     ? `/media/analysis?assetId=${detail.asset._id}${
       detailCanRequestDescription ? "&select=1" : ""
@@ -1073,8 +1344,7 @@ export default function MediaPage() {
                     {detail.asset.fileName}
                   </DialogTitle>
                   <DialogDescription className="truncate">
-                    {detail.asset.storageMode} ·{" "}
-                    {detail.asset.source?.relativePath ?? "managed copy"}
+                    {detail.asset.storageMode} · {detailStorageDescription}
                   </DialogDescription>
                 </div>
                 <Button
@@ -1225,89 +1495,272 @@ export default function MediaPage() {
                       </>
                     )}
                     <Button
+                      type="button"
                       variant="outline"
-                      onClick={() => deleteDerived("analysis")}
-                      disabled={busy || !(detail.runs?.length > 0)}
+                      aria-expanded={storagePanelOpen}
+                      aria-controls="media-storage-controls"
+                      onClick={() => setStoragePanelOpen((open) => !open)}
                     >
-                      <Trash2 className="mr-2 h-4 w-4" />Delete derived analysis
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      Storage & deletion…
                     </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => deleteDerived("previews")}
-                      disabled={busy ||
-                        !(detail.asset.previewUrl || detail.asset.thumbnailUrl)}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />Delete previews
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => deleteDerived("source_reference")}
-                      disabled={busy || !detail.asset.source}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />Forget original
-                      reference
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      onClick={prepareOriginalDeletion}
-                      disabled={busy ||
-                        detail.asset.storageMode !== "managed_original"}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />Review original
-                      deletion
-                    </Button>
+                    {storageMutationLocked && (
+                      <Badge variant="secondary">Locked by active batch</Badge>
+                    )}
                   </div>
                   {detail.asset.storageMode === "preview_only" && (
                     <div className="rounded border border-amber-500/40 p-3 text-sm">
-                      The managed original was deleted. Compact previews,
-                      metadata, analysis, and search data remain available.
+                      {detail.asset.sourceReferenceForgottenAt &&
+                          detail.asset.originalDeletionReceipt
+                        ? (
+                          <>
+                            The Mycelia-managed original was deleted, and the
+                            mounted original reference was later forgotten. The
+                            mounted file was not deleted. Compact previews,
+                            metadata, analysis, and search data remain.
+                          </>
+                        )
+                        : detail.asset.sourceReferenceForgottenAt
+                        ? (
+                          <>
+                            The mounted original reference was forgotten. The
+                            mounted file was not deleted. Compact previews,
+                            metadata, analysis, and search data remain.
+                          </>
+                        )
+                        : detail.asset.originalDeletionReceipt
+                        ? (
+                          <>
+                            The Mycelia-managed original was permanently
+                            deleted. Compact previews, metadata, analysis, and
+                            search data remain.
+                          </>
+                        )
+                        : (
+                          <>
+                            No original is retained or referenced by Mycelia.
+                            Compact previews, metadata, analysis, and search
+                            data may still remain.
+                          </>
+                        )}
                     </div>
                   )}
-                  {deletionPreview && (
-                    <div className="space-y-3 rounded border border-destructive/50 p-3 text-sm">
-                      <div className="font-medium">
-                        Original deletion preview
-                      </div>
+                  {storagePanelOpen && (
+                    <div
+                      id="media-storage-controls"
+                      aria-label="Storage and deletion controls"
+                      className="space-y-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-4 text-sm"
+                    >
                       <div>
-                        Original size: {(
-                          Number(deletionPreview.byteLength ?? 0) / 1_000_000
-                        ).toFixed(2)} MB · preview{" "}
-                        {deletionPreview.previewReady ? "ready" : "missing"}
-                        {" "}
-                        · analysis{" "}
-                        {deletionPreview.analysisReady ? "ready" : "missing"}
+                        <div className="font-semibold">Storage & deletion</div>
+                        <p className="mt-1 text-muted-foreground">
+                          These controls do not remove the Media Library record.
+                          Each action changes one retained layer only.
+                        </p>
                       </div>
-                      {deletionPreview.blockers?.length > 0 && (
-                        <ul className="list-disc pl-5 text-destructive">
-                          {deletionPreview.blockers.map((blocker: string) => (
-                            <li key={blocker}>{blocker}</li>
-                          ))}
-                        </ul>
+                      {storageMutationLocked && (
+                        <div
+                          role="status"
+                          className="rounded-md border border-primary/40 bg-primary/5 p-3"
+                        >
+                          <div className="font-medium">
+                            Storage changes are temporarily locked
+                          </div>
+                          <p className="mt-1 text-muted-foreground">
+                            This asset is reserved, queued, or processing in an
+                            active recognition batch. Storage cannot change
+                            until the item finishes or new provider calls are
+                            stopped.
+                            {(reservationBatchStatus || reservationItemState ||
+                              reservationState) && (
+                              <>
+                                {" "}Current state: {[
+                                  reservationBatchStatus,
+                                  reservationItemState || reservationState,
+                                ].filter(Boolean).join(" · ")}.
+                              </>
+                            )}
+                          </p>
+                          <Link
+                            className="mt-2 inline-flex font-medium text-primary underline-offset-4 hover:underline"
+                            to="/media/analysis"
+                          >
+                            View active batch and stop new calls
+                          </Link>
+                        </div>
                       )}
-                      {deletionPreview.canDelete && (
-                        <>
+
+                      {detail.asset.storageMode === "external_reference" && (
+                        <div className="space-y-2 rounded-md border bg-background p-3">
+                          <div className="font-medium">Mounted original</div>
+                          <p className="text-muted-foreground">
+                            Mycelia stores a read-only reference to{" "}
+                            <span className="break-all font-medium text-foreground">
+                              {detail.asset.source?.relativePath ??
+                                "the mounted file"}
+                            </span>
+                            . The external mounted original is never deleted by
+                            this action. Forgetting the reference keeps existing
+                            previews, metadata, and results, but prevents this
+                            asset from being reanalyzed.
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => deleteDerived("source_reference")}
+                            disabled={storageActionsBusy ||
+                              storageMutationLocked ||
+                              !detail.asset.source?.relativePath}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Forget mounted original reference
+                          </Button>
+                        </div>
+                      )}
+
+                      {detail.asset.storageMode === "managed_original" && (
+                        <div className="space-y-2 rounded-md border bg-background p-3">
+                          <div className="font-medium">
+                            Mycelia-managed original
+                          </div>
+                          <p className="text-muted-foreground">
+                            This original is stored inside Mycelia. Deletion
+                            remains a separate preview-and-confirm operation and
+                            retains WebP previews, metadata, provider results,
+                            and search data.
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={prepareOriginalDeletion}
+                            disabled={storageActionsBusy ||
+                              storageMutationLocked}
+                          >
+                            {currentOriginalDeletionBusy &&
+                              originalDeletionOperation?.action ===
+                                "prepare" &&
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Review managed original deletion
+                          </Button>
+                        </div>
+                      )}
+
+                      <div className="space-y-2 rounded-md border bg-background p-3">
+                        <div className="font-medium">Mycelia WebP previews</div>
+                        <p className="text-muted-foreground">
+                          Deleting previews removes only compact WebP files
+                          stored by Mycelia. It never deletes an original or its
+                          reference. Without previews, this item cannot be
+                          viewed in the gallery{detailIsPhoto
+                            ? " or sent for photo analysis"
+                            : ""}.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => deleteDerived("previews")}
+                          disabled={storageActionsBusy ||
+                            storageMutationLocked ||
+                            !(detail.asset.previewUrl ||
+                              detail.asset.thumbnailUrl)}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete Mycelia previews
+                        </Button>
+                      </div>
+
+                      {currentDeletionPreview && (
+                        <div className="space-y-3 rounded border border-destructive/50 bg-background p-3">
+                          <div className="font-medium">
+                            Original deletion preview
+                          </div>
                           <div>
-                            This permanently deletes only the managed original.
-                            WebP previews, local metadata, provider results, and
-                            search indexes are retained.
+                            Original size: {(
+                              Number(currentDeletionPreview.byteLength ?? 0) /
+                              1_000_000
+                            ).toFixed(2)} MB · preview{" "}
+                            {currentDeletionPreview.previewReady
+                              ? "ready"
+                              : "missing"} · analysis{" "}
+                            {currentDeletionPreview.analysisReady
+                              ? "ready"
+                              : "missing"}
                           </div>
-                          <div className="flex gap-2">
-                            <Button
-                              variant="destructive"
-                              onClick={confirmOriginalDeletion}
-                              disabled={busy}
-                            >
-                              Permanently delete managed original
-                            </Button>
-                            <Button
-                              variant="outline"
-                              onClick={() => setDeletionPreview(undefined)}
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </>
+                          {currentDeletionPreview.blockers?.length > 0 && (
+                            <ul className="list-disc pl-5 text-destructive">
+                              {currentDeletionPreview.blockers.map(
+                                (blocker: string) => (
+                                  <li key={blocker}>{blocker}</li>
+                                ),
+                              )}
+                            </ul>
+                          )}
+                          {currentDeletionPreview.canDelete && (
+                            <>
+                              <div>
+                                This permanently deletes only the managed
+                                original. WebP previews, local metadata,
+                                provider results, and search indexes are
+                                retained.
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  variant="destructive"
+                                  onClick={confirmOriginalDeletion}
+                                  disabled={storageActionsBusy ||
+                                    storageMutationLocked}
+                                >
+                                  {currentOriginalDeletionBusy &&
+                                    originalDeletionOperation?.action ===
+                                      "confirm" &&
+                                    (
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    )}
+                                  Permanently delete managed original
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  onClick={cancelOriginalDeletionPreview}
+                                  disabled={storageActionsBusy}
+                                >
+                                  {currentOriginalDeletionBusy &&
+                                    originalDeletionOperation?.action ===
+                                      "cancel" &&
+                                    (
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    )}
+                                  Cancel original deletion review
+                                </Button>
+                              </div>
+                            </>
+                          )}
+                        </div>
                       )}
+
+                      <details className="rounded-md border bg-background p-3">
+                        <summary className="cursor-pointer font-medium">
+                          Advanced: reset provider analysis
+                        </summary>
+                        <div className="mt-3 space-y-2">
+                          <p className="text-muted-foreground">
+                            Resetting analysis removes derived visual/OCR data
+                            and marks historical runs deleted. It retains the
+                            original, its reference, and Mycelia previews.
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => deleteDerived("analysis")}
+                            disabled={storageActionsBusy ||
+                              storageMutationLocked ||
+                              !(detail.runs?.length > 0)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Reset derived analysis
+                          </Button>
+                        </div>
+                      </details>
                     </div>
                   )}
                   <div className="grid gap-3 sm:grid-cols-2">

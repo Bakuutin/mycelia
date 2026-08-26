@@ -58,6 +58,20 @@ import {
   invalidateMediaEventsForAsset,
 } from "@/lib/media-events/invalidation.server.ts";
 import {
+  activateSingleMediaRecognitionReservation,
+  beginManagedOriginalDeletionCancellation,
+  beginManagedOriginalDeletionConfirmation,
+  claimMediaDeletionReservation,
+  claimMediaDerivedDeletionState,
+  claimSingleMediaRecognitionReservation,
+  loadManagedOriginalDeletionReservationByPreview,
+  loadMediaDeletionReservation,
+  loadMediaRecognitionReservationSummary,
+  releaseMediaDeletionReservation,
+  releaseSingleMediaRecognitionReservation,
+  touchSingleMediaRecognitionReservation,
+} from "@/lib/media-library/recognition-reservation-fence.server.ts";
+import {
   type MediaKnowledgeConfig,
   type MediaRecognitionProfile,
   type MediaRecognitionTask,
@@ -153,6 +167,10 @@ const confirmOriginalDeletionSchema = z.object({
   deletionPreviewId: z.string().refine(ObjectId.isValid),
   confirm: z.literal(true),
 });
+const cancelOriginalDeletionPreviewSchema = z.object({
+  action: z.literal("cancelOriginalDeletionPreview"),
+  deletionPreviewId: z.string().refine(ObjectId.isValid),
+});
 
 const mediaRequestSchema = z.discriminatedUnion("action", [
   statusSchema,
@@ -167,6 +185,7 @@ const mediaRequestSchema = z.discriminatedUnion("action", [
   deleteDerivedSchema,
   previewOriginalDeletionSchema,
   confirmOriginalDeletionSchema,
+  cancelOriginalDeletionPreviewSchema,
 ]);
 
 type MediaRequest = z.infer<typeof mediaRequestSchema>;
@@ -430,6 +449,8 @@ export function mediaAssetListFilterQuery(
 
 const STAGED_ORIGINAL_TTL_MS = 60 * 60 * 1000;
 const CONFIRMING_IMPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MEDIA_DERIVED_DELETION_LEASE_MS = 15 * 60 * 1000;
+const MEDIA_SINGLE_RECOGNITION_PREPARE_TTL_MS = 15 * 60 * 1000;
 
 function extensionForMime(mimeType: string): string {
   if (mimeType === "image/jpeg") return "jpg";
@@ -560,6 +581,119 @@ export function availableMediaOriginalStorage(
   return null;
 }
 
+const MEDIA_RECOGNITION_RETRYABLE_STATUSES = [
+  "staged",
+  "failed",
+  "budget_blocked",
+  "recognition_disabled",
+] as const;
+
+function mediaRecognitionAssetClaimQuery(
+  owner: string,
+  asset: {
+    _id: ObjectId;
+    kind?: unknown;
+    sha256?: unknown;
+    status?: unknown;
+  },
+  allowedStatuses: readonly string[],
+) {
+  if (
+    !["image", "pdf"].includes(String(asset.kind)) ||
+    !allowedStatuses.includes(String(asset.status))
+  ) return null;
+  return {
+    _id: asset._id,
+    owner,
+    kind: asset.kind,
+    sha256: asset.sha256,
+    status: asset.status,
+    derivedDeletionPending: { $exists: false },
+    originalDeletionPending: { $exists: false },
+    ...(asset.kind === "image"
+      ? { "preview.fileId": { $type: "objectId" } }
+      : {}),
+    $or: [
+      {
+        storageMode: "managed_original",
+        "managedOriginal.fileId": { $type: "objectId" },
+      },
+      {
+        storageMode: "external_reference",
+        "source.relativePath": { $type: "string" },
+      },
+    ],
+  };
+}
+
+export async function claimMediaAssetForRecognitionQueue(
+  db: Db,
+  owner: string,
+  asset: {
+    _id: ObjectId;
+    kind?: unknown;
+    sha256?: unknown;
+    status?: unknown;
+  },
+) {
+  const query = mediaRecognitionAssetClaimQuery(
+    owner,
+    asset,
+    MEDIA_RECOGNITION_RETRYABLE_STATUSES,
+  );
+  if (!query) return null;
+  return await db.collection<any>("media_assets").findOneAndUpdate(
+    query,
+    {
+      $set: { status: "queued", safeError: null, updatedAt: new Date() },
+    },
+    { returnDocument: "after" },
+  );
+}
+
+export async function claimMediaAssetForRecognitionProcessing(
+  db: Db,
+  owner: string,
+  asset: {
+    _id: ObjectId;
+    kind?: unknown;
+    sha256?: unknown;
+    status?: unknown;
+  },
+  singleReservation?: { jobId: ObjectId | string; claimId: string },
+) {
+  if (
+    singleReservation &&
+    !await touchSingleMediaRecognitionReservation(db, {
+      owner,
+      assetId: asset._id,
+      jobId: singleReservation.jobId,
+      claimId: singleReservation.claimId,
+    })
+  ) return null;
+  const query = mediaRecognitionAssetClaimQuery(
+    owner,
+    asset,
+    ["queued", "processing"],
+  );
+  if (!query) return null;
+  return await db.collection<any>("media_assets").findOneAndUpdate(
+    {
+      ...query,
+      // A duplicate execution of the same durable job may have loaded its
+      // asset while it was still queued, after which the owning execution
+      // moved it to processing. The reservation above proves exact job
+      // ownership; accept either live state without weakening the remaining
+      // immutable/source/deletion fences in `query`.
+      status: { $in: ["queued", "processing"] },
+    },
+    {
+      $set: { status: "processing", safeError: null, updatedAt: new Date() },
+    },
+    { returnDocument: "after" },
+  );
+}
+
 export function storageModeAfterManagedOriginalDeletion(
   value: unknown,
 ): "external_reference" | "preview_only" {
@@ -619,6 +753,23 @@ export async function confirmManagedOriginalDeletion(
   if (!asset) {
     throw new Error("Original deletion preview is stale; review again");
   }
+  if (["queued", "processing"].includes(String(asset.status))) {
+    throw new Error(
+      "Media analysis is active. Wait for it to finish or stop it before deleting the managed original.",
+    );
+  }
+  const existingDeletionReservation =
+    await loadManagedOriginalDeletionReservationByPreview(
+      db,
+      owner,
+      previewId,
+    );
+  const managedDeletionClaimId = String(
+    deletion?.reservationClaimId ??
+      asset.originalDeletionPending?.reservationClaimId ??
+      existingDeletionReservation?.deletionClaimId ??
+      `managed-original:${previewId}`,
+  );
 
   const returnFinalized = async (finalized: any) => {
     const receipt = finalized.originalDeletionReceipt;
@@ -632,6 +783,13 @@ export async function confirmManagedOriginalDeletion(
         $unset: { expiresAt: "" },
       },
     );
+    await releaseMediaDeletionReservation(db, {
+      owner,
+      assetId: finalized._id,
+      target: "managed_original",
+      claimId: managedDeletionClaimId,
+      states: ["confirming"],
+    });
     return {
       success: true,
       assetId: finalized._id,
@@ -664,6 +822,7 @@ export async function confirmManagedOriginalDeletion(
       expectedPreviewFileId: pending.expectedPreviewFileId,
       expectedRunId: pending.expectedRunId,
       byteLength: pending.byteLength,
+      reservationClaimId: pending.reservationClaimId,
       confirmationStartedAt: pending.startedAt,
     };
   }
@@ -695,6 +854,21 @@ export async function confirmManagedOriginalDeletion(
   ) {
     throw new Error("Original deletion preview is stale; review again");
   }
+  await claimMediaDeletionReservation(db, {
+    owner,
+    assetId: asset._id,
+    target: "managed_original",
+    claimId: managedDeletionClaimId,
+    deletionPreviewId: previewId,
+    expiresAt: new Date(now.getTime() + CONFIRMING_IMPORT_TTL_MS),
+  });
+  await beginManagedOriginalDeletionConfirmation(db, {
+    owner,
+    assetId: asset._id,
+    claimId: managedDeletionClaimId,
+    deletionPreviewId: previewId,
+    expiresAt: new Date(now.getTime() + CONFIRMING_IMPORT_TTL_MS),
+  });
 
   if (!exactPending) {
     const [original, preview, run] = await Promise.all([
@@ -712,6 +886,13 @@ export async function confirmManagedOriginalDeletion(
       }, { projection: { _id: 1 } }),
     ]);
     if (!original || !preview || !run) {
+      await releaseMediaDeletionReservation(db, {
+        owner,
+        assetId: asset._id,
+        target: "managed_original",
+        claimId: managedDeletionClaimId,
+        states: ["confirming"],
+      });
       throw new Error("Original deletion preview is stale; review again");
     }
     const recoveryLeaseExpiresAt = new Date(
@@ -733,6 +914,13 @@ export async function confirmManagedOriginalDeletion(
       },
     );
     if (renewed.modifiedCount !== 1) {
+      await releaseMediaDeletionReservation(db, {
+        owner,
+        assetId: asset._id,
+        target: "managed_original",
+        claimId: managedDeletionClaimId,
+        states: ["confirming"],
+      });
       throw new Error("Original deletion preview is missing or expired");
     }
     const receiptId = randomUUID();
@@ -742,6 +930,7 @@ export async function confirmManagedOriginalDeletion(
         owner,
         storageMode: "managed_original",
         sha256: deletion.expectedSha256,
+        status: { $nin: ["queued", "processing"] },
         "managedOriginal.fileId": expectedFileId,
         currentRunId: expectedRunId,
         $or: [
@@ -761,6 +950,7 @@ export async function confirmManagedOriginalDeletion(
             expectedSha256: deletion.expectedSha256,
             previousStorageMode: deletion.expectedStorageMode,
             byteLength: deletion.byteLength,
+            reservationClaimId: managedDeletionClaimId,
             receiptId,
             startedAt: now,
           },
@@ -777,6 +967,13 @@ export async function confirmManagedOriginalDeletion(
       return await returnFinalized(asset);
     }
     if (!asset || !pendingMatches(asset)) {
+      await releaseMediaDeletionReservation(db, {
+        owner,
+        assetId: deletion.assetId,
+        target: "managed_original",
+        claimId: managedDeletionClaimId,
+        states: ["confirming"],
+      });
       throw new Error(
         "Another original deletion is already in progress; review again",
       );
@@ -807,6 +1004,13 @@ export async function confirmManagedOriginalDeletion(
         },
         { $unset: { originalDeletionPending: "" } },
       );
+      await releaseMediaDeletionReservation(db, {
+        owner,
+        assetId: asset._id,
+        target: "managed_original",
+        claimId: managedDeletionClaimId,
+        states: ["confirming"],
+      });
       throw new Error("Original deletion preview is stale; review again");
     }
   }
@@ -832,6 +1036,7 @@ export async function confirmManagedOriginalDeletion(
           previousStorageMode: "managed_original",
           byteLength: deletion.byteLength,
           sha256: deletion.expectedSha256,
+          reservationClaimId: managedDeletionClaimId,
           deletedAt,
         },
         updatedAt: deletedAt,
@@ -855,6 +1060,72 @@ export async function confirmManagedOriginalDeletion(
     throw new Error("Original was deleted but the asset state requires repair");
   }
   return await returnFinalized(finalized);
+}
+
+export async function cancelManagedOriginalDeletionPreview(
+  db: Db,
+  owner: string,
+  deletionPreviewId: ObjectId,
+) {
+  const [preview, existingReservation, pendingAsset] = await Promise.all([
+    db.collection<any>("media_original_deletion_previews").findOne({
+      _id: deletionPreviewId,
+      owner,
+      confirmedAt: { $exists: false },
+    }, { projection: { assetId: 1, reservationClaimId: 1 } }),
+    loadManagedOriginalDeletionReservationByPreview(
+      db,
+      owner,
+      deletionPreviewId,
+    ),
+    db.collection("media_assets").findOne({
+      owner,
+      "originalDeletionPending.previewId": deletionPreviewId,
+    }, { projection: { _id: 1 } }),
+  ]);
+  if (pendingAsset) {
+    throw new Error("Original deletion confirmation already started");
+  }
+  if (!preview && !existingReservation) return { success: true };
+  let reservation = existingReservation;
+  if (!reservation && preview) {
+    const assetId = objectId(preview.assetId);
+    const claimId = String(
+      preview.reservationClaimId ?? `managed-original:${deletionPreviewId}`,
+    );
+    reservation = await claimMediaDeletionReservation(db, {
+      owner,
+      assetId,
+      target: "managed_original",
+      claimId,
+      deletionPreviewId,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+  }
+  if (reservation) {
+    await beginManagedOriginalDeletionCancellation(db, {
+      owner,
+      assetId: reservation.assetId,
+      claimId: reservation.deletionClaimId,
+      deletionPreviewId,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+  }
+  await db.collection("media_original_deletion_previews").deleteOne({
+    _id: deletionPreviewId,
+    owner,
+    confirmedAt: { $exists: false },
+  });
+  if (reservation) {
+    await releaseMediaDeletionReservation(db, {
+      owner,
+      assetId: reservation.assetId,
+      target: "managed_original",
+      claimId: reservation.deletionClaimId,
+      states: ["cancelling"],
+    });
+  }
+  return { success: true };
 }
 
 export function mediaInputFailureStatus(
@@ -2846,14 +3117,22 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           owner: auth.principal,
         });
         if (!asset) throw new Error("Media asset not found");
-        const { pages, annotations, visual, runs } =
-          await loadMediaAssetDetailProjections(db, asset);
+        const [{ pages, annotations, visual, runs }, recognitionReservation] =
+          await Promise.all([
+            loadMediaAssetDetailProjections(db, asset),
+            loadMediaRecognitionReservationSummary(
+              db,
+              auth.principal,
+              asset._id,
+            ),
+          ]);
         return {
           asset: mediaAssetResponse(asset),
           pages,
           annotations,
           visual,
           runs,
+          recognitionReservation,
         };
       }
 
@@ -3121,26 +3400,57 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           ),
         );
         const consentReceiptId = randomUUID();
-        await db.collection("media_assets").updateOne(
-          { _id: asset._id },
-          {
-            $set: { status: "queued", safeError: null, updatedAt: new Date() },
-          },
-        );
-        const jobId = await enqueueConfirmedAsset(
-          db,
-          asset._id,
-          profile,
-          requestedTasks,
-          consentReceiptId,
-          auth,
-        );
-        return {
-          success: Boolean(jobId),
-          queued: Boolean(jobId),
+        const jobId = new ObjectId();
+        const singleRecognitionClaimId = `single-recognition:${jobId}`;
+        await claimSingleMediaRecognitionReservation(db, {
+          owner: auth.principal,
+          assetId: asset._id,
+          sha256: String(asset.sha256),
           jobId,
-          consentReceiptId,
-        };
+          claimId: singleRecognitionClaimId,
+          expiresAt: new Date(
+            Date.now() + MEDIA_SINGLE_RECOGNITION_PREPARE_TTL_MS,
+          ),
+        });
+        let reservationHandedToJob = false;
+        try {
+          const queuedAsset = await claimMediaAssetForRecognitionQueue(
+            db,
+            auth.principal,
+            asset,
+          );
+          if (!queuedAsset) {
+            throw new Error(
+              "Media asset changed or is no longer eligible for recognition; refresh and retry",
+            );
+          }
+          const queuedJobId = await enqueueConfirmedAsset(
+            db,
+            asset._id,
+            profile,
+            requestedTasks,
+            consentReceiptId,
+            auth,
+            undefined,
+            String(jobId),
+          );
+          reservationHandedToJob = Boolean(queuedJobId);
+          return {
+            success: Boolean(queuedJobId),
+            queued: Boolean(queuedJobId),
+            jobId: queuedJobId,
+            consentReceiptId,
+          };
+        } finally {
+          if (!reservationHandedToJob) {
+            await releaseSingleMediaRecognitionReservation(db, {
+              owner: auth.principal,
+              assetId: asset._id,
+              jobId,
+              claimId: singleRecognitionClaimId,
+            });
+          }
+        }
       }
 
       case "processAsset": {
@@ -3150,204 +3460,152 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           input.jobId,
           input.assetId,
         );
-        const snapshotProfile = zMediaRecognitionProfile.parse(
-          trustedJob.profileSnapshot,
-        );
-        const requestedTasks = normalizeRequestedTasks({
-          requestedTasks: trustedJob.requestedTasks,
-        });
-        const profile = snapshotProfile;
-        const currentProfile = config.profiles.find((entry) =>
-          entry.id === snapshotProfile.id
-        );
-        const profileMatches = currentProfile &&
-          JSON.stringify(currentProfile) === JSON.stringify(snapshotProfile);
-        const asset = await db.collection("media_assets").findOne({
-          _id: new ObjectId(input.assetId),
-          owner: trustedJob.owner,
-        });
-        if (!asset) throw new Error("Media asset not found for its job owner");
-        const profileFingerprint = createHash("sha256")
-          .update(JSON.stringify(profile)).digest("hex").slice(0, 16);
-        const runId = createHash("sha256").update([
-          String(asset._id),
-          asset.sha256,
-          profileFingerprint,
-          requestedTasks.join("+"),
-        ].join(":"))
-          .digest("hex");
-        const recoverReadyRun = async (readyRun: any) => {
-          if (
-            String(readyRun.assetId) !== String(asset._id) ||
-            readyRun.sourceHash !== asset.sha256 ||
-            readyRun.profileFingerprint !== profileFingerprint ||
-            JSON.stringify(readyRun.requestedTasks) !==
-              JSON.stringify(requestedTasks)
-          ) {
-            throw new Error("MEDIA_READY_RUN_IDENTITY_MISMATCH");
-          }
-          if (profile.providerType === "google-cloud") {
-            await reconcileReadyGcpBudget(db, readyRun.attemptId);
-          }
-          await activateMediaAnalysis(db, asset._id, runId);
-          return { success: true, reused: true, runId };
-        };
-
-        // A durable ready run needs only local publication and ledger
-        // reconciliation. Recover it before mutable kill switches, source
-        // availability, or current cost limits can block crash recovery.
-        const existingReadyRun = await db.collection<any>(
-          "media_analysis_runs",
-        ).findOne({ _id: runId, state: "ready" });
-        if (existingReadyRun) {
-          return await recoverReadyRun(existingReadyRun);
-        }
-        if (!config.enabled || !currentProfile?.enabled || !profileMatches) {
-          await db.collection("media_assets").updateOne(
-            { _id: asset._id },
-            {
-              $set: {
-                status: "recognition_disabled",
-                safeError:
-                  "Recognition stopped because Media Knowledge is disabled or its trusted provider profile changed",
-                updatedAt: new Date(),
-              },
-            },
-          );
-          return { success: false };
-        }
-        assertTasksAllowed(profile, requestedTasks);
-        let requestBytes: Uint8Array;
-        let explicitInputFailureStatus:
-          | "source_changed"
-          | undefined;
-        try {
-          const originalStorage = availableMediaOriginalStorage(asset);
-          if (!originalStorage) {
-            throw new Error("Media asset has no available original source");
-          }
-
-          let original: Uint8Array;
-          if (originalStorage === "external_reference") {
-            const resolved = await resolveMediaSourcePath(
-              asset.source.relativePath,
-            );
-            const current = await inspectLocalMedia(
-              asset.source.relativePath,
-              config.limits,
-            );
-            if (current.sha256 !== asset.sha256) {
-              explicitInputFailureStatus = "source_changed";
-              throw new Error("Referenced original changed since import");
-            }
-            original = await Deno.readFile(resolved.realPath);
-          } else {
-            original = await downloadGridFs(
-              db,
-              "media_originals",
-              objectId(asset.managedOriginal.fileId),
-            );
-          }
-
-          requestBytes = original;
-          if (asset.kind === "image") {
-            if (!asset.preview?.fileId) {
-              throw new Error(
-                "A sanitized preview is required before photo recognition",
-              );
-            }
-            requestBytes = await downloadGridFs(
-              db,
-              "media_previews",
-              objectId(asset.preview.fileId),
-            );
-          }
-        } catch (error) {
-          const message = safeError(error);
-          await db.collection("media_assets").updateOne(
-            { _id: asset._id },
-            {
-              $set: {
-                status: explicitInputFailureStatus ??
-                  mediaInputFailureStatus(error),
-                safeError: message,
-                updatedAt: new Date(),
-              },
-            },
-          );
-          throw error;
-        }
-        const estimatedGrossUsd = estimateMediaGrossUsd(
-          asset.kind,
-          Number(asset.pageCount ?? 1),
-          requestedTasks,
-          profile,
-        );
-        assertMediaPerImportBudget(config, estimatedGrossUsd);
-        const runClaimResult = await claimMediaAnalysisRun(db, {
-          runId,
+        const singleReservation = trustedJob.recognitionBatchId ? null : {
           jobId: trustedJob.jobId,
-          initial: {
-            assetId: asset._id,
-            sourceHash: asset.sha256,
-            providerSnapshot: profile,
-            profileFingerprint,
-            requestedTasks,
-            consentReceiptId: trustedJob.consentReceiptId,
-          },
-        });
-        if (runClaimResult.kind === "ready") {
-          return await recoverReadyRun(runClaimResult.run);
-        }
-        if (runClaimResult.kind === "busy") {
-          const providerOutcomeUnknown =
-            runClaimResult.reason === "provider_outcome_unknown";
-          await db.collection("media_assets").updateOne(
-            { _id: asset._id },
-            {
-              $set: {
-                status: providerOutcomeUnknown ? "failed" : "processing",
-                safeError: providerOutcomeUnknown
-                  ? "A previous provider call has an unknown outcome; automatic repetition is blocked to avoid duplicate processing or billing"
-                  : null,
-                updatedAt: new Date(),
-              },
-            },
+          claimId: `single-recognition:${trustedJob.jobId}`,
+        };
+        let keepSingleReservation = false;
+        try {
+          const snapshotProfile = zMediaRecognitionProfile.parse(
+            trustedJob.profileSnapshot,
           );
-          return {
-            success: false,
-            runId,
-            inProgress: !providerOutcomeUnknown,
-            reason: runClaimResult.reason,
+          const requestedTasks = normalizeRequestedTasks({
+            requestedTasks: trustedJob.requestedTasks,
+          });
+          const profile = snapshotProfile;
+          const currentProfile = config.profiles.find((entry) =>
+            entry.id === snapshotProfile.id
+          );
+          const profileMatches = currentProfile &&
+            JSON.stringify(currentProfile) === JSON.stringify(snapshotProfile);
+          const asset = await db.collection("media_assets").findOne({
+            _id: new ObjectId(input.assetId),
+            owner: trustedJob.owner,
+          });
+          if (!asset) {
+            throw new Error("Media asset not found for its job owner");
+          }
+          if (singleReservation) {
+            await claimSingleMediaRecognitionReservation(db, {
+              owner: trustedJob.owner,
+              assetId: asset._id,
+              sha256: String(asset.sha256),
+              jobId: singleReservation.jobId,
+              claimId: singleReservation.claimId,
+              expiresAt: new Date(
+                Date.now() + MEDIA_SINGLE_RECOGNITION_PREPARE_TTL_MS,
+              ),
+            });
+            await activateSingleMediaRecognitionReservation(db, {
+              owner: trustedJob.owner,
+              assetId: asset._id,
+              jobId: singleReservation.jobId,
+              claimId: singleReservation.claimId,
+            });
+          }
+          const profileFingerprint = createHash("sha256")
+            .update(JSON.stringify(profile)).digest("hex").slice(0, 16);
+          const runId = createHash("sha256").update([
+            String(asset._id),
+            asset.sha256,
+            profileFingerprint,
+            requestedTasks.join("+"),
+          ].join(":"))
+            .digest("hex");
+          const recoverReadyRun = async (readyRun: any) => {
+            if (
+              String(readyRun.assetId) !== String(asset._id) ||
+              readyRun.sourceHash !== asset.sha256 ||
+              readyRun.profileFingerprint !== profileFingerprint ||
+              JSON.stringify(readyRun.requestedTasks) !==
+                JSON.stringify(requestedTasks)
+            ) {
+              throw new Error("MEDIA_READY_RUN_IDENTITY_MISMATCH");
+            }
+            if (profile.providerType === "google-cloud") {
+              await reconcileReadyGcpBudget(db, readyRun.attemptId);
+            }
+            await activateMediaAnalysis(db, asset._id, runId);
+            return { success: true, reused: true, runId };
           };
-        }
 
-        const runClaim = runClaimResult.claim;
-        const attemptId = runClaim.attemptId;
-        await db.collection("media_assets").updateOne(
-          { _id: asset._id },
-          { $set: { status: "processing", updatedAt: new Date() } },
-        );
-
-        let budgetClaim: GcpBudgetExecutionClaim | null = null;
-        if (profile.providerType === "google-cloud") {
-          try {
-            budgetClaim = await reserveGcpBudget(
-              db,
-              asset.owner,
-              attemptId,
-              estimatedGrossUsd,
-              config,
-              profile.projectId,
-            );
-          } catch (error) {
-            const message = safeError(error);
-            await markMediaRunFailed(db, runClaim, message).catch(() => {});
+          // A durable ready run needs only local publication and ledger
+          // reconciliation. Recover it before mutable kill switches, source
+          // availability, or current cost limits can block crash recovery.
+          const existingReadyRun = await db.collection<any>(
+            "media_analysis_runs",
+          ).findOne({ _id: runId, state: "ready" });
+          if (existingReadyRun) {
+            return await recoverReadyRun(existingReadyRun);
+          }
+          if (!config.enabled || !currentProfile?.enabled || !profileMatches) {
             await db.collection("media_assets").updateOne(
               { _id: asset._id },
               {
                 $set: {
-                  status: "budget_blocked",
+                  status: "recognition_disabled",
+                  safeError:
+                    "Recognition stopped because Media Knowledge is disabled or its trusted provider profile changed",
+                  updatedAt: new Date(),
+                },
+              },
+            );
+            return { success: false };
+          }
+          assertTasksAllowed(profile, requestedTasks);
+          let requestBytes: Uint8Array;
+          let explicitInputFailureStatus:
+            | "source_changed"
+            | undefined;
+          try {
+            const originalStorage = availableMediaOriginalStorage(asset);
+            if (!originalStorage) {
+              throw new Error("Media asset has no available original source");
+            }
+
+            let original: Uint8Array;
+            if (originalStorage === "external_reference") {
+              const resolved = await resolveMediaSourcePath(
+                asset.source.relativePath,
+              );
+              const current = await inspectLocalMedia(
+                asset.source.relativePath,
+                config.limits,
+              );
+              if (current.sha256 !== asset.sha256) {
+                explicitInputFailureStatus = "source_changed";
+                throw new Error("Referenced original changed since import");
+              }
+              original = await Deno.readFile(resolved.realPath);
+            } else {
+              original = await downloadGridFs(
+                db,
+                "media_originals",
+                objectId(asset.managedOriginal.fileId),
+              );
+            }
+
+            requestBytes = original;
+            if (asset.kind === "image") {
+              if (!asset.preview?.fileId) {
+                throw new Error(
+                  "A sanitized preview is required before photo recognition",
+                );
+              }
+              requestBytes = await downloadGridFs(
+                db,
+                "media_previews",
+                objectId(asset.preview.fileId),
+              );
+            }
+          } catch (error) {
+            const message = safeError(error);
+            await db.collection("media_assets").updateOne(
+              { _id: asset._id },
+              {
+                $set: {
+                  status: explicitInputFailureStatus ??
+                    mediaInputFailureStatus(error),
                   safeError: message,
                   updatedAt: new Date(),
                 },
@@ -3355,143 +3613,263 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             );
             throw error;
           }
-        }
-
-        if (
-          !(await beginRecognitionBatchProviderCall(
-            db,
-            trustedJob.recognitionBatchId,
-            trustedJob.jobId,
-          ))
-        ) {
-          const cancellationReason =
-            "Recognition batch was cancelled before the provider call started";
-          await markMediaRunFailed(
-            db,
-            runClaim,
-            cancellationReason,
-          ).catch(() => {});
-          await db.collection("media_assets").updateOne(
-            { _id: asset._id, owner: asset.owner, status: "processing" },
-            {
-              $set: { status: "staged", updatedAt: new Date() },
-              $unset: { safeError: "" },
-            },
+          const estimatedGrossUsd = estimateMediaGrossUsd(
+            asset.kind,
+            Number(asset.pageCount ?? 1),
+            requestedTasks,
+            profile,
           );
+          assertMediaPerImportBudget(config, estimatedGrossUsd);
+          const runClaimResult = await claimMediaAnalysisRun(db, {
+            runId,
+            jobId: trustedJob.jobId,
+            initial: {
+              assetId: asset._id,
+              sourceHash: asset.sha256,
+              providerSnapshot: profile,
+              profileFingerprint,
+              requestedTasks,
+              consentReceiptId: trustedJob.consentReceiptId,
+            },
+          });
+          if (runClaimResult.kind === "ready") {
+            return await recoverReadyRun(runClaimResult.run);
+          }
+          if (runClaimResult.kind === "busy") {
+            // A busy run may still have a live execution of this same durable
+            // job. Both executions share the exact reservation row, so this
+            // observer must never release it—even if the idempotent asset CAS
+            // below observes a concurrent state change or throws.
+            keepSingleReservation = Boolean(singleReservation);
+            const providerOutcomeUnknown =
+              runClaimResult.reason === "provider_outcome_unknown";
+            if (!providerOutcomeUnknown) {
+              const processingAsset =
+                await claimMediaAssetForRecognitionProcessing(
+                  db,
+                  trustedJob.owner,
+                  asset,
+                  singleReservation ?? undefined,
+                );
+              if (!processingAsset) {
+                throw new Error(
+                  "Media asset changed or is no longer safely queued for recognition",
+                );
+              }
+              Object.assign(asset, processingAsset);
+            }
+            await db.collection("media_assets").updateOne(
+              { _id: asset._id },
+              {
+                $set: {
+                  status: providerOutcomeUnknown ? "failed" : "processing",
+                  safeError: providerOutcomeUnknown
+                    ? "A previous provider call has an unknown outcome; automatic repetition is blocked to avoid duplicate processing or billing"
+                    : null,
+                  updatedAt: new Date(),
+                },
+              },
+            );
+            return {
+              success: false,
+              runId,
+              inProgress: !providerOutcomeUnknown,
+              reason: runClaimResult.reason,
+            };
+          }
+
+          const runClaim = runClaimResult.claim;
+          const attemptId = runClaim.attemptId;
+          const processingAsset = await claimMediaAssetForRecognitionProcessing(
+            db,
+            trustedJob.owner,
+            asset,
+            singleReservation ?? undefined,
+          );
+          if (!processingAsset) {
+            const message =
+              "Media asset changed or is no longer safely queued for recognition";
+            await markMediaRunFailed(db, runClaim, message).catch(() => {});
+            throw new Error(message);
+          }
+          Object.assign(asset, processingAsset);
+          let budgetClaim: GcpBudgetExecutionClaim | null = null;
           if (profile.providerType === "google-cloud") {
-            // Publish the durable local cancellation first. If the process
-            // stops before this conservative reservation is released, budget
-            // reconciliation can safely finish it from the unstarted run.
-            await finishGcpBudget(db, budgetClaim, "released").catch(() => {});
+            try {
+              budgetClaim = await reserveGcpBudget(
+                db,
+                asset.owner,
+                attemptId,
+                estimatedGrossUsd,
+                config,
+                profile.projectId,
+              );
+            } catch (error) {
+              const message = safeError(error);
+              await markMediaRunFailed(db, runClaim, message).catch(() => {});
+              await db.collection("media_assets").updateOne(
+                { _id: asset._id },
+                {
+                  $set: {
+                    status: "budget_blocked",
+                    safeError: message,
+                    updatedAt: new Date(),
+                  },
+                },
+              );
+              throw error;
+            }
+          }
+
+          if (
+            !(await beginRecognitionBatchProviderCall(
+              db,
+              trustedJob.recognitionBatchId,
+              trustedJob.jobId,
+            ))
+          ) {
+            const cancellationReason =
+              "Recognition batch was cancelled before the provider call started";
+            await markMediaRunFailed(
+              db,
+              runClaim,
+              cancellationReason,
+            ).catch(() => {});
+            await db.collection("media_assets").updateOne(
+              { _id: asset._id, owner: asset.owner, status: "processing" },
+              {
+                $set: { status: "staged", updatedAt: new Date() },
+                $unset: { safeError: "" },
+              },
+            );
+            if (profile.providerType === "google-cloud") {
+              // Publish the durable local cancellation first. If the process
+              // stops before this conservative reservation is released, budget
+              // reconciliation can safely finish it from the unstarted run.
+              await finishGcpBudget(db, budgetClaim, "released").catch(
+                () => {},
+              );
+            }
+            return {
+              success: false,
+              cancelled: true,
+              reason: "batch_cancelled_before_provider",
+              runId,
+            };
+          }
+
+          try {
+            await markMediaRunProviderStarted(db, runClaim);
+            if (profile.providerType === "google-cloud") {
+              await beginGcpBudgetExecution(db, budgetClaim);
+            }
+          } catch (error) {
+            const message = safeError(error);
+            if (profile.providerType === "google-cloud") {
+              await finishGcpBudget(db, budgetClaim, "released").catch(
+                () => {},
+              );
+            }
+            await markMediaRunFailed(db, runClaim, message).catch(() => {});
+            await db.collection("media_assets").updateOne(
+              { _id: asset._id },
+              {
+                $set: {
+                  status: "failed",
+                  safeError: message,
+                  updatedAt: new Date(),
+                },
+              },
+            );
+            throw error;
+          }
+
+          let analysis: NormalizedMediaAnalysis;
+          try {
+            analysis = await analyzeWithMediaProvider({
+              profile,
+              bytes: requestBytes,
+              mimeType: asset.kind === "image" ? "image/webp" : asset.mimeType,
+              pageCount: Number(asset.pageCount ?? 1),
+              requestedTasks,
+              requestId: attemptId,
+            });
+            if (
+              requestedTasks.includes("ocr") &&
+              analysis.pages.length !== Number(asset.pageCount ?? 1)
+            ) {
+              throw new Error(
+                `Provider returned ${analysis.pages.length} pages; expected ${
+                  asset.pageCount ?? 1
+                }`,
+              );
+            }
+            if (
+              requestedTasks.includes("visual-understanding") &&
+              (!analysis.visualUnderstanding || !analysis.embedding)
+            ) {
+              throw new Error(
+                "Provider did not return visual understanding and semantic embedding",
+              );
+            }
+            await stageAnalysis(db, asset, runId, analysis);
+            await markMediaRunReady(db, runClaim, {
+              provenance: analysis.provenance,
+              usage: analysis.usage,
+              pageCount: analysis.pages.length,
+              textLength: analysis.pages.reduce(
+                (sum, page) => sum + page.text.length,
+                0,
+              ),
+              completedAt: new Date(),
+            });
+          } catch (error) {
+            const message = safeError(error);
+            if (profile.providerType === "google-cloud") {
+              // A provider error can arrive after one of several billable calls
+              // succeeded. Keep the whole reservation conservative.
+              await finishGcpBudget(db, budgetClaim, "unknown").catch(() => {});
+            }
+            await markMediaRunOutcomeUnknown(db, runClaim, message).catch(
+              () => {},
+            );
+            await db.collection("media_assets").updateOne(
+              { _id: asset._id },
+              {
+                $set: {
+                  status: "failed",
+                  safeError: message,
+                  updatedAt: new Date(),
+                },
+              },
+            );
+            throw error;
+          }
+
+          await activateMediaAnalysis(db, asset._id, runId);
+          if (profile.providerType === "google-cloud") {
+            // Keep the accepted run ready if settlement fails. A retry will use
+            // the ready-run reconciliation path instead of repeating Google.
+            await finishGcpBudget(db, budgetClaim, "committed");
           }
           return {
-            success: false,
-            cancelled: true,
-            reason: "batch_cancelled_before_provider",
+            success: true,
             runId,
-          };
-        }
-
-        try {
-          await markMediaRunProviderStarted(db, runClaim);
-          if (profile.providerType === "google-cloud") {
-            await beginGcpBudgetExecution(db, budgetClaim);
-          }
-        } catch (error) {
-          const message = safeError(error);
-          if (profile.providerType === "google-cloud") {
-            await finishGcpBudget(db, budgetClaim, "released").catch(() => {});
-          }
-          await markMediaRunFailed(db, runClaim, message).catch(() => {});
-          await db.collection("media_assets").updateOne(
-            { _id: asset._id },
-            {
-              $set: {
-                status: "failed",
-                safeError: message,
-                updatedAt: new Date(),
-              },
-            },
-          );
-          throw error;
-        }
-
-        let analysis: NormalizedMediaAnalysis;
-        try {
-          analysis = await analyzeWithMediaProvider({
-            profile,
-            bytes: requestBytes,
-            mimeType: asset.kind === "image" ? "image/webp" : asset.mimeType,
-            pageCount: Number(asset.pageCount ?? 1),
-            requestedTasks,
-            requestId: attemptId,
-          });
-          if (
-            requestedTasks.includes("ocr") &&
-            analysis.pages.length !== Number(asset.pageCount ?? 1)
-          ) {
-            throw new Error(
-              `Provider returned ${analysis.pages.length} pages; expected ${
-                asset.pageCount ?? 1
-              }`,
-            );
-          }
-          if (
-            requestedTasks.includes("visual-understanding") &&
-            (!analysis.visualUnderstanding || !analysis.embedding)
-          ) {
-            throw new Error(
-              "Provider did not return visual understanding and semantic embedding",
-            );
-          }
-          await stageAnalysis(db, asset, runId, analysis);
-          await markMediaRunReady(db, runClaim, {
-            provenance: analysis.provenance,
+            pages: analysis.pages.length,
+            annotations: analysis.annotations.length,
+            visualUnderstanding: Boolean(analysis.visualUnderstanding),
             usage: analysis.usage,
-            pageCount: analysis.pages.length,
-            textLength: analysis.pages.reduce(
-              (sum, page) => sum + page.text.length,
-              0,
-            ),
-            completedAt: new Date(),
-          });
-        } catch (error) {
-          const message = safeError(error);
-          if (profile.providerType === "google-cloud") {
-            // A provider error can arrive after one of several billable calls
-            // succeeded. Keep the whole reservation conservative.
-            await finishGcpBudget(db, budgetClaim, "unknown").catch(() => {});
+          };
+        } finally {
+          if (singleReservation && !keepSingleReservation) {
+            await releaseSingleMediaRecognitionReservation(db, {
+              owner: trustedJob.owner,
+              assetId: input.assetId,
+              jobId: singleReservation.jobId,
+              claimId: singleReservation.claimId,
+            });
           }
-          await markMediaRunOutcomeUnknown(db, runClaim, message).catch(
-            () => {},
-          );
-          await db.collection("media_assets").updateOne(
-            { _id: asset._id },
-            {
-              $set: {
-                status: "failed",
-                safeError: message,
-                updatedAt: new Date(),
-              },
-            },
-          );
-          throw error;
         }
-
-        await activateMediaAnalysis(db, asset._id, runId);
-        if (profile.providerType === "google-cloud") {
-          // Keep the accepted run ready if settlement fails. A retry will use
-          // the ready-run reconciliation path instead of repeating Google.
-          await finishGcpBudget(db, budgetClaim, "committed");
-        }
-        return {
-          success: true,
-          runId,
-          pages: analysis.pages.length,
-          annotations: analysis.annotations.length,
-          visualUnderstanding: Boolean(analysis.visualUnderstanding),
-          usage: analysis.usage,
-        };
       }
 
       case "testConnector": {
@@ -3614,29 +3992,46 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           owner: auth.principal,
         });
         if (!asset) throw new Error("Media asset not found");
-        const locked = await db.collection<any>("media_assets")
-          .findOneAndUpdate(
-            {
-              _id: asset._id,
-              owner: auth.principal,
-              originalDeletionPending: { $exists: false },
-              $or: [
-                { derivedDeletionPending: { $exists: false } },
-                { "derivedDeletionPending.target": input.target },
-              ],
-            },
-            {
-              $set: {
-                derivedDeletionPending: {
-                  target: input.target,
-                  startedAt: new Date(),
-                },
-                updatedAt: new Date(),
-              },
-            },
-            { returnDocument: "after" },
+        if (["queued", "processing"].includes(String(asset.status))) {
+          throw new Error(
+            "Media analysis is active. Wait for it to finish or stop it before deleting media data.",
           );
+        }
+        const deletionClaimId = randomUUID();
+        const deletionExpiresAt = new Date(
+          Date.now() + MEDIA_DERIVED_DELETION_LEASE_MS,
+        );
+        await claimMediaDeletionReservation(db, {
+          owner: auth.principal,
+          assetId: asset._id,
+          target: input.target,
+          claimId: deletionClaimId,
+          expiresAt: deletionExpiresAt,
+        });
+        const locked = await claimMediaDerivedDeletionState(db, {
+          owner: auth.principal,
+          assetId: asset._id,
+          target: input.target,
+          claimId: deletionClaimId,
+          expiresAt: deletionExpiresAt,
+        });
         if (!locked) {
+          await releaseMediaDeletionReservation(db, {
+            owner: auth.principal,
+            assetId: asset._id,
+            target: input.target,
+            claimId: deletionClaimId,
+            states: ["deleting"],
+          });
+          const current = await db.collection<any>("media_assets").findOne({
+            _id: asset._id,
+            owner: auth.principal,
+          }, { projection: { status: 1 } });
+          if (["queued", "processing"].includes(String(current?.status))) {
+            throw new Error(
+              "Media analysis is active. Wait for it to finish or stop it before deleting media data.",
+            );
+          }
           throw new Error(
             "Another media deletion is already in progress; retry after it finishes",
           );
@@ -3659,10 +4054,17 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
               {
                 _id: asset._id,
                 owner: auth.principal,
-                "derivedDeletionPending.target": input.target,
+                "derivedDeletionPending.claimId": deletionClaimId,
               },
               { $unset: { derivedDeletionPending: "" } },
             );
+            await releaseMediaDeletionReservation(db, {
+              owner: auth.principal,
+              assetId: asset._id,
+              target: input.target,
+              claimId: deletionClaimId,
+              states: ["deleting"],
+            });
             throw error;
           }
         }
@@ -3674,7 +4076,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           await db.collection("media_assets").updateOne(
             {
               _id: asset._id,
-              "derivedDeletionPending.target": input.target,
+              "derivedDeletionPending.claimId": deletionClaimId,
             },
             {
               $unset: {
@@ -3702,7 +4104,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           await db.collection("media_assets").updateOne(
             {
               _id: asset._id,
-              "derivedDeletionPending.target": input.target,
+              "derivedDeletionPending.claimId": deletionClaimId,
             },
             {
               $unset: {
@@ -3717,16 +4119,23 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             await db.collection("media_assets").updateOne(
               {
                 _id: asset._id,
-                "derivedDeletionPending.target": input.target,
+                "derivedDeletionPending.claimId": deletionClaimId,
               },
               { $unset: { derivedDeletionPending: "" } },
             );
+            await releaseMediaDeletionReservation(db, {
+              owner: auth.principal,
+              assetId: asset._id,
+              target: input.target,
+              claimId: deletionClaimId,
+              states: ["deleting"],
+            });
             return { success: true };
           }
           await db.collection("media_assets").updateOne(
             {
               _id: asset._id,
-              "derivedDeletionPending.target": input.target,
+              "derivedDeletionPending.claimId": deletionClaimId,
             },
             {
               $unset: { source: "", derivedDeletionPending: "" },
@@ -3738,6 +4147,13 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             },
           );
         }
+        await releaseMediaDeletionReservation(db, {
+          owner: auth.principal,
+          assetId: asset._id,
+          target: input.target,
+          claimId: deletionClaimId,
+          states: ["deleting"],
+        });
         return { success: true };
       }
 
@@ -3747,11 +4163,112 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           owner: auth.principal,
         });
         if (!asset) throw new Error("Media asset not found");
+        if (["queued", "processing"].includes(String(asset.status))) {
+          throw new Error(
+            "Media analysis is active. Wait for it to finish or stop it before deleting the managed original.",
+          );
+        }
         if (
           asset.storageMode !== "managed_original" ||
           !asset.managedOriginal?.fileId
         ) {
           throw new Error("This asset has no managed original to delete");
+        }
+        if (asset.originalDeletionPending) {
+          throw new Error(
+            "Another original deletion is already in progress; review again",
+          );
+        }
+        const now = new Date();
+        const priorDeletionReservation = await loadMediaDeletionReservation(
+          db,
+          auth.principal,
+          asset._id,
+        );
+        if (
+          priorDeletionReservation?.deletionTarget === "managed_original" &&
+          priorDeletionReservation.state !== "deleting"
+        ) {
+          throw new Error(
+            "Another original deletion is already in progress; review again",
+          );
+        }
+        const reusableDeletionReservation =
+          priorDeletionReservation?.deletionTarget === "managed_original" &&
+            priorDeletionReservation.state === "deleting" &&
+            priorDeletionReservation.deletionPreviewId &&
+            priorDeletionReservation.expiresAt &&
+            new Date(priorDeletionReservation.expiresAt).getTime() >
+              now.getTime()
+            ? priorDeletionReservation
+            : null;
+        const requestedDeletionPreviewId =
+          reusableDeletionReservation?.deletionPreviewId
+            ? objectId(reusableDeletionReservation.deletionPreviewId)
+            : new ObjectId();
+        const deletionClaimId = reusableDeletionReservation
+          ? reusableDeletionReservation.deletionClaimId
+          : `managed-original:${requestedDeletionPreviewId}`;
+        const requestedExpiresAt = new Date(now.getTime() + 10 * 60 * 1000);
+        const deletionReservation = await claimMediaDeletionReservation(db, {
+          owner: auth.principal,
+          assetId: asset._id,
+          target: "managed_original",
+          claimId: deletionClaimId,
+          deletionPreviewId: requestedDeletionPreviewId,
+          expiresAt: requestedExpiresAt,
+        });
+        if (deletionReservation.state !== "deleting") {
+          throw new Error(
+            "Another original deletion is already in progress; review again",
+          );
+        }
+        const deletionStillSafe = await db.collection("media_assets").findOne({
+          _id: asset._id,
+          owner: auth.principal,
+          status: { $nin: ["queued", "processing"] },
+          originalDeletionPending: { $exists: false },
+        }, { projection: { _id: 1 } });
+        if (!deletionStillSafe) {
+          await releaseMediaDeletionReservation(db, {
+            owner: auth.principal,
+            assetId: asset._id,
+            target: "managed_original",
+            claimId: deletionClaimId,
+            states: ["deleting"],
+          });
+          throw new Error(
+            "Media analysis is active. Wait for it to finish or stop it before deleting the managed original.",
+          );
+        }
+        const deletionPreviewId = deletionReservation.deletionPreviewId ??
+          requestedDeletionPreviewId;
+        const existingPreview = await db.collection<any>(
+          "media_original_deletion_previews",
+        ).findOne({
+          _id: deletionPreviewId,
+          owner: auth.principal,
+          assetId: asset._id,
+          confirmedAt: { $exists: false },
+          expiresAt: { $gt: now },
+        });
+        if (existingPreview) {
+          return {
+            canDelete: true,
+            deletionPreviewId,
+            expiresAt: existingPreview.expiresAt,
+            assetId: asset._id,
+            storageMode: asset.storageMode,
+            byteLength: Number(existingPreview.byteLength ?? asset.byteLength),
+            previewReady: true,
+            analysisReady: true,
+            retained: [
+              "WebP previews",
+              "metadata",
+              "analysis",
+              "search index",
+            ],
+          };
         }
         const [original, previewFile, readyRun] = await Promise.all([
           db.collection("media_originals.files").findOne({
@@ -3776,6 +4293,13 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           !readyRun ? "A completed analysis is required" : null,
         ].filter(Boolean);
         if (blockers.length > 0) {
+          await releaseMediaDeletionReservation(db, {
+            owner: auth.principal,
+            assetId: asset._id,
+            target: "managed_original",
+            claimId: deletionClaimId,
+            states: ["deleting"],
+          });
           return {
             canDelete: false,
             assetId: asset._id,
@@ -3786,25 +4310,33 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             blockers,
           };
         }
-        const deletionPreviewId = new ObjectId();
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-        await db.collection("media_original_deletion_previews").insertOne({
-          _id: deletionPreviewId,
-          owner: auth.principal,
-          assetId: asset._id,
-          expectedFileId: objectId(asset.managedOriginal.fileId),
-          expectedSha256: asset.sha256,
-          expectedStorageMode: "managed_original",
-          expectedPreviewFileId: objectId(
-            asset.preview?.fileId ?? asset.thumbnail.fileId,
-          ),
-          expectedRunId: asset.currentRunId,
-          byteLength: Number(original?.length ?? asset.byteLength),
-          previewReady: true,
-          analysisReady: true,
-          createdAt: new Date(),
-          expiresAt,
-        });
+        const expiresAt = requestedExpiresAt;
+        await db.collection("media_original_deletion_previews").updateOne(
+          {
+            _id: deletionPreviewId,
+            owner: auth.principal,
+            confirmedAt: { $exists: false },
+          },
+          {
+            $set: {
+              assetId: asset._id,
+              expectedFileId: objectId(asset.managedOriginal.fileId),
+              expectedSha256: asset.sha256,
+              expectedStorageMode: "managed_original",
+              expectedPreviewFileId: objectId(
+                asset.preview?.fileId ?? asset.thumbnail.fileId,
+              ),
+              expectedRunId: asset.currentRunId,
+              reservationClaimId: deletionClaimId,
+              byteLength: Number(original?.length ?? asset.byteLength),
+              previewReady: true,
+              analysisReady: true,
+              expiresAt,
+            },
+            $setOnInsert: { createdAt: now },
+          },
+          { upsert: true },
+        );
         return {
           canDelete: true,
           deletionPreviewId,
@@ -3824,6 +4356,14 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           db,
           auth.principal,
           previewId,
+        );
+      }
+
+      case "cancelOriginalDeletionPreview": {
+        return await cancelManagedOriginalDeletionPreview(
+          db,
+          auth.principal,
+          new ObjectId(input.deletionPreviewId),
         );
       }
     }

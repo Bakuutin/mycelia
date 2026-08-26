@@ -87,6 +87,16 @@ Deno.test("derived photo deletion declares the Event Object mutation", () => {
     }),
     [{ path: ["media", "deleteDerived"], actions: ["use"] }],
   );
+  assertEquals(
+    resource.extractActions({
+      action: "cancelOriginalDeletionPreview",
+      deletionPreviewId: new ObjectId().toString(),
+    }),
+    [{
+      path: ["media", "cancelOriginalDeletionPreview"],
+      actions: ["use"],
+    }],
+  );
 });
 
 Deno.test("confirmed imports persist normalized temporal and spatial fields", () => {

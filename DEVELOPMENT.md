@@ -231,11 +231,16 @@ Media and Jobs. Restart/recovery attempts remain durable history, but Jobs
 groups the same `campaignId` into one visible campaign row. On
 `/media/analysis`, a batch preview can select an explicit set or every eligible
 asset matching the current server-side filters, not only the visible gallery
-page. It fixes visual-understanding + OCR and shows the authoritative batch
-ceiling before consent. With a Google profile this means Vertex visual
-understanding/embedding plus strict-EU Vision OCR; a self-hosted profile sends
-the same feature request only to its configured endpoint. Photos with local
-time/GPS are queryable through indexed Timeline/Map projections in every
+page. The shared date-range picker uses the configured application timezone;
+the **Unprocessed by capture-date range** shortcut waits for the new server
+scope, selects all matching pages, and never reuses a stale page after a filter
+reload fails. The preview rechecks retained-original and sanitized-WebP
+pointers plus active reservations. It then fixes visual-understanding + OCR and
+shows the authoritative eligible count and batch ceiling before consent. With a
+Google profile this means Vertex
+visual understanding/embedding plus strict-EU Vision OCR; a self-hosted profile
+sends the same feature request only to its configured endpoint. Photos with
+local time/GPS are queryable through indexed Timeline/Map projections in every
 recognition state. At close map zoom, grouped markers expand into a thumbnail,
 caption, status, and capture-time list; the adaptive Photos Timeline track opens
 the same library links from overlapping markers or a selected density bucket.
@@ -247,6 +252,16 @@ only for explicit diagnostics. Jobs launch/restart actions follow the worker
 catalog's `manualRun` capability. Generic cancel/clear actions leave folder
 imports, recognition batches, and paid per-photo work untouched; manage those
 campaigns on `/media` and `/media/analysis` instead.
+
+Media detail exposes one **Storage & deletion…** panel, not a whole-asset
+delete. Mounted originals are read-only and are never deleted: forgetting the
+reference only converts the record to preview-only, while deleting WebP
+previews affects only Mycelia's derived files. These storage mutations must
+claim the same per-asset reservation used by recognition batches and are
+rejected while recognition is reserved, queued, or processing. A managed
+original deletion remains preview-and-confirm; cancelling its review must call
+`cancelOriginalDeletionPreview` so the reservation claim is released instead
+of waiting for expiry.
 
 #### Isolated Qdrant RAG development
 

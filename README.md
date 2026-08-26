@@ -69,8 +69,10 @@ your own words.
   configured endpoint and does not call Google. Global Vision labels/objects are
   excluded from this batch action. Versioned descriptions, embeddings, OCR
   pages, annotations, provenance, usage, deduplication, an app-side gross-cost
-  ledger, and independent removal of previews, derived analysis, or the source
-  reference are stored separately. See
+  ledger, previews, derived analysis, and source references are stored as
+  separate layers. Their actions live in one **Storage & deletion…** panel;
+  there is no whole-record delete yet, and mounted originals are never deleted.
+  Recognition reservations temporarily block these storage mutations. See
   [MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
 - Photo events locally cluster nearby owned images by capture time and EXIF GPS,
   then use a separate preview-and-confirm step before a Google or self-hosted
@@ -80,9 +82,10 @@ your own words.
   audio/transcription/Object links stay local and identity recognition is
   forbidden. Media uses a responsive photo gallery with a focused detail
   viewer, while `/media/analysis` provides server-side status, placement,
-  filename, and capture-date filters. Recognition batches can target the
-  current explicit selection or every eligible asset matching the server-side
-  filters without being limited to the visible page. Unmatched event candidates
+  filename, and a shared capture-date range picker. Its **Unprocessed by
+  capture-date range** workflow can target every eligible asset matching the
+  server-side filters without being limited to the visible page, then shows an
+  exact preview and ceiling before confirmation. Unmatched event candidates
   remain visible as single photos instead of being silently omitted.
 - Large mounted folders use a visual folder picker and resumable scan → review →
   confirm campaigns. The mounted root is selected by default and subfolders are
