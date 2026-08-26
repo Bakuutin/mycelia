@@ -383,9 +383,14 @@ pagination, a responsive thumbnail gallery, background refresh, and a focused
 detail viewer, so an archive of 900 or more photos is not truncated to the
 first page. Useful capture time, timezone, camera, dimensions, GPS, provider,
 OCR, annotations, description, and usage remain available in the detail view;
-raw EXIF/ffprobe JSON stays under the advanced disclosure. Gallery checkboxes
-select photos only for explicit local event grouping and never start cloud
-recognition.
+raw EXIF/ffprobe JSON stays under the advanced disclosure. The detail header
+remains visible while content scrolls and has an explicit close action.
+Provider analysis is always stated: an empty card means no Google or
+self-hosted run/result is stored, while an active result names the provider and
+shows its service/location/model plus stored visual/OCR projection counts.
+Only the run matching asset.currentRunId is described as the active result;
+older attempts remain provenance history. Gallery checkboxes select photos only
+for explicit local event grouping and never start cloud recognition.
 
 `/media/analysis` is the recognition workspace. Status, placement, filename,
 and capture-date filters run on the server. A batch can contain the explicit

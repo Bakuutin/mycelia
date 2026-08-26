@@ -207,8 +207,8 @@ export default function MediaPage() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date>();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any[]>([]);
-  const [selectedAssetId, setSelectedAssetId] = useState("");
   const [detail, setDetail] = useState<any>();
+  const [detailReloadVersion, setDetailReloadVersion] = useState(0);
   const [deletionPreview, setDeletionPreview] = useState<any>();
   const inventoryRequestGeneration = useRef(0);
   const inventoryRequestActive = useRef(false);
@@ -335,6 +335,26 @@ export default function MediaPage() {
     [status],
   );
   const filteredAssets = assets;
+  const selectedAssetId = searchParams.get("assetId") ?? "";
+  const recognitionRuns = Array.isArray(detail?.runs) ? detail.runs : [];
+  const activeRecognitionRun = detail?.asset?.currentRunId
+    ? recognitionRuns.find((run: any) =>
+      String(run._id) === String(detail.asset.currentRunId)
+    )
+    : undefined;
+  const latestRecognitionRun = recognitionRuns[0];
+  const displayedRecognitionRun = activeRecognitionRun ??
+    latestRecognitionRun;
+  const displayedProviderType =
+    displayedRecognitionRun?.providerSnapshot?.providerType ??
+      displayedRecognitionRun?.provenance?.providerType;
+  const displayedProviderName =
+    displayedRecognitionRun?.providerSnapshot?.name ??
+      (displayedProviderType === "google-cloud"
+        ? "Google Cloud"
+        : displayedProviderType === "self-hosted"
+        ? "Self-hosted provider"
+        : "Unknown provider");
 
   const analyzeUploads = async (files: File[]) => {
     if (files.length === 0 || busy || Boolean(preview)) return;
@@ -418,39 +438,45 @@ export default function MediaPage() {
     }
   };
 
-  const openAsset = async (assetId: string) => {
-    setBusy(true);
-    try {
-      const result = await callResource("media", {
-        action: "getAsset",
-        assetId,
-      });
-      setSelectedAssetId(assetId);
-      setSearchParams((current) => {
-        const next = new URLSearchParams(current);
-        next.set("assetId", assetId);
-        return next;
-      }, { replace: true });
-      setDetail(result);
-      setDeletionPreview(undefined);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to load media asset",
-      );
-    } finally {
-      setBusy(false);
-    }
+  const openAsset = (assetId: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("assetId", assetId);
+      return next;
+    }, { replace: true });
   };
 
   useEffect(() => {
-    const assetId = searchParams.get("assetId");
-    if (assetId && assetId !== selectedAssetId) void openAsset(assetId);
-  }, [searchParams, selectedAssetId]);
+    if (!selectedAssetId) {
+      setDetail(undefined);
+      setDeletionPreview(undefined);
+      return;
+    }
+    let current = true;
+    setDetail((existing: any) =>
+      String(existing?.asset?._id ?? "") === selectedAssetId
+        ? existing
+        : undefined
+    );
+    setDeletionPreview(undefined);
+    callResource("media", {
+      action: "getAsset",
+      assetId: selectedAssetId,
+    }).then((result) => {
+      if (current) setDetail(result);
+    }).catch((error) => {
+      if (current) {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to load media asset",
+        );
+      }
+    });
+    return () => {
+      current = false;
+    };
+  }, [detailReloadVersion, selectedAssetId]);
 
   const closeAsset = useCallback(() => {
-    setSelectedAssetId("");
-    setDetail(undefined);
-    setDeletionPreview(undefined);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("assetId");
@@ -485,7 +511,8 @@ export default function MediaPage() {
           ? "Forgot the stored reference; the original file was not touched"
           : `Deleted ${label}; original file and reference were not touched`,
       );
-      await Promise.all([load(), openAsset(selectedAssetId)]);
+      await load();
+      setDetailReloadVersion((current) => current + 1);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : `Failed to delete ${label}`,
@@ -531,7 +558,8 @@ export default function MediaPage() {
         "Managed original deleted; preview, metadata, analysis, and search data were retained",
       );
       setDeletionPreview(undefined);
-      await Promise.all([load(), openAsset(selectedAssetId)]);
+      await load();
+      setDetailReloadVersion((current) => current + 1);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Original deletion failed",
@@ -1012,15 +1040,29 @@ export default function MediaPage() {
         }}
       >
         {detail?.asset && (
-          <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
-            <DialogHeader className="pr-8">
-              <DialogTitle>{detail.asset.fileName}</DialogTitle>
-              <DialogDescription>
-                {detail.asset.storageMode} ·{" "}
-                {detail.asset.source?.relativePath ?? "managed copy"}
-              </DialogDescription>
+          <DialogContent className="max-h-[92vh] overflow-y-auto p-0 sm:max-w-6xl">
+            <DialogHeader className="sticky top-0 z-10 border-b bg-background px-6 py-4 pr-14">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <DialogTitle className="truncate">
+                    {detail.asset.fileName}
+                  </DialogTitle>
+                  <DialogDescription className="truncate">
+                    {detail.asset.storageMode} ·{" "}
+                    {detail.asset.source?.relativePath ?? "managed copy"}
+                  </DialogDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={closeAsset}
+                >
+                  Close details
+                </Button>
+              </div>
             </DialogHeader>
-            <div className="space-y-5">
+            <div className="space-y-5 px-6 py-5">
               <div className="grid gap-5 lg:grid-cols-[minmax(240px,360px)_1fr]">
                 <AuthenticatedMediaImage
                   path={detail.asset.previewUrl ?? detail.asset.thumbnailUrl}
@@ -1047,6 +1089,85 @@ export default function MediaPage() {
                       {detail.asset.safeError}
                     </div>
                   )}
+                  <div
+                    className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"
+                    aria-label="Provider analysis status"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-medium">Provider analysis</div>
+                      <Badge
+                        variant={activeRecognitionRun ? "default" : "outline"}
+                      >
+                        {activeRecognitionRun
+                          ? displayedProviderType === "google-cloud"
+                            ? "Google Cloud result"
+                            : "Active result"
+                          : detail.asset.status === "queued"
+                          ? "Queued"
+                          : detail.asset.status === "processing"
+                          ? "Processing"
+                          : latestRecognitionRun
+                          ? "Latest attempt: " + latestRecognitionRun.state
+                          : "Not processed"}
+                      </Badge>
+                    </div>
+                    {activeRecognitionRun
+                      ? (
+                        <>
+                          <div>
+                            Active result from{" "}
+                            <span className="font-medium">
+                              {displayedProviderName}
+                            </span>
+                            .
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {activeRecognitionRun.provenance?.service ??
+                              "Service not reported"} ·{" "}
+                            {activeRecognitionRun.provenance?.location ??
+                              "location not reported"}
+                            {activeRecognitionRun.provenance?.modelVersion
+                              ? " · " +
+                                activeRecognitionRun.provenance.modelVersion
+                              : ""}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Visual description:{" "}
+                            {detail.visual?.visualUnderstanding
+                              ? "available"
+                              : "not available"} · OCR pages:{" "}
+                            {detail.pages?.length ?? 0} · annotations:{" "}
+                            {detail.annotations?.length ?? 0}
+                          </div>
+                        </>
+                      )
+                      : detail.asset.status === "queued" ||
+                          detail.asset.status === "processing"
+                      ? (
+                        <div>
+                          Provider analysis is{" "}
+                          {detail.asset.status}. No active result is stored yet.
+                        </div>
+                      )
+                      : latestRecognitionRun
+                      ? (
+                        <div>
+                          No active provider result is attached to this photo.
+                          The latest historical attempt used{" "}
+                          <span className="font-medium">
+                            {displayedProviderName}
+                          </span>{" "}
+                          and ended as {latestRecognitionRun.state}.
+                        </div>
+                      )
+                      : (
+                        <div>
+                          No stored Google Cloud or self-hosted analysis run or
+                          result exists for this photo. Only the local preview
+                          and EXIF/GPS metadata are stored.
+                        </div>
+                      )}
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <Button asChild>
                       <Link to={`/media/analysis?assetId=${detail.asset._id}`}>
@@ -1168,10 +1289,8 @@ export default function MediaPage() {
                 }`}
                 asset={detail.asset}
                 onSaved={async () => {
-                  await Promise.all([
-                    load(),
-                    openAsset(String(detail.asset._id)),
-                  ]);
+                  await load();
+                  setDetailReloadVersion((current) => current + 1);
                 }}
               />
 

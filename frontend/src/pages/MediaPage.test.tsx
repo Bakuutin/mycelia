@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import * as userEventLib from "@testing-library/user-event";
 import * as api from "@/lib/api";
 import MediaPage from "./MediaPage";
@@ -71,7 +71,17 @@ function renderMediaPage(initialEntry = "/media") {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <MediaPage />
+      <LocationProbe />
     </MemoryRouter>,
+  );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output data-testid="media-location">
+      {location.pathname + location.search}
+    </output>
   );
 }
 
@@ -344,15 +354,105 @@ describe("MediaPage consolidated library", () => {
       return defaultResourceResponse(input);
     });
 
+    const user = userEvent.setup();
     renderMediaPage("/media?assetId=asset-1");
 
     expect(
       await screen.findByRole("dialog", { name: "photo.jpg" }),
     ).toBeTruthy();
+    expect(screen.getByLabelText("Provider analysis status").textContent)
+      .toContain("Not processed");
+    expect(
+      screen.getByText(
+        /No stored Google Cloud or self-hosted analysis run or result/i,
+      ),
+    ).toBeTruthy();
     expect(mockCallResource).toHaveBeenCalledWith("media", {
       action: "getAsset",
       assetId: "asset-1",
     });
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "photo.jpg" })).toBeNull()
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(screen.getByTestId("media-location").textContent).toBe("/media");
+    expect(
+      mockCallResource.mock.calls.filter(([, input]) =>
+        input.action === "getAsset"
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("identifies the active Google result and its stored projections", async () => {
+    const readyAsset = {
+      ...baseAsset,
+      status: "ready",
+      currentRunId: "run-google",
+    };
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [readyAsset], total: 1 });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: readyAsset,
+          visual: {
+            visualUnderstanding: {
+              shortCaption: "A coastal landscape",
+              description: "A view of the coast.",
+              scene: {
+                summary: "Coast",
+                environment: "outdoor",
+                placeType: "coast",
+                timeOfDay: "day",
+              },
+              peopleCount: 0,
+              possibleEvent: null,
+              confidence: 0.9,
+              objects: [],
+              activities: [],
+              keywords: ["coast"],
+              warnings: [],
+            },
+          },
+          pages: [{ _id: "page-1", pageNumber: 1, text: "Sign" }],
+          annotations: [{ _id: "annotation-1", type: "label", label: "sea" }],
+          runs: [{
+            _id: "run-google",
+            state: "ready",
+            providerSnapshot: {
+              providerType: "google-cloud",
+              name: "Google Cloud EU Photo Knowledge",
+            },
+            provenance: {
+              providerType: "google-cloud",
+              service: "Vertex AI + Cloud Vision",
+              location: "europe-west4 / eu",
+              modelVersion: "visual-model",
+            },
+          }],
+        });
+      }
+      return defaultResourceResponse(input);
+    });
+
+    renderMediaPage("/media?assetId=asset-1");
+
+    const providerStatus = await screen.findByLabelText(
+      "Provider analysis status",
+    );
+    expect(providerStatus.textContent).toContain("Google Cloud result");
+    expect(providerStatus.textContent).toContain(
+      "Google Cloud EU Photo Knowledge",
+    );
+    expect(providerStatus.textContent).toContain(
+      "Visual description: available",
+    );
+    expect(providerStatus.textContent).toContain("OCR pages: 1");
   });
 
   it("keeps the preview-and-confirm guard for managed-original deletion", async () => {
