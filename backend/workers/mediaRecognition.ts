@@ -12,6 +12,7 @@ const schema = z.object({
   requestedTasks: z.array(zMediaRecognitionTask).min(1).max(4).optional(),
   includeGlobalPhotoAnalysis: z.boolean().optional(),
   consentReceiptId: z.string().min(1),
+  recognitionBatchId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
 });
 
 const capability: JobCapability = {
@@ -24,6 +25,8 @@ const capability: JobCapability = {
     annotations: z.number().optional(),
     visualUnderstanding: z.boolean().optional(),
     reused: z.boolean().optional(),
+    cancelled: z.boolean().optional(),
+    reason: z.string().optional(),
   })),
   policies: [
     { resource: "media/processAsset", action: "process", effect: "allow" },

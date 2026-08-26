@@ -1,6 +1,7 @@
 import type { JobData } from "./types.ts";
 
 export const DEFAULT_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+export const MEDIA_RECOGNITION_BATCH_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_TRANSCRIPTION_TIMEOUT_BASE_MS = 2 * 60 * 1000;
 export const DEFAULT_TRANSCRIPTION_TIMEOUT_PER_SEQUENCE_MS = 60 * 1000;
 export const MAX_TRANSCRIPTION_BATCH_SIZE = 32;
@@ -85,6 +86,9 @@ export function getJobTimeoutMs(
   jobType: string,
   data?: Partial<JobData> | Record<string, unknown>,
 ): number {
+  if (jobType === "mediaRecognitionBatch") {
+    return MEDIA_RECOGNITION_BATCH_TIMEOUT_MS;
+  }
   if (jobType === "objectTimelineDensityRebuild") {
     return 60 * 60 * 1000;
   }

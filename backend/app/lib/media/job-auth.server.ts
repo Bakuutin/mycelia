@@ -8,6 +8,7 @@ const trustedMediaJobDataSchema = z.object({
   profileSnapshot: z.record(z.string(), z.unknown()),
   requestedTasks: z.array(zMediaRecognitionTask).min(1).max(4).optional(),
   consentReceiptId: z.string().min(1),
+  recognitionBatchId: z.string().refine(ObjectId.isValid).optional(),
 });
 
 export type TrustedMediaRecognitionJob =

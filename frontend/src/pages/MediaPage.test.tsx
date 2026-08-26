@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import * as userEventLib from "@testing-library/user-event";
 import * as api from "@/lib/api";
 import MediaPage from "./MediaPage";
@@ -14,61 +14,117 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/components/media/AuthenticatedMediaImage", () => ({
   AuthenticatedMediaImage: (props: any) => <img {...props} />,
 }));
+vi.mock("@/components/media/LazyAuthenticatedMediaImage", () => ({
+  LazyAuthenticatedMediaImage: ({
+    containerClassName: _containerClassName,
+    path,
+    ...props
+  }: any) => <img src={path} {...props} />,
+}));
+vi.mock("@/components/media/MediaEventsPanel", () => ({
+  MediaEventsPanel: ({ candidateAssetIds }: any) => (
+    <div data-testid="event-candidates">{candidateAssetIds.join(",")}</div>
+  ),
+}));
 
 const mockCallResource = vi.mocked(api.callResource);
 const mockPostForm = vi.mocked(api.apiClient.postForm);
 
-function renderMediaPage() {
+const baseAsset = {
+  _id: "asset-1",
+  fileName: "photo.jpg",
+  kind: "image",
+  status: "staged",
+  storageMode: "managed_original",
+  managedOriginal: { bucket: "media_originals", fileId: "file-1" },
+  source: { relativePath: "photo.jpg" },
+  thumbnailUrl: "/api/files/thumb",
+  previewUrl: "/api/files/preview",
+  byteLength: 2_000_000,
+  metadata: {},
+};
+
+function defaultResourceResponse(input: any) {
+  if (input.action === "status") {
+    return Promise.resolve({
+      enabled: true,
+      sourceConfigured: true,
+      activeProfileId: undefined,
+      profiles: [],
+    });
+  }
+  if (input.action === "listAssets") {
+    return Promise.resolve({ assets: [], total: 0 });
+  }
+  if (input.action === "listMountedFolders") {
+    return Promise.resolve({
+      listing: { currentPath: ".", folders: [] },
+    });
+  }
+  if (input.action === "getActiveFolderCampaign") {
+    return Promise.resolve({ campaign: null });
+  }
+  return Promise.resolve({});
+}
+
+function renderMediaPage(initialEntry = "/media") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <MediaPage />
+      <LocationProbe />
     </MemoryRouter>,
   );
 }
 
-describe("MediaPage local-only import", () => {
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output data-testid="media-location">
+      {location.pathname + location.search}
+    </output>
+  );
+}
+
+describe("MediaPage consolidated library", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCallResource.mockImplementation((_resource, input) =>
+      defaultResourceResponse(input)
+    );
+  });
+
+  it("shows one mounted-folder picker and routes recognition to analysis", async () => {
+    renderMediaPage();
+
+    expect(await screen.findByText("Mounted folder browser")).toBeTruthy();
+    expect(screen.getAllByText("Mounted folder browser")).toHaveLength(1);
+    expect(screen.queryByLabelText("Relative folder or file path")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Analyze mounted path" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Process all with Google Cloud/i }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Process selected/i }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Photo analysis" }).getAttribute(
+        "href",
+      ),
+    ).toBe("/media/analysis");
+    expect(
+      (screen.getByLabelText("Choose files") as HTMLInputElement).disabled,
+    ).toBe(false);
+  });
+
+  it("uploads locally and refreshes the gallery after confirmation", async () => {
     let confirmed = false;
     mockCallResource.mockImplementation((_resource, input) => {
-      if (input.action === "status") {
-        return Promise.resolve({
-          enabled: true,
-          sourceConfigured: true,
-          activeProfileId: undefined,
-          profiles: [],
-        });
-      }
       if (input.action === "listAssets") {
         return Promise.resolve({
-          assets: confirmed
-            ? [{
-              _id: "asset-1",
-              fileName: "photo.jpg",
-              kind: "image",
-              status: "staged",
-              thumbnailUrl: "/api/files/thumb",
-              source: { relativePath: "photo.jpg" },
-            }]
-            : [],
-        });
-      }
-      if (input.action === "analyzeSource") {
-        return Promise.resolve({
-          importId: "import-1",
-          storageMode: "external_reference",
-          grossEstimateUsd: 0,
-          provider: { name: "Metadata only", providerType: "none" },
-          includeGlobalPhotoAnalysis: false,
-          items: [{
-            relativePath: "photo.jpg",
-            fileName: "photo.jpg",
-            kind: "image",
-            byteLength: 44_894,
-            pageCount: 1,
-            estimatedGrossUsd: 0,
-            thumbnailUrl: "/api/files/thumb",
-          }],
+          assets: confirmed ? [{ ...baseAsset, fileName: "garden.jpg" }] : [],
+          total: confirmed ? 1 : 0,
         });
       }
       if (input.action === "confirmImport") {
@@ -77,37 +133,8 @@ describe("MediaPage local-only import", () => {
           created: [{ assetId: "asset-1", jobId: null }],
         });
       }
-      return Promise.resolve({});
+      return defaultResourceResponse(input);
     });
-  });
-
-  it("keeps metadata-only uploads available when recognition is disabled", async () => {
-    mockCallResource.mockImplementation((_resource, input) => {
-      if (input.action === "status") {
-        return Promise.resolve({
-          enabled: false,
-          sourceConfigured: false,
-          activeProfileId: undefined,
-          profiles: [],
-        });
-      }
-      if (input.action === "listAssets") {
-        return Promise.resolve({ assets: [] });
-      }
-      return Promise.resolve({});
-    });
-
-    renderMediaPage();
-
-    const input = await screen.findByLabelText("Choose files");
-    expect((input as HTMLInputElement).disabled).toBe(false);
-    expect(
-      screen.getByText(/Local managed uploads, previews, EXIF\/GPS/),
-    ).toBeTruthy();
-  });
-
-  it("uploads files as managed originals before confirmation", async () => {
-    const user = userEvent.setup();
     mockPostForm.mockResolvedValue({
       importId: "upload-import-1",
       storageMode: "managed_original",
@@ -124,40 +151,18 @@ describe("MediaPage local-only import", () => {
         thumbnailUrl: "/api/files/upload-thumb",
       }],
     });
+    const user = userEvent.setup();
     renderMediaPage();
 
-    const input = await screen.findByLabelText("Choose files");
     await user.upload(
-      input,
+      await screen.findByLabelText("Choose files"),
       new File([new Uint8Array([1, 2, 3])], "garden.jpg", {
         type: "image/jpeg",
       }),
     );
 
-    await waitFor(() => expect(mockPostForm).toHaveBeenCalledTimes(1));
-    const [path, form] = mockPostForm.mock.calls[0];
-    expect(path).toBe("/api/media/imports/analyze");
-    expect((form as FormData).get("files")).toBeInstanceOf(File);
-    expect(await screen.findByText("Managed original")).toBeTruthy();
-    expect(screen.getByText("garden.jpg")).toBeTruthy();
-  });
-
-  it("imports and renders a staged inventory row without queueing recognition", async () => {
-    const user = userEvent.setup();
-    renderMediaPage();
-
-    await user.click(
-      await screen.findByRole("button", { name: "Analyze mounted path" }),
-    );
-    expect(mockCallResource).toHaveBeenCalledWith("media", {
-      action: "analyzeSource",
-      relativePath: ".",
-    });
-    expect(await screen.findByText("photo.jpg")).toBeTruthy();
-    expect(screen.getByText("Metadata only")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Confirm local import" }))
-      .toBeTruthy();
-
+    expect(await screen.findByText("Review local import")).toBeTruthy();
+    expect(screen.getByText("Managed original")).toBeTruthy();
     await user.click(
       screen.getByRole("button", { name: "Confirm local import" }),
     );
@@ -165,218 +170,307 @@ describe("MediaPage local-only import", () => {
     await waitFor(() => {
       expect(mockCallResource).toHaveBeenCalledWith("media", {
         action: "confirmImport",
-        importId: "import-1",
+        importId: "upload-import-1",
         consent: true,
         queueRecognition: false,
       });
-      expect(screen.getByText("staged")).toBeTruthy();
-      expect(screen.getAllByText("photo.jpg").length).toBeGreaterThanOrEqual(1);
     });
-  });
-
-  it("explains mounted paths and does not submit an absolute host path", async () => {
-    const user = userEvent.setup();
-    renderMediaPage();
-
-    const input = await screen.findByLabelText(
-      "Relative folder or file path",
-    );
-    await user.clear(input);
-    await user.type(input, "/Users/example/Pictures");
-    await user.click(
-      screen.getByRole("button", { name: "Analyze mounted path" }),
-    );
-
-    expect(screen.getByText(/MEDIA_SOURCE_HOST_PATH/)).toBeTruthy();
-    expect(mockCallResource).not.toHaveBeenCalledWith(
-      "media",
-      expect.objectContaining({ action: "analyzeSource" }),
-    );
-  });
-
-  it("trims a mounted relative path before analysis", async () => {
-    const user = userEvent.setup();
-    renderMediaPage();
-
-    const input = await screen.findByLabelText(
-      "Relative folder or file path",
-    );
-    await user.clear(input);
-    await user.type(input, " 2026/photos ");
-    await user.click(
-      screen.getByRole("button", { name: "Analyze mounted path" }),
-    );
-
-    expect(mockCallResource).toHaveBeenCalledWith("media", {
-      action: "analyzeSource",
-      relativePath: "2026/photos",
-    });
-    expect(await screen.findByText("External reference")).toBeTruthy();
-  });
-
-  it("does not auto-select a disabled active provider", async () => {
-    mockCallResource.mockImplementation((_resource, input) => {
-      if (input.action === "status") {
-        return Promise.resolve({
-          enabled: true,
-          sourceConfigured: true,
-          activeProfileId: "google-cloud-media",
-          profiles: [{
-            id: "google-cloud-media",
-            name: "Google Cloud EU Photo Knowledge",
-            providerType: "google-cloud",
-            enabled: false,
-            allowGlobalPhotoAnalysis: false,
-          }],
-        });
-      }
-      if (input.action === "listAssets") {
-        return Promise.resolve({ assets: [] });
-      }
-      if (input.action === "analyzeSource") {
-        return Promise.resolve({
-          importId: "import-disabled-profile",
-          storageMode: "external_reference",
-          grossEstimateUsd: 0,
-          provider: { id: null, name: "Metadata only", providerType: "none" },
-          requestedTasks: [],
-          items: [],
-        });
-      }
-      return Promise.resolve({});
-    });
-    const user = userEvent.setup();
-    renderMediaPage();
-
-    const provider = await screen.findByLabelText("Recognition provider");
-    expect((provider as HTMLSelectElement).value).toBe("");
-    await user.click(
-      screen.getByRole("button", { name: "Analyze mounted path" }),
-    );
-    expect(mockCallResource).toHaveBeenCalledWith("media", {
-      action: "analyzeSource",
-      relativePath: ".",
-    });
-  });
-
-  it("defaults a selected provider to visual understanding, not OCR", async () => {
-    mockCallResource.mockImplementation((_resource, input) => {
-      if (input.action === "status") {
-        return Promise.resolve({
-          enabled: true,
-          sourceConfigured: true,
-          activeProfileId: "self-hosted-media",
-          profiles: [{
-            id: "self-hosted-media",
-            name: "Self-hosted visual model",
-            providerType: "self-hosted",
-            enabled: true,
-            baseUrl: "http://media-provider:8090",
-          }],
-        });
-      }
-      if (input.action === "listAssets") {
-        return Promise.resolve({ assets: [] });
-      }
-      return Promise.resolve({});
-    });
-
-    renderMediaPage();
-
     expect(
-      (await screen.findByRole("switch", {
-        name: "Visual understanding (primary)",
-      })).getAttribute("data-state"),
-    ).toBe("checked");
-    expect(
-      screen.getByRole("switch", { name: "Extract text (OCR)" }).getAttribute(
-        "data-state",
-      ),
-    ).toBe("unchecked");
-  });
-
-  it("discloses the active search provider independently of the import selector", async () => {
-    mockCallResource.mockImplementation((_resource, input) => {
-      if (input.action === "status") {
-        return Promise.resolve({
-          enabled: true,
-          sourceConfigured: true,
-          activeProfileId: "google-cloud-media",
-          profiles: [{
-            id: "google-cloud-media",
-            name: "Google Cloud EU Photo Knowledge",
-            providerType: "google-cloud",
-            enabled: true,
-            allowGlobalPhotoAnalysis: false,
-          }],
-        });
-      }
-      if (input.action === "listAssets") {
-        return Promise.resolve({ assets: [] });
-      }
-      return Promise.resolve({});
-    });
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MediaPage />
-      </MemoryRouter>,
-    );
-
-    await user.selectOptions(
-      await screen.findByLabelText("Recognition provider"),
-      "",
-    );
-    expect(
-      screen.getByText(/active provider Google Cloud EU Photo Knowledge/),
+      await screen.findByRole("button", { name: "Open garden.jpg" }),
     ).toBeTruthy();
-    expect(screen.getByText(/at most \$0\.0004/)).toBeTruthy();
-    expect(
-      (screen.getByLabelText("Semantic photo search") as HTMLInputElement)
-        .maxLength,
-    ).toBe(512);
   });
 
-  it("requires a deletion preview before deleting a managed original", async () => {
-    let deleted = false;
+  it("does not let an older filter response replace the current results", async () => {
+    let resolveReady: ((value: any) => void) | undefined;
+    let resolveUnprocessed: ((value: any) => void) | undefined;
+    const readyRequest = new Promise((resolve) => {
+      resolveReady = resolve;
+    });
+    const unprocessedRequest = new Promise((resolve) => {
+      resolveUnprocessed = resolve;
+    });
+
     mockCallResource.mockImplementation((_resource, input) => {
-      if (input.action === "status") {
+      if (input.action === "listAssets") {
+        if (input.inventoryFilter === "ready") return readyRequest;
+        if (input.inventoryFilter === "unprocessed") {
+          return unprocessedRequest;
+        }
+        return Promise.resolve({ assets: [], total: 0 });
+      }
+      return defaultResourceResponse(input);
+    });
+    const user = userEvent.setup();
+    renderMediaPage();
+
+    await screen.findByText("No media matches these filters.");
+    await user.click(screen.getByRole("button", { name: "Ready" }));
+    await waitFor(() => expect(resolveReady).toBeTypeOf("function"));
+    await user.click(screen.getByRole("button", { name: "Unprocessed" }));
+    await waitFor(() => expect(resolveUnprocessed).toBeTypeOf("function"));
+
+    await act(async () => {
+      resolveUnprocessed?.({
+        assets: [{ ...baseAsset, fileName: "unprocessed.jpg" }],
+        total: 1,
+      });
+    });
+    expect(
+      await screen.findByRole("button", { name: "Open unprocessed.jpg" }),
+    ).toBeTruthy();
+
+    await act(async () => {
+      resolveReady?.({
+        assets: [{
+          ...baseAsset,
+          fileName: "ready.jpg",
+          status: "ready",
+        }],
+        total: 1,
+      });
+    });
+    expect(
+      screen.getByRole("button", { name: "Open unprocessed.jpg" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open ready.jpg" }),
+    ).toBeNull();
+  });
+
+  it("keeps loaded pages and their tail cursor during a background refresh", async () => {
+    const secondAsset = {
+      ...baseAsset,
+      _id: "asset-2",
+      fileName: "second.jpg",
+    };
+    const thirdAsset = {
+      ...baseAsset,
+      _id: "asset-3",
+      fileName: "third.jpg",
+    };
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        if (input.cursor === "cursor-1") {
+          return Promise.resolve({
+            assets: [secondAsset],
+            total: 3,
+            nextCursor: "cursor-2",
+          });
+        }
+        if (input.cursor === "cursor-2") {
+          return Promise.resolve({ assets: [thirdAsset], total: 3 });
+        }
         return Promise.resolve({
-          enabled: true,
-          sourceConfigured: false,
-          profiles: [],
+          assets: [{ ...baseAsset, status: "ready" }],
+          total: 3,
+          nextCursor: "cursor-1",
         });
       }
+      return defaultResourceResponse(input);
+    });
+    const user = userEvent.setup();
+    renderMediaPage();
+
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+    expect(
+      await screen.findByRole("button", { name: "Open second.jpg" }),
+    ).toBeTruthy();
+
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Open second.jpg" }))
+        .toBeTruthy()
+    );
+
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(
+      await screen.findByRole("button", { name: "Open third.jpg" }),
+    ).toBeTruthy();
+    expect(mockCallResource).toHaveBeenCalledWith("media", {
+      action: "listAssets",
+      limit: 100,
+      inventoryFilter: "all",
+      placement: "all",
+      cursor: "cursor-2",
+    });
+  });
+
+  it("opens gallery details in a dialog and keeps selection for photo events", async () => {
+    mockCallResource.mockImplementation((_resource, input) => {
       if (input.action === "listAssets") {
-        return Promise.resolve({
-          assets: [{
-            _id: "asset-managed",
-            fileName: "managed.jpg",
-            kind: "image",
-            status: "ready",
-            storageMode: deleted ? "preview_only" : "managed_original",
-            managedOriginal: deleted
-              ? undefined
-              : { bucket: "media_originals", fileId: "file-1" },
-            thumbnailUrl: "/api/files/thumb",
-          }],
-        });
+        return Promise.resolve({ assets: [baseAsset], total: 1 });
       }
       if (input.action === "getAsset") {
         return Promise.resolve({
-          asset: {
-            _id: "asset-managed",
-            fileName: "managed.jpg",
-            kind: "image",
-            status: "ready",
-            storageMode: deleted ? "preview_only" : "managed_original",
-            managedOriginal: deleted
-              ? undefined
-              : { bucket: "media_originals", fileId: "file-1" },
-            previewUrl: "/api/files/preview",
-            byteLength: 2_000_000,
-            metadata: {},
+          asset: baseAsset,
+          pages: [],
+          annotations: [],
+          runs: [],
+        });
+      }
+      return defaultResourceResponse(input);
+    });
+    const user = userEvent.setup();
+    renderMediaPage();
+
+    await user.click(
+      await screen.findByLabelText("Select photo.jpg for photo event"),
+    );
+    expect(screen.getByTestId("event-candidates").textContent).toContain(
+      "asset-1",
+    );
+    await user.click(screen.getByRole("button", { name: "Open photo.jpg" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "photo.jpg" });
+    expect(dialog).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Open in Photo analysis" }).getAttribute(
+        "href",
+      ),
+    ).toBe("/media/analysis?assetId=asset-1");
+    expect(
+      (screen.getByRole("button", {
+        name: "Review original deletion",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(screen.getByText("Manual Timeline / Map placement")).toBeTruthy();
+  });
+
+  it("preserves assetId deep links in the same dialog viewer", async () => {
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [baseAsset], total: 1 });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: baseAsset,
+          pages: [],
+          annotations: [],
+          runs: [],
+        });
+      }
+      return defaultResourceResponse(input);
+    });
+
+    const user = userEvent.setup();
+    renderMediaPage("/media?assetId=asset-1");
+
+    expect(
+      await screen.findByRole("dialog", { name: "photo.jpg" }),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Provider analysis status").textContent)
+      .toContain("Not processed");
+    expect(
+      screen.getByText(
+        /No stored Google Cloud or self-hosted analysis run or result/i,
+      ),
+    ).toBeTruthy();
+    expect(mockCallResource).toHaveBeenCalledWith("media", {
+      action: "getAsset",
+      assetId: "asset-1",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "photo.jpg" })).toBeNull()
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(screen.getByTestId("media-location").textContent).toBe("/media");
+    expect(
+      mockCallResource.mock.calls.filter(([, input]) =>
+        input.action === "getAsset"
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("identifies the active Google result and its stored projections", async () => {
+    const readyAsset = {
+      ...baseAsset,
+      status: "ready",
+      currentRunId: "run-google",
+    };
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [readyAsset], total: 1 });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: readyAsset,
+          visual: {
+            visualUnderstanding: {
+              shortCaption: "A coastal landscape",
+              description: "A view of the coast.",
+              scene: {
+                summary: "Coast",
+                environment: "outdoor",
+                placeType: "coast",
+                timeOfDay: "day",
+              },
+              peopleCount: 0,
+              possibleEvent: null,
+              confidence: 0.9,
+              objects: [],
+              activities: [],
+              keywords: ["coast"],
+              warnings: [],
+            },
           },
+          pages: [{ _id: "page-1", pageNumber: 1, text: "Sign" }],
+          annotations: [{ _id: "annotation-1", type: "label", label: "sea" }],
+          runs: [{
+            _id: "run-google",
+            state: "ready",
+            providerSnapshot: {
+              providerType: "google-cloud",
+              name: "Google Cloud EU Photo Knowledge",
+            },
+            provenance: {
+              providerType: "google-cloud",
+              service: "Vertex AI + Cloud Vision",
+              location: "europe-west4 / eu",
+              modelVersion: "visual-model",
+            },
+          }],
+        });
+      }
+      return defaultResourceResponse(input);
+    });
+
+    renderMediaPage("/media?assetId=asset-1");
+
+    const providerStatus = await screen.findByLabelText(
+      "Provider analysis status",
+    );
+    expect(providerStatus.textContent).toContain("Google Cloud result");
+    expect(providerStatus.textContent).toContain(
+      "Google Cloud EU Photo Knowledge",
+    );
+    expect(providerStatus.textContent).toContain(
+      "Visual description: available",
+    );
+    expect(providerStatus.textContent).toContain("OCR pages: 1");
+  });
+
+  it("keeps the preview-and-confirm guard for managed-original deletion", async () => {
+    let deleted = false;
+    mockCallResource.mockImplementation((_resource, input) => {
+      const currentAsset = {
+        ...baseAsset,
+        storageMode: deleted ? "preview_only" : "managed_original",
+        managedOriginal: deleted ? undefined : baseAsset.managedOriginal,
+      };
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [currentAsset], total: 1 });
+      }
+      if (input.action === "getAsset") {
+        return Promise.resolve({
+          asset: currentAsset,
+          pages: [],
+          annotations: [],
           runs: [{ _id: "run-1", state: "ready" }],
         });
       }
@@ -384,7 +478,7 @@ describe("MediaPage local-only import", () => {
         return Promise.resolve({
           canDelete: true,
           deletionPreviewId: "deletion-preview-1",
-          byteLength: 2_000_000,
+          byteLength: baseAsset.byteLength,
           previewReady: true,
           analysisReady: true,
         });
@@ -393,109 +487,35 @@ describe("MediaPage local-only import", () => {
         deleted = true;
         return Promise.resolve({ success: true, storageMode: "preview_only" });
       }
-      return Promise.resolve({});
+      return defaultResourceResponse(input);
     });
     const user = userEvent.setup();
     renderMediaPage();
 
     await user.click(
-      await screen.findByRole("button", { name: "Details" }),
+      await screen.findByRole("button", { name: "Open photo.jpg" }),
     );
     await user.click(
       await screen.findByRole("button", { name: "Review original deletion" }),
     );
     expect(mockCallResource).toHaveBeenCalledWith("media", {
       action: "previewOriginalDeletion",
-      assetId: "asset-managed",
+      assetId: "asset-1",
     });
     await user.click(
       await screen.findByRole("button", {
         name: "Permanently delete managed original",
       }),
     );
-    expect(mockCallResource).toHaveBeenCalledWith("media", {
-      action: "confirmOriginalDeletion",
-      deletionPreviewId: "deletion-preview-1",
-      confirm: true,
-    });
-    expect(await screen.findByText(/managed original was deleted/i))
-      .toBeTruthy();
-  });
-
-  it("filters unprocessed assets and queues an explicitly selected batch", async () => {
-    const confirm = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
-    mockCallResource.mockImplementation((_resource, input) => {
-      if (input.action === "status") {
-        return Promise.resolve({
-          enabled: true,
-          activeProfileId: "google-media",
-          profiles: [{
-            id: "google-media",
-            name: "Google media",
-            providerType: "google-cloud",
-            enabled: true,
-            allowGlobalPhotoAnalysis: false,
-          }],
-        });
-      }
-      if (input.action === "listAssets") {
-        const allAssets = [{
-          _id: "asset-staged",
-          fileName: "unprocessed.jpg",
-          kind: "image",
-          status: "staged",
-          source: { relativePath: "unprocessed.jpg" },
-          thumbnailUrl: "/api/files/unprocessed",
-          metadata: { exif: { Make: "Apple", Model: "iPhone" } },
-        }, {
-          _id: "asset-ready",
-          fileName: "ready.jpg",
-          kind: "image",
-          status: "ready",
-          currentRunId: "run-ready",
-          source: { relativePath: "ready.jpg" },
-          thumbnailUrl: "/api/files/ready",
-          inventory: { processed: true, shortCaption: "Ready photo" },
-        }];
-        const selectedAssets = input.inventoryFilter === "unprocessed"
-          ? allAssets.filter((asset) => asset.status === "staged")
-          : allAssets;
-        return Promise.resolve({
-          total: selectedAssets.length,
-          assets: selectedAssets,
-        });
-      }
-      if (input.action === "retry") {
-        return Promise.resolve({ queued: true, jobId: "job-1" });
-      }
-      return Promise.resolve({});
-    });
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MediaPage />
-      </MemoryRouter>,
-    );
-
-    await user.click(
-      await screen.findByRole("button", { name: "Unprocessed" }),
-    );
-    expect(screen.getByText("unprocessed.jpg")).toBeTruthy();
-    expect(screen.queryByText("ready.jpg")).toBeNull();
-    await user.click(screen.getByLabelText("Select unprocessed.jpg"));
-    await user.click(
-      screen.getByRole("button", { name: "Process selected (1)" }),
-    );
 
     await waitFor(() => {
       expect(mockCallResource).toHaveBeenCalledWith("media", {
-        action: "retry",
-        assetId: "asset-staged",
-        profileId: "google-media",
-        requestedTasks: ["visual-understanding"],
+        action: "confirmOriginalDeletion",
+        deletionPreviewId: "deletion-preview-1",
+        confirm: true,
       });
     });
-    expect(confirm).toHaveBeenCalled();
-    confirm.mockRestore();
+    expect(await screen.findByText(/managed original was deleted/i))
+      .toBeTruthy();
   });
 });

@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   ChevronRight,
   Folder,
   FolderSearch,
   Loader2,
-  Play,
   RefreshCw,
-  RotateCcw,
-  Square,
 } from "lucide-react";
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
@@ -18,7 +15,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 
 const FOLDER_CAMPAIGN_KEY = "mycelia.media.folder-campaign";
-const RECOGNITION_BATCH_KEY = "mycelia.media.recognition-batch";
 
 function browserStorage(): Storage | undefined {
   try {
@@ -113,7 +109,6 @@ function campaignStageLabel(stage: string | undefined, status: string) {
 }
 
 export function MediaBatchPanel({
-  status,
   onInventoryChanged,
 }: {
   status: any;
@@ -127,19 +122,8 @@ export function MediaBatchPanel({
   const [folderBrowserLoading, setFolderBrowserLoading] = useState(false);
   const [folderBrowserError, setFolderBrowserError] = useState<string>();
   const [folderCampaign, setFolderCampaign] = useState<any>();
-  const [recognitionPreview, setRecognitionPreview] = useState<any>();
-  const [recognitionBatch, setRecognitionBatch] = useState<any>();
   const [busy, setBusy] = useState(false);
-
-  const googleProfile = useMemo(() => {
-    const profiles = status?.profiles ?? [];
-    return profiles.find((profile: any) =>
-      profile.id === status?.activeProfileId && profile.enabled &&
-      profile.providerType === "google-cloud"
-    ) ?? profiles.find((profile: any) =>
-      profile.enabled && profile.providerType === "google-cloud"
-    );
-  }, [status]);
+  const inventoryFingerprintRef = useRef<string | undefined>(undefined);
 
   const loadFolderCampaign = useCallback(async (campaignId: string) => {
     const result = await callResource("media-library", {
@@ -160,18 +144,6 @@ export function MediaBatchPanel({
       setFolderCampaign(result.campaign);
     }
     return result.campaign;
-  }, []);
-
-  const loadRecognitionBatch = useCallback(async (batchId: string) => {
-    const result = await callResource("media-library", {
-      action: "getRecognitionBatch",
-      batchId,
-    });
-    setRecognitionBatch({
-      ...result.batch,
-      recentFailures: result.recentFailures ?? [],
-    });
-    return result.batch;
   }, []);
 
   const browseMountedFolder = useCallback(async (path: string) => {
@@ -203,7 +175,6 @@ export function MediaBatchPanel({
 
   useEffect(() => {
     const folderId = storageGet(FOLDER_CAMPAIGN_KEY);
-    const batchId = storageGet(RECOGNITION_BATCH_KEY);
     void (async () => {
       if (folderId) {
         try {
@@ -221,16 +192,7 @@ export function MediaBatchPanel({
         // Keep the existing shortcut and retry on the next page load.
       }
     })();
-    if (batchId) {
-      void loadRecognitionBatch(batchId).catch(() =>
-        storageRemove(RECOGNITION_BATCH_KEY)
-      );
-    }
-  }, [
-    loadActiveFolderCampaign,
-    loadFolderCampaign,
-    loadRecognitionBatch,
-  ]);
+  }, [loadActiveFolderCampaign, loadFolderCampaign]);
 
   useEffect(() => {
     const activeFolder = folderCampaign && [
@@ -238,20 +200,36 @@ export function MediaBatchPanel({
       "scanning",
       "importing",
     ].includes(folderCampaign.status);
-    const activeBatch = recognitionBatch && ["queued", "running", "paused"]
-      .includes(recognitionBatch.status);
-    if (!activeFolder && !activeBatch) return;
+    if (!activeFolder) return;
     const timer = globalThis.setInterval(() => {
-      if (activeFolder) void loadFolderCampaign(idOf(folderCampaign._id));
-      if (activeBatch) void loadRecognitionBatch(idOf(recognitionBatch._id));
+      void loadFolderCampaign(idOf(folderCampaign._id));
     }, 3_000);
     return () => globalThis.clearInterval(timer);
-  }, [
-    folderCampaign,
-    loadFolderCampaign,
-    loadRecognitionBatch,
-    recognitionBatch,
-  ]);
+  }, [folderCampaign, loadFolderCampaign]);
+
+  useEffect(() => {
+    if (!folderCampaign) return;
+    const fingerprint = JSON.stringify({
+      id: idOf(folderCampaign._id),
+      status: folderCampaign.status,
+      updatedAt: folderCampaign.updatedAt,
+      counts: folderCampaign.counts ?? {},
+      progress: folderCampaign.progress
+        ? {
+          stage: folderCampaign.progress.stage,
+          processed: folderCampaign.progress.processed,
+          total: folderCampaign.progress.total,
+          remaining: folderCampaign.progress.remaining,
+          percent: folderCampaign.progress.percent,
+        }
+        : null,
+    });
+    if (inventoryFingerprintRef.current === fingerprint) return;
+    inventoryFingerprintRef.current = fingerprint;
+    void Promise.resolve(onInventoryChanged()).catch(() => {
+      // A later durable campaign update retries a transient inventory refresh.
+    });
+  }, [folderCampaign, onInventoryChanged]);
 
   const startFolderScan = async () => {
     setBusy(true);
@@ -291,7 +269,6 @@ export function MediaBatchPanel({
       });
       setFolderCampaign(result.campaign);
       toast.success("Background folder import started");
-      await onInventoryChanged();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Import confirmation failed",
@@ -301,108 +278,15 @@ export function MediaBatchPanel({
     }
   };
 
-  const previewRecognition = async () => {
-    if (!googleProfile) return;
-    setBusy(true);
-    try {
-      const result = await callResource("media-library", {
-        action: "previewRecognitionBatch",
-        profileId: googleProfile.id,
-        requestedTasks: ["visual-understanding", "ocr"],
-      });
-      setRecognitionPreview(result);
-      toast.success(
-        `Prepared an exact ${result.eligibleCount}-photo batch; no Google call yet`,
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Batch preview failed",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const confirmRecognition = async () => {
-    if (!recognitionPreview) return;
-    if (
-      !globalThis.confirm(
-        `Send ${recognitionPreview.eligibleCount} compact previews to Google Cloud for visual understanding + EU OCR? Maximum gross list-price ceiling: $${
-          Number(recognitionPreview.authorizedGrossUsd).toFixed(2)
-        }.`,
-      )
-    ) return;
-    setBusy(true);
-    try {
-      const result = await callResource("media-library", {
-        action: "confirmRecognitionBatch",
-        previewId: idOf(recognitionPreview.previewId),
-        consent: true,
-      });
-      const batchId = idOf(result.batch._id);
-      storageSet(RECOGNITION_BATCH_KEY, batchId);
-      setRecognitionBatch(result.batch);
-      setRecognitionPreview(undefined);
-      toast.success(
-        "Recognition batch accepted; progress continues in background",
-      );
-      await onInventoryChanged();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Batch confirmation failed",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const cancelRecognition = async () => {
-    if (!recognitionBatch) return;
-    setBusy(true);
-    try {
-      const result = await callResource("media-library", {
-        action: "cancelRecognitionBatch",
-        batchId: idOf(recognitionBatch._id),
-        confirm: true,
-      });
-      setRecognitionBatch(result.batch);
-      toast.success(
-        "No new photo jobs will be queued; started calls may finish",
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Cancel failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const retryFailures = async () => {
-    if (!recognitionBatch) return;
-    setBusy(true);
-    try {
-      const result = await callResource("media-library", {
-        action: "retryRecognitionBatchFailures",
-        batchId: idOf(recognitionBatch._id),
-        confirm: true,
-      });
-      toast.success(`Reset ${result.reset} failed batch item(s)`);
-      await loadRecognitionBatch(idOf(recognitionBatch._id));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Retry failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <Card className="border-primary/40">
       <CardHeader>
-        <CardTitle>Large photo folder and Google batch</CardTitle>
+        <CardTitle>Mounted folder sync</CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-5 lg:grid-cols-2">
+      <CardContent>
         <section className="space-y-3 rounded-md border p-4">
           <div>
-            <h3 className="font-semibold">1. Sync mounted folder locally</h3>
+            <h3 className="font-semibold">Sync mounted folder locally</h3>
             <p className="text-sm text-muted-foreground">
               Choose the mounted root or any visible subfolder below. The root
               is selected by default. Mycelia walks subfolders, ignores
@@ -613,94 +497,6 @@ export function MediaBatchPanel({
                   Confirm local import
                 </Button>
               )}
-            </div>
-          )}
-        </section>
-
-        <section className="space-y-3 rounded-md border p-4">
-          <div>
-            <h3 className="font-semibold">2. Process all unprocessed photos</h3>
-            <p className="text-sm text-muted-foreground">
-              Server-side selection skips ready, queued, and processing photos.
-              It sends compact previews for Vertex visual understanding and EU
-              Vision OCR only; global labels/objects stay off.
-            </p>
-          </div>
-          <Button
-            onClick={previewRecognition}
-            disabled={busy || !googleProfile}
-            className="w-full"
-          >
-            {busy
-              ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              : <Play className="mr-2 h-4 w-4" />}
-            Process all with Google Cloud EU Photo Knowledge
-          </Button>
-          {!googleProfile && (
-            <p className="text-sm text-destructive">
-              Enable a Google Cloud media profile in Settings first.
-            </p>
-          )}
-          {recognitionPreview && (
-            <div className="space-y-2 rounded bg-muted p-3 text-sm">
-              <div>
-                Exact selection:{" "}
-                <strong>{recognitionPreview.eligibleCount}</strong>{" "}
-                photo(s); unavailable originals:{" "}
-                {recognitionPreview.missingOriginalCount}
-              </div>
-              <div>
-                Visual + OCR ceiling: ${Number(
-                  recognitionPreview.authorizedGrossUsd,
-                ).toFixed(2)}{" "}
-                (${Number(recognitionPreview.perAssetGrossUsd).toFixed(
-                  4,
-                )}/photo)
-              </div>
-              <Button onClick={confirmRecognition} disabled={busy}>
-                Confirm this exact batch
-              </Button>
-            </div>
-          )}
-          {recognitionBatch && (
-            <div className="space-y-2 rounded bg-muted p-3 text-sm">
-              <div className="flex items-center gap-2">
-                <Badge>{recognitionBatch.status}</Badge>
-                <span>
-                  ceiling ${Number(recognitionBatch.authorizedGrossUsd).toFixed(
-                    2,
-                  )}
-                </span>
-              </div>
-              <div>{countLine(recognitionBatch.counts)}</div>
-              <div className="flex flex-wrap gap-2">
-                {["queued", "running", "paused"].includes(
-                  recognitionBatch.status,
-                ) && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={cancelRecognition}
-                  >
-                    <Square className="mr-2 h-3 w-3" />Stop new jobs
-                  </Button>
-                )}
-                {Number(recognitionBatch.counts?.failed ?? 0) > 0 && (
-                  <Button size="sm" variant="outline" onClick={retryFailures}>
-                    <RotateCcw className="mr-2 h-3 w-3" />Retry failures
-                  </Button>
-                )}
-              </div>
-              {(recognitionBatch.recentFailures ?? []).slice(0, 3).map((
-                item: any,
-              ) => (
-                <div
-                  key={idOf(item.assetId)}
-                  className="text-xs text-destructive"
-                >
-                  {idOf(item.assetId)}: {item.safeError ?? item.state}
-                </div>
-              ))}
             </div>
           )}
         </section>

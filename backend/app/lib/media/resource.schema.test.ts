@@ -3,6 +3,7 @@ import { type Db, ObjectId } from "mongodb";
 import {
   activateMediaAnalysis,
   loadMediaAssetDetailProjections,
+  mediaAssetListFilterQuery,
   mediaAssetLocation,
   mediaImportTemporalSpatialFields,
   mediaPlacementFilterQuery,
@@ -17,6 +18,38 @@ Deno.test("unplaced inventory treats legacy nulls as missing", () => {
   assertEquals(mediaPlacementFilterQuery("missing_location"), {
     $nor: [{ "geo.type": "Point" }],
   });
+});
+
+Deno.test("media inventory filters filename kind and capture range on the server", () => {
+  assertEquals(
+    mediaAssetListFilterQuery("admin", {
+      inventoryFilter: "unprocessed",
+      placement: "missing_location",
+      kind: "image",
+      query: "IMG_[1].jpg",
+      capturedFrom: "2026-01-01T00:00:00.000Z",
+      capturedTo: "2026-12-31T23:59:59.999Z",
+    }),
+    {
+      owner: "admin",
+      status: { $nin: ["ready", "queued", "processing"] },
+      $nor: [{ "geo.type": "Point" }],
+      kind: "image",
+      $or: [
+        { fileName: { $regex: "IMG_\\[1\\]\\.jpg", $options: "i" } },
+        {
+          "source.relativePath": {
+            $regex: "IMG_\\[1\\]\\.jpg",
+            $options: "i",
+          },
+        },
+      ],
+      capturedAt: {
+        $gte: new Date("2026-01-01T00:00:00.000Z"),
+        $lte: new Date("2026-12-31T23:59:59.999Z"),
+      },
+    },
+  );
 });
 
 Deno.test("media semantic search accepts a bounded query", () => {

@@ -89,6 +89,10 @@ const listAssetsSchema = z.object({
   limit: z.number().int().min(1).max(500).default(100),
   before: z.string().datetime().optional(),
   cursor: z.string().max(200).optional(),
+  kind: z.enum(["all", "image", "pdf"]).default("all"),
+  query: z.string().trim().min(1).max(200).optional(),
+  capturedFrom: z.string().datetime().optional(),
+  capturedTo: z.string().datetime().optional(),
   inventoryFilter: z.enum([
     "all",
     "unprocessed",
@@ -381,6 +385,47 @@ export function mediaPlacementFilterQuery(
     return { $nor: [{ "geo.type": "Point" }] };
   }
   return {};
+}
+
+function escapeMongoRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function mediaAssetListFilterQuery(
+  owner: string,
+  input: Pick<
+    z.infer<typeof listAssetsSchema>,
+    | "inventoryFilter"
+    | "placement"
+    | "kind"
+    | "query"
+    | "capturedFrom"
+    | "capturedTo"
+  >,
+): Record<string, unknown> {
+  const query: Record<string, unknown> = {
+    owner,
+    ...mediaInventoryFilterQuery(input.inventoryFilter),
+    ...mediaPlacementFilterQuery(input.placement),
+  };
+  if (input.kind !== "all") query.kind = input.kind;
+  if (input.query) {
+    const pattern = escapeMongoRegex(input.query);
+    query.$or = [
+      { fileName: { $regex: pattern, $options: "i" } },
+      { "source.relativePath": { $regex: pattern, $options: "i" } },
+    ];
+  }
+  if (input.capturedFrom || input.capturedTo) {
+    const range: Record<string, Date> = {};
+    if (input.capturedFrom) range.$gte = new Date(input.capturedFrom);
+    if (input.capturedTo) range.$lte = new Date(input.capturedTo);
+    if (range.$gte && range.$lte && range.$gte > range.$lte) {
+      throw new Error("Capture date start must not be after the end");
+    }
+    query.capturedAt = range;
+  }
+  return query;
 }
 
 const STAGED_ORIGINAL_TTL_MS = 60 * 60 * 1000;
@@ -1859,6 +1904,7 @@ async function enqueueAsset(
   consentReceiptId: string,
   auth: Auth,
   jobId?: string,
+  recognitionBatchId?: string,
 ) {
   return await enqueueJob(
     {
@@ -1867,6 +1913,7 @@ async function enqueueAsset(
       profileSnapshot: profile,
       requestedTasks,
       consentReceiptId,
+      ...(recognitionBatchId ? { recognitionBatchId } : {}),
       routingContext: {
         sourceId: assetId.toString(),
         providerProfileId: profile.id,
@@ -1889,6 +1936,7 @@ type EnqueueAsset = (
   consentReceiptId: string,
   auth: Auth,
   jobId?: string,
+  recognitionBatchId?: string,
 ) => Promise<{ id?: string }>;
 
 function isMatchingImportRecognitionJob(
@@ -1896,11 +1944,15 @@ function isMatchingImportRecognitionJob(
   assetId: ObjectId,
   profile: MediaRecognitionProfile,
   consentReceiptId: string,
+  recognitionBatchId?: string,
 ): boolean {
   return job?.type === "mediaRecognition" &&
     String(job?.data?.assetId ?? "") === String(assetId) &&
     String(job?.data?.profileSnapshot?.id ?? "") === String(profile.id) &&
-    String(job?.data?.consentReceiptId ?? "") === consentReceiptId;
+    String(job?.data?.consentReceiptId ?? "") === consentReceiptId &&
+    (!recognitionBatchId ||
+      !job?.data?.recognitionBatchId ||
+      String(job?.data?.recognitionBatchId ?? "") === recognitionBatchId);
 }
 
 export async function enqueueConfirmedAsset(
@@ -1913,6 +1965,7 @@ export async function enqueueConfirmedAsset(
   enqueue: EnqueueAsset = enqueueAsset,
   jobId?: string,
   allowEnqueue = true,
+  recognitionBatchId?: string,
 ): Promise<string | null> {
   if (jobId) {
     const existingJob = await db.collection("jobs").findOne({
@@ -1925,6 +1978,7 @@ export async function enqueueConfirmedAsset(
           assetId,
           profile,
           consentReceiptId,
+          recognitionBatchId,
         )
       ) {
         const definitelyUnqueued = existingJob.state === "failed" &&
@@ -1972,6 +2026,7 @@ export async function enqueueConfirmedAsset(
       consentReceiptId,
       auth,
       jobId,
+      recognitionBatchId,
     );
     return job.id ?? null;
   } catch (error) {
@@ -1986,6 +2041,7 @@ export async function enqueueConfirmedAsset(
           assetId,
           profile,
           consentReceiptId,
+          recognitionBatchId,
         ) &&
         !(
           racedJob.state === "failed" &&
@@ -2010,6 +2066,47 @@ export async function enqueueConfirmedAsset(
     );
     return null;
   }
+}
+
+export async function beginRecognitionBatchProviderCall(
+  db: Db,
+  recognitionBatchId: unknown,
+  jobId: unknown,
+): Promise<boolean> {
+  if (recognitionBatchId === undefined) return true;
+  if (typeof recognitionBatchId !== "string") {
+    throw new Error("Trusted recognition batch id is invalid");
+  }
+  if (!ObjectId.isValid(recognitionBatchId)) {
+    throw new Error("Trusted recognition batch id is invalid");
+  }
+  if (typeof jobId !== "string" || !ObjectId.isValid(jobId)) {
+    throw new Error("Trusted recognition job id is invalid");
+  }
+  const now = new Date();
+  return Boolean(
+    await db.collection("media_recognition_batches").findOneAndUpdate(
+      {
+        _id: new ObjectId(recognitionBatchId),
+        status: { $in: ["queued", "running"] },
+        cancelRequestedAt: { $exists: false },
+      },
+      {
+        // This update is the provider-start linearization point. Cancellation
+        // updates the same batch document, so either this fence wins and the
+        // already-started call may finish, or cancelRequestedAt wins and no
+        // provider call is allowed to begin.
+        $set: {
+          lastProviderStartFence: {
+            jobId: new ObjectId(jobId),
+            acceptedAt: now,
+          },
+          updatedAt: now,
+        },
+      },
+      { returnDocument: "after", projection: { _id: 1 } },
+    ),
+  );
 }
 
 export class MediaResource implements Resource<MediaRequest, unknown> {
@@ -2590,11 +2687,10 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
       }
 
       case "listAssets": {
-        const baseQuery: any = {
-          owner: auth.principal,
-          ...mediaInventoryFilterQuery(input.inventoryFilter),
-          ...mediaPlacementFilterQuery(input.placement),
-        };
+        const baseQuery: any = mediaAssetListFilterQuery(
+          auth.principal,
+          input,
+        );
         if (input.status) baseQuery.status = input.status;
         const pageConditions: Record<string, unknown>[] = [];
         if (input.before) {
@@ -3259,6 +3355,41 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             );
             throw error;
           }
+        }
+
+        if (
+          !(await beginRecognitionBatchProviderCall(
+            db,
+            trustedJob.recognitionBatchId,
+            trustedJob.jobId,
+          ))
+        ) {
+          const cancellationReason =
+            "Recognition batch was cancelled before the provider call started";
+          await markMediaRunFailed(
+            db,
+            runClaim,
+            cancellationReason,
+          ).catch(() => {});
+          await db.collection("media_assets").updateOne(
+            { _id: asset._id, owner: asset.owner, status: "processing" },
+            {
+              $set: { status: "staged", updatedAt: new Date() },
+              $unset: { safeError: "" },
+            },
+          );
+          if (profile.providerType === "google-cloud") {
+            // Publish the durable local cancellation first. If the process
+            // stops before this conservative reservation is released, budget
+            // reconciliation can safely finish it from the unstarted run.
+            await finishGcpBudget(db, budgetClaim, "released").catch(() => {});
+          }
+          return {
+            success: false,
+            cancelled: true,
+            reason: "batch_cancelled_before_provider",
+            runId,
+          };
         }
 
         try {

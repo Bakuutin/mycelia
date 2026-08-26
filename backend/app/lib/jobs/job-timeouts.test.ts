@@ -1,5 +1,9 @@
 import { expect } from "@std/expect";
-import { DEFAULT_JOB_TIMEOUT_MS, getJobTimeoutMs } from "./job-timeouts.ts";
+import {
+  DEFAULT_JOB_TIMEOUT_MS,
+  getJobTimeoutMs,
+  MEDIA_RECOGNITION_BATCH_TIMEOUT_MS,
+} from "./job-timeouts.ts";
 
 Deno.test("transcription timeout uses the snapshotted base and sequence allowance", () => {
   expect(getJobTimeoutMs("transcription", { batchSize: 8 })).toBe(
@@ -74,4 +78,11 @@ Deno.test("manual summarization jobs keep the flat timeout", () => {
 
 Deno.test("object density rebuild has a controlled one-hour timeout", () => {
   expect(getJobTimeoutMs("objectTimelineDensityRebuild", {})).toBe(3_600_000);
+});
+
+Deno.test("media recognition coordinator has a controlled 24-hour timeout", () => {
+  expect(getJobTimeoutMs("mediaRecognitionBatch", {})).toBe(
+    MEDIA_RECOGNITION_BATCH_TIMEOUT_MS,
+  );
+  expect(MEDIA_RECOGNITION_BATCH_TIMEOUT_MS).toBe(24 * 60 * 60 * 1000);
 });

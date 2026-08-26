@@ -180,6 +180,22 @@ export const WORKER_CATALOG: readonly CatalogDefinition[] = [
     },
   ),
   pipeline(
+    "mediaRecognitionBatch",
+    "Photo analysis batch",
+    "Coordinates one confirmed photo-analysis batch with durable aggregate progress.",
+    150,
+    {
+      progressKind: "media-recognition-batch",
+      capabilities: {
+        manualRun: false,
+        pause: true,
+        schedule: false,
+        concurrency: false,
+        batchSize: false,
+      },
+    },
+  ),
+  pipeline(
     "histRecalculation",
     "Timeline density",
     "Rebuilds stale or selected Timeline density ranges.",

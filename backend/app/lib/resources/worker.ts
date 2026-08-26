@@ -44,6 +44,14 @@ import { runExactCount } from "@/lib/jobs/exact-count.ts";
 import { deriveDiarizationErrorOutcomes } from "@/lib/jobs/diarization-error-outcome.ts";
 import { buildWorkerCatalog } from "@/lib/jobs/worker-catalog.ts";
 import {
+  assertCanRunWorkerFromJobs,
+  assertCanUseGenericQueueAction,
+  DOMAIN_MANAGED_MEDIA_JOB_TYPES,
+  globalQueueClearJobsQuery,
+  jobTypesForGlobalQueueClear,
+  manualJobSchemas,
+} from "@/lib/jobs/job-action-policy.ts";
+import {
   beginDashboardRefresh,
   completeDashboardRefresh,
   EXACT_BACKLOG_SNAPSHOT_ID,
@@ -195,6 +203,84 @@ const ListJobsSchema = z.object({
   providerProfileId: z.string().trim().min(1).max(200).optional(),
   campaignId: z.string().trim().min(1).max(200).optional(),
 });
+
+const DEFAULT_HIDDEN_JOB_TYPES = new Set(["mediaRecognition"]);
+const LOGICAL_CAMPAIGN_JOB_TYPES = [
+  "mediaFolderImport",
+  "mediaRecognitionBatch",
+] as const;
+
+export function defaultVisibleJobTypes(types: Iterable<string>): string[] {
+  return [...types].filter((type) => !DEFAULT_HIDDEN_JOB_TYPES.has(type));
+}
+
+export function logicalJobListPipeline(
+  candidateQuery: Record<string, unknown>,
+  visibleQuery: Record<string, unknown>,
+  limit: number,
+) {
+  return [
+    // Exclude internal worker types before grouping/limit so a large child-job
+    // history cannot crowd its logical batch out of the result window.
+    { $match: candidateQuery },
+    {
+      $set: {
+        _jobsLogicalId: {
+          $cond: [
+            { $in: ["$type", LOGICAL_CAMPAIGN_JOB_TYPES] },
+            {
+              $ifNull: [
+                "$data.campaignId",
+                {
+                  $ifNull: [
+                    "$progress.campaignId",
+                    {
+                      $ifNull: [
+                        "$result.campaignId",
+                        {
+                          $ifNull: [
+                            "$data.batchId",
+                            {
+                              $ifNull: [
+                                "$progress.batchId",
+                                {
+                                  $ifNull: [
+                                    "$result.batchId",
+                                    { $toString: "$_id" },
+                                  ],
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            { $toString: "$_id" },
+          ],
+        },
+      },
+    },
+    { $sort: { createdAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: { type: "$type", logicalId: "$_jobsLogicalId" },
+        job: { $first: "$$ROOT" },
+      },
+    },
+    { $replaceRoot: { newRoot: "$job" } },
+    { $project: { _jobsLogicalId: 0 } },
+    // Lifecycle and dismissal belong to the latest logical attempt. Applying
+    // them before grouping lets an old failed recovery attempt leak into the
+    // Failed view after the same campaign has already completed successfully.
+    { $match: visibleQuery },
+    { $sort: { createdAt: -1, _id: -1 } },
+    { $limit: limit },
+  ];
+}
 
 const CancelAllJobsSchema = z.object({
   action: z.literal("cancel_all"),
@@ -765,7 +851,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
   }
 
   private schemasAction() {
-    return jobRegistry.getJobSchemas();
+    return manualJobSchemas(jobRegistry.getJobSchemas());
   }
 
   private async get(input: z.infer<typeof GetJobSchema>, auth: Auth) {
@@ -957,6 +1043,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
   }
 
   private async enqueue(input: z.infer<typeof EnqueueJobSchema>, auth: Auth) {
+    assertCanRunWorkerFromJobs(input.data.type);
     // Access already checked by ResourceManager - escalate to server auth
     const serverAuth = await getServerAuth();
     const options: EnqueueJobOptions = {
@@ -988,6 +1075,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     }
 
     const jobType = jobDoc.type as string;
+    // Domain campaign state, billing fences, and recovery live outside BullMQ.
+    // Reject before queue removal or any Mongo cancellation write.
+    assertCanUseGenericQueueAction(jobType);
     const wasActive = jobDoc.state === "active";
     const queue = getQueue(jobType);
     const job = await queue.getJob(id);
@@ -1105,7 +1195,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     // Never force-remove active BullMQ jobs: their processors keep running
     // without a lock and later surface as stalled, even after committing side
     // effects. Drain only jobs that have not started; active work completes.
-    const types = jobRegistry.getJobTypes();
+    const types = jobTypesForGlobalQueueClear(jobRegistry.getJobTypes());
     for (const type of types) {
       const queue = getQueue(type);
       await queue.drain(true);
@@ -1114,7 +1204,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const result = await mongo({
       action: "updateMany",
       collection: "jobs",
-      query: { state: { $in: ["waiting", "delayed"] } },
+      query: globalQueueClearJobsQuery(),
       update: {
         $set: {
           state: "cancelled",
@@ -1129,6 +1219,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       success: true,
       cancelledCount: result.modifiedCount ?? 0,
       activeJobsContinued: true,
+      protectedJobTypes: [...DOMAIN_MANAGED_MEDIA_JOB_TYPES],
     };
   }
 
@@ -1202,6 +1293,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(input.workerType)) {
       throw new Error(`Unknown worker type: ${input.workerType}`);
     }
+    // Keep domain campaign state and its coordinator/children consistent.
+    // This guard runs before queue.drain and before the Mongo update.
+    assertCanUseGenericQueueAction(input.workerType);
 
     // Drain only work that has not started. Removing an active BullMQ job with
     // obliterate(force) invalidates its lock while its processor is still
@@ -1244,6 +1338,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(input.workerType)) {
       throw new Error(`Unknown worker type: ${input.workerType}`);
     }
+    assertCanRunWorkerFromJobs(input.workerType);
 
     // A manual retry must not create another batch of known provider errors.
     await assertJobServicesHealthy(input.workerType, true);
@@ -3191,6 +3286,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(workerType)) {
       throw new Error(`Unknown worker type: ${workerType}`);
     }
+    assertCanRunWorkerFromJobs(workerType);
 
     // Pause first so draining the queue cannot race with a worker taking the
     // next waiting job.
@@ -3393,6 +3489,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     });
     const job = jobs[0];
     if (!job) throw new Error(`Job ${input.id} not found`);
+    assertCanRunWorkerFromJobs(job.type);
     if (job.state !== "active") {
       throw new Error("Only an active job can be restarted");
     }
@@ -3469,6 +3566,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     if (!types.includes(input.workerType)) {
       throw new Error(`Unknown worker type: ${input.workerType}`);
     }
+    assertCanRunWorkerFromJobs(input.workerType);
     if (this.activeWorkerActions.has(input.workerType)) {
       throw new Error(
         `Another ${input.workerType} launch is already in progress`,
@@ -3535,7 +3633,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
 
     // Legacy types keep historical jobs of removed workers visible.
     const types = input.types ||
-      [...jobRegistry.getJobTypes(), ...LEGACY_JOB_TYPES];
+      [
+        ...defaultVisibleJobTypes(jobRegistry.getJobTypes()),
+        ...LEGACY_JOB_TYPES,
+      ];
     // "cancelled" belongs here: queue maintenance reaps jobs into that state
     // rather than failing them, and omitting it made those jobs vanish from the
     // list along with the only record of why they stopped.
@@ -3563,21 +3664,18 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       : {};
 
     const jobs = await mongo({
-      action: "find",
+      action: "aggregate",
       collection: "jobs",
-      query: {
+      pipeline: logicalJobListPipeline({
         type: { $in: types },
+        ...providerQuery,
+        ...campaignQuery,
+      }, {
         state: { $in: queryStatuses },
         dismissedAt: { $exists: false },
         archivedAt: { $exists: false },
         ...viewQuery,
-        ...providerQuery,
-        ...campaignQuery,
-      },
-      options: {
-        sort: { createdAt: -1 },
-        limit: totalLimit,
-      },
+      }, totalLimit),
     });
 
     // QueueEvents can be missed while the backend reloads, leaving a small
@@ -4006,7 +4104,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       query: {
         state: "failed",
         createdAt: { $gte: since },
-        ...(input.types?.length ? { type: { $in: input.types } } : {}),
+        ...(input.types?.length
+          ? { type: { $in: input.types } }
+          : { type: { $nin: [...DEFAULT_HIDDEN_JOB_TYPES] } }),
       },
       options: {
         sort: { createdAt: -1 },
@@ -4123,7 +4223,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
         state: catalogState,
         asOf: catalogAsOf ? new Date(catalogAsOf).toISOString() : undefined,
         workers: catalog,
-        schemas: registeredTypes.length ? jobRegistry.getJobSchemas() : {},
+        schemas: registeredTypes.length
+          ? manualJobSchemas(jobRegistry.getJobSchemas())
+          : {},
         ...(pythonCapabilitiesError
           ? { lastError: pythonCapabilitiesError }
           : {}),

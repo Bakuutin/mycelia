@@ -11,6 +11,7 @@ import {
   type JobListStatus,
   type JobsListView,
   resolveJobEventState,
+  shouldIncludeJobEvent,
   shouldRefreshJobsViews,
 } from "@/lib/jobListView";
 
@@ -159,8 +160,9 @@ export function useJobsListener(options: UseJobsListenerOptions = {}) {
 
       if (!jobData?.jobId) return;
 
-      // Skip updates for jobs that don't match our type filter
-      if (options.types?.length && !options.types.includes(jobData.jobType)) {
+      // Skip jobs outside the selected view, including internal photo children
+      // that are represented by their durable batch in the default Jobs UI.
+      if (!shouldIncludeJobEvent(jobData.jobType, options.types)) {
         return;
       }
 

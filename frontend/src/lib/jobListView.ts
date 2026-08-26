@@ -16,6 +16,21 @@ const DEFAULT_JOB_STATUSES: JobListStatus[] = [
   "cancelled",
 ];
 
+const DEFAULT_INTERNAL_JOB_TYPES = new Set(["mediaRecognition"]);
+
+/**
+ * Individual photo-recognition jobs are implementation details of one durable
+ * recognition batch. Keep their WebSocket traffic out of the default Jobs
+ * views; an explicit type filter remains available for diagnostics.
+ */
+export function shouldIncludeJobEvent(
+  jobType: string,
+  selectedTypes?: string[],
+): boolean {
+  if (selectedTypes?.length) return selectedTypes.includes(jobType);
+  return !DEFAULT_INTERNAL_JOB_TYPES.has(jobType);
+}
+
 export function buildJobsListRequest(
   view: JobsListView,
   types?: string[],

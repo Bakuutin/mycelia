@@ -43,6 +43,7 @@ import ConversationsPage from "./pages/ConversationsPage";
 import AudioPipelinePage from "./pages/AudioPipelinePage";
 import SummaryHistoryPage from "./pages/SummaryHistoryPage";
 import MediaPage from "./pages/MediaPage";
+import MediaAnalysisPage from "./pages/MediaAnalysisPage";
 import GoogleCloudSettingsPage from "./pages/settings/GoogleCloudSettingsPage";
 import SearchPage from "./pages/SearchPage";
 import KnowledgeSettingsPage from "./pages/settings/KnowledgeSettingsPage";
@@ -155,6 +156,10 @@ export const router = createBrowserRouter([
       {
         path: "media",
         element: <MediaPage />,
+      },
+      {
+        path: "media/analysis",
+        element: <MediaAnalysisPage />,
       },
       {
         path: "objects/create",

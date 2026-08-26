@@ -5,6 +5,7 @@ import {
   buildJobsListRequest,
   getJobsListView,
   resolveJobEventState,
+  shouldIncludeJobEvent,
   shouldRefreshJobsViews,
   withJobsListView,
 } from "./jobListView";
@@ -85,5 +86,16 @@ describe("jobs list views", () => {
     expect(resolveJobEventState("job.progress", "active", "waiting")).toBe(
       "active",
     );
+  });
+
+  it("hides photo child events by default but keeps explicit diagnostics", () => {
+    expect(shouldIncludeJobEvent("mediaRecognition")).toBe(false);
+    expect(shouldIncludeJobEvent("mediaRecognitionBatch")).toBe(true);
+    expect(
+      shouldIncludeJobEvent("mediaRecognition", ["mediaRecognition"]),
+    ).toBe(true);
+    expect(
+      shouldIncludeJobEvent("mediaRecognition", ["transcription"]),
+    ).toBe(false);
   });
 });

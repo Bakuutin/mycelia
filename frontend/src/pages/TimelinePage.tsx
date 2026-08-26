@@ -19,6 +19,7 @@ import { useTimelineTimeZone } from "@/hooks/useTimelineTimeZone";
 import { getTimelinePresetRange, type TimelinePreset } from "@/lib/timeZones";
 import { getAudioFocusRange } from "@/lib/audioTimeline";
 import { TimelineRecoveryStatus } from "@/components/timeline/TimelineRecoveryStatus";
+import { combineTimelineDataRanges } from "@/lib/timelineRangeBounds";
 
 const TimelinePage = () => {
   const location = useLocation();
@@ -130,22 +131,21 @@ const TimelinePage = () => {
 
   const handleZoomToFit = useCallback(async () => {
     try {
-      const result = await api.callResource("objects", {
-        action: "getTimeRange",
-      });
+      const results = await Promise.allSettled([
+        api.callResource("objects", { action: "getTimeRange" }),
+        api.callResource("media-library", { action: "timeRange" }),
+      ]);
+      const range = combineTimelineDataRanges(
+        results.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : []
+        ),
+      );
 
-      if (result.start && result.end) {
-        const earliest = result.start instanceof Date
-          ? result.start
-          : new Date(result.start);
-        const latest = result.end instanceof Date
-          ? result.end
-          : new Date(result.end);
-
-        const duration = latest.getTime() - earliest.getTime();
-        const padding = duration * 0.05;
-        const paddedStart = new Date(earliest.getTime() - padding);
-        const paddedEnd = new Date(latest.getTime() + padding);
+      if (range) {
+        const duration = range.end.getTime() - range.start.getTime();
+        const padding = Math.max(duration * 0.05, 5 * 60 * 1000);
+        const paddedStart = new Date(range.start.getTime() - padding);
+        const paddedEnd = new Date(range.end.getTime() + padding);
         zoomTo(paddedStart, paddedEnd);
       }
     } catch (err) {
