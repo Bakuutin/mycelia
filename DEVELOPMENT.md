@@ -227,15 +227,23 @@ For the 900-photo campaign, place originals under
 folder browser on `/media`; `.` remains the default recursive root. Local folder
 sync does not call Google. Its single normal `mediaFolderImport` job loops over
 durable 25-file commits and publishes checked/total progress, speed and ETA to
-Media and Jobs. On `/media/analysis`, a batch preview can select an explicit set
-or every eligible asset matching the current server-side filters, not only the
-visible gallery page. It fixes visual-understanding + OCR and shows the
-authoritative batch ceiling before consent. With a Google profile this means
-Vertex visual understanding/embedding plus strict-EU Vision OCR; a self-hosted
-profile sends the same feature request only to its configured endpoint. Photos
-with local time/GPS are queryable through indexed Timeline/Map projections in
-every recognition state; missing values are kept in Unplaced and can be edited
-without a provider call.
+Media and Jobs. Restart/recovery attempts remain durable history, but Jobs
+groups the same `campaignId` into one visible campaign row. On
+`/media/analysis`, a batch preview can select an explicit set or every eligible
+asset matching the current server-side filters, not only the visible gallery
+page. It fixes visual-understanding + OCR and shows the authoritative batch
+ceiling before consent. With a Google profile this means Vertex visual
+understanding/embedding plus strict-EU Vision OCR; a self-hosted profile sends
+the same feature request only to its configured endpoint. Photos with local
+time/GPS are queryable through indexed Timeline/Map projections in every
+recognition state; missing values are kept in Unplaced and can be edited without
+a provider call. Jobs presents the durable recognition campaign as one
+`mediaRecognitionBatch` row with aggregate done/total and state counters;
+per-photo `mediaRecognition` jobs are hidden from the normal list and retained
+only for explicit diagnostics. Jobs launch/restart actions follow the worker
+catalog's `manualRun` capability. Generic cancel/clear actions leave folder
+imports, recognition batches, and paid per-photo work untouched; manage those
+campaigns on `/media` and `/media/analysis` instead.
 
 #### Objects browse and Timeline density rollout
 

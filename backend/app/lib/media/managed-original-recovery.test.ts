@@ -456,6 +456,7 @@ Deno.test(
   withFixtures(["Mongo"], async ({ db }) => {
     const importId = new ObjectId();
     const assetId = new ObjectId();
+    const recognitionBatchId = new ObjectId().toString();
     const jobId = confirmedMediaImportJobId(importId, assetId);
     await db.collection("media_assets").insertOne({
       _id: assetId,
@@ -488,6 +489,8 @@ Deno.test(
         return Promise.resolve({ id: new ObjectId().toString() });
       },
       jobId,
+      true,
+      recognitionBatchId,
     );
     assertEquals(result, jobId);
     assertEquals(enqueueCalls, 0);
@@ -526,6 +529,43 @@ Deno.test(
       asset?.safeError,
       "Recognition was not queued because media recognition or its profile is now disabled",
     );
+  }),
+);
+
+Deno.test(
+  "batch confirmation forwards its durable batch link to the child job",
+  withFixtures(["Mongo"], async ({ db }) => {
+    const assetId = new ObjectId();
+    const recognitionBatchId = new ObjectId().toString();
+    const expectedJobId = new ObjectId().toString();
+    let receivedBatchId: string | undefined;
+
+    const result = await enqueueConfirmedAsset(
+      db,
+      assetId,
+      selfHostedProfile,
+      ["visual-understanding"],
+      "batch-linked-consent",
+      new Auth({ principal: "batch-linked-owner" }),
+      (
+        _assetId,
+        _profile,
+        _tasks,
+        _consent,
+        _auth,
+        _jobId,
+        childBatchId,
+      ) => {
+        receivedBatchId = childBatchId;
+        return Promise.resolve({ id: expectedJobId });
+      },
+      undefined,
+      true,
+      recognitionBatchId,
+    );
+
+    assertEquals(result, expectedJobId);
+    assertEquals(receivedBatchId, recognitionBatchId);
   }),
 );
 

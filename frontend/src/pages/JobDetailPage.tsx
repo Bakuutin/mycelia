@@ -50,6 +50,11 @@ import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
 import { buildFreshDiarizationGeneration } from "@/lib/diarizationRerun";
 import { toast } from "sonner";
 import { useActionDialog } from "@/components/ActionDialogProvider";
+import {
+  canCancelJobFromJobs,
+  canRerunJobFromJobs,
+  managedWorkerDestination,
+} from "@/lib/jobFilters";
 
 interface TranscriptionDoc {
   _id: string;
@@ -87,6 +92,15 @@ interface ConversationChunk {
 type JobRelatedLink = { to: string; label: string };
 
 function getJobRelatedLinks(jobType: string): JobRelatedLink[] {
+  if (jobType === "mediaFolderImport") {
+    return [{ to: "/media", label: "Photo library" }];
+  }
+  if (jobType === "mediaRecognitionBatch" || jobType === "mediaRecognition") {
+    return [
+      { to: "/media/analysis", label: "Photo analysis" },
+      { to: "/media", label: "Photo library" },
+    ];
+  }
   if (jobType === "diarization") {
     return [
       { to: "/audio/pipeline", label: "Audio Pipeline" },
@@ -928,8 +942,13 @@ export default function JobDetailPage() {
     );
   }
 
-  const jobListHref = `/jobs?type=${encodeURIComponent(job.type)}`;
+  const jobListHref = job.type === "mediaRecognition"
+    ? "/jobs?type=mediaRecognition&internal=1"
+    : `/jobs?type=${encodeURIComponent(job.type)}`;
   const relatedLinks = getJobRelatedLinks(job.type);
+  const managedMediaDestination = canRerunJobFromJobs(job.type)
+    ? null
+    : managedWorkerDestination(job.type);
   const resultErrorCount = getResultErrorCount(job.result);
   const allDiarizationErrorsRecovered = job.type === "diarization" &&
     resultErrorCount > 0 &&
@@ -966,7 +985,8 @@ export default function JobDetailPage() {
             />
             Refresh state
           </Button>
-          {!["active", "waiting", "delayed"].includes(job.state) && (
+          {managedMediaDestination == null &&
+            !["active", "waiting", "delayed"].includes(job.state) && (
             <Button
               variant="default"
               size="sm"
@@ -982,7 +1002,8 @@ export default function JobDetailPage() {
                 : "Run again"}
             </Button>
           )}
-          {["active", "waiting", "delayed"].includes(job.state) && (
+          {canCancelJobFromJobs(job.type) &&
+            ["active", "waiting", "delayed"].includes(job.state) && (
             <Button
               variant="destructive"
               size="sm"
@@ -991,6 +1012,17 @@ export default function JobDetailPage() {
             >
               <Ban className="h-4 w-4 mr-2" />
               Cancel Job
+            </Button>
+          )}
+          {managedMediaDestination && (
+            <Button asChild variant="default" size="sm">
+              <Link to={managedMediaDestination.to}>
+                {job.type === "mediaRecognitionBatch"
+                  ? "Manage photo batch"
+                  : job.type === "mediaFolderImport"
+                  ? "Open media library"
+                  : "Open photo analysis"}
+              </Link>
             </Button>
           )}
         </div>

@@ -208,3 +208,177 @@ Deno.test(
     expect(result[0].routingContext.providerProfileId).toBe("legacy-gpu");
   }),
 );
+
+Deno.test(
+  "jobs list hides photo item jobs and groups logical media campaigns before the limit",
+  withFixtures(["Admin", "Mongo", "JobsResource"], async (
+    admin: Auth,
+    mongo,
+  ) => {
+    const now = Date.now();
+    const batchId = new ObjectId().toString();
+    const campaignId = new ObjectId().toString();
+    const olderBatchJobId = new ObjectId();
+    const latestBatchJobId = new ObjectId();
+    const latestFolderJobId = new ObjectId();
+    await mongo.db.collection("jobs").insertMany([
+      ...Array.from({ length: 501 }, (_, index) => ({
+        _id: new ObjectId(),
+        type: "mediaRecognition",
+        state: "completed",
+        data: { assetId: new ObjectId().toString() },
+        createdAt: new Date(now - index),
+        finishedAt: new Date(now - index),
+      })),
+      {
+        _id: latestBatchJobId,
+        type: "mediaRecognitionBatch",
+        state: "completed",
+        data: { batchId },
+        result: { batchId, processed: 9 },
+        createdAt: new Date(now - 2_000),
+        finishedAt: new Date(now - 1_900),
+      },
+      {
+        _id: olderBatchJobId,
+        type: "mediaRecognitionBatch",
+        state: "completed",
+        progress: { batchId, processed: 4, total: 10 },
+        createdAt: new Date(now - 3_000),
+        finishedAt: new Date(now - 2_900),
+      },
+      {
+        _id: latestFolderJobId,
+        type: "mediaFolderImport",
+        state: "completed",
+        result: { campaignId, processed: 20 },
+        createdAt: new Date(now - 4_000),
+        finishedAt: new Date(now - 3_900),
+      },
+      {
+        _id: new ObjectId(),
+        type: "mediaFolderImport",
+        state: "completed",
+        data: { campaignId },
+        createdAt: new Date(now - 5_000),
+        finishedAt: new Date(now - 4_900),
+      },
+    ]);
+
+    const jobs = admin.getResource("jobs");
+    const visible = await jobs({
+      action: "list",
+      statuses: ["completed"],
+      limit: 10,
+    });
+    expect(visible.map((job: any) => job.type).sort()).toEqual([
+      "mediaFolderImport",
+      "mediaRecognitionBatch",
+    ]);
+    expect(
+      visible.find((job: any) => job.type === "mediaRecognitionBatch")?.id,
+    ).toBe(latestBatchJobId.toString());
+    expect(
+      visible.find((job: any) => job.type === "mediaFolderImport")?.id,
+    ).toBe(latestFolderJobId.toString());
+
+    const internal = await jobs({
+      action: "list",
+      types: ["mediaRecognition"],
+      statuses: ["completed"],
+      limit: 3,
+    });
+    expect(internal).toHaveLength(3);
+    expect(internal.every((job: any) => job.type === "mediaRecognition"))
+      .toBe(true);
+  }),
+);
+
+Deno.test(
+  "jobs error stats hide photo item failures unless explicitly requested",
+  withFixtures(["Admin", "Mongo", "JobsResource"], async (
+    admin: Auth,
+    mongo,
+  ) => {
+    await mongo.db.collection("jobs").insertMany([
+      {
+        _id: new ObjectId(),
+        type: "mediaRecognition",
+        state: "failed",
+        failedReason: "internal photo failure",
+        createdAt: new Date(),
+      },
+      {
+        _id: new ObjectId(),
+        type: "mediaRecognitionBatch",
+        state: "failed",
+        failedReason: "batch failure",
+        createdAt: new Date(),
+      },
+    ]);
+
+    const jobs = admin.getResource("jobs");
+    const visible = await jobs({ action: "error_stats", sinceDays: 1 });
+    expect(visible.failures.map((row: any) => row.type)).toEqual([
+      "mediaRecognitionBatch",
+    ]);
+
+    const internal = await jobs({
+      action: "error_stats",
+      sinceDays: 1,
+      types: ["mediaRecognition"],
+    });
+    expect(internal.failures.map((row: any) => row.type)).toEqual([
+      "mediaRecognition",
+    ]);
+  }),
+);
+
+Deno.test(
+  "jobs lifecycle filters use the latest logical campaign attempt",
+  withFixtures(["Admin", "Mongo", "JobsResource"], async (
+    admin: Auth,
+    mongo,
+  ) => {
+    const campaignId = new ObjectId().toString();
+    const failedId = new ObjectId();
+    const completedId = new ObjectId();
+    const now = Date.now();
+    await mongo.db.collection("jobs").insertMany([
+      {
+        _id: failedId,
+        type: "mediaFolderImport",
+        state: "failed",
+        data: { campaignId },
+        failedReason: "interrupted attempt",
+        createdAt: new Date(now - 1_000),
+      },
+      {
+        _id: completedId,
+        type: "mediaFolderImport",
+        state: "completed",
+        data: { campaignId },
+        result: { campaignId, processed: 25 },
+        createdAt: new Date(now),
+      },
+    ]);
+
+    const jobs = admin.getResource("jobs");
+    const failed = await jobs({
+      action: "list",
+      types: ["mediaFolderImport"],
+      statuses: ["failed"],
+      limit: 10,
+    });
+    expect(failed).toEqual([]);
+
+    const completed = await jobs({
+      action: "list",
+      types: ["mediaFolderImport"],
+      statuses: ["completed"],
+      limit: 10,
+    });
+    expect(completed).toHaveLength(1);
+    expect(completed[0].id).toBe(completedId.toString());
+  }),
+);

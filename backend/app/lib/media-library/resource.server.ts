@@ -6,7 +6,8 @@ import { Auth, type Auth as AuthType } from "@/lib/auth/core.server.ts";
 import type { Resource } from "@/lib/auth/resources.ts";
 import { getRootDB } from "@/lib/mongo/core.server.ts";
 import { getServerConfig } from "@/lib/config/serverConfig.server.ts";
-import { enqueueJob } from "@/lib/jobs/queue.ts";
+import { enqueueJob, getQueue } from "@/lib/jobs/queue.ts";
+import { publishJobUpdate } from "@/lib/events/publisher.ts";
 import {
   createWebpPreview,
   inspectLocalMedia,
@@ -43,6 +44,8 @@ const RESERVATION_PREPARE_TTL_MS = 15 * 60 * 1000;
 const RETRY_RESERVATION_TTL_MS = 5 * 60 * 1000;
 const STALE_ITEM_MS = 20 * 60 * 1000;
 const FOLDER_STALE_ITEM_MS = 5 * 60 * 1000;
+const COORDINATOR_ENQUEUE_CLAIM_MS = 60 * 1000;
+const RUNNABLE_COORDINATOR_STATES = ["waiting", "active", "delayed"];
 
 const startFolderScanSchema = z.object({
   action: z.literal("startFolderScan"),
@@ -303,6 +306,403 @@ async function enqueueRecognitionWorker(
   return String(job.id);
 }
 
+type EnqueueRecognitionCoordinator = (
+  batchId: ObjectId,
+  auth: AuthType,
+) => Promise<string>;
+
+async function findRunnableRecognitionCoordinator(
+  db: Db,
+  batchId: ObjectId,
+) {
+  return await db.collection<any>("jobs").findOne({
+    type: "mediaRecognitionBatch",
+    "data.batchId": String(batchId),
+    state: { $in: RUNNABLE_COORDINATOR_STATES },
+  }, { sort: { createdAt: -1, _id: -1 } });
+}
+
+async function persistRunnableRecognitionCoordinator(
+  db: Db,
+  batchId: ObjectId,
+  jobId: ObjectId,
+  clearCoordinatorError = true,
+) {
+  await db.collection("media_recognition_batches").updateOne(
+    { _id: batchId },
+    {
+      $set: { coordinatorJobId: jobId, updatedAt: new Date() },
+      $unset: {
+        coordinatorEnqueueClaim: "",
+        ...(clearCoordinatorError ? { safeError: "" } : {}),
+      },
+    },
+  );
+}
+
+/**
+ * Reuse a live coordinator or serialize creation of its replacement. The
+ * durable claim closes the gap between the Mongo job record and persisting the
+ * batch pointer, so concurrent confirmations cannot create sibling workers.
+ */
+export async function ensureRecognitionCoordinator(
+  db: Db,
+  batchId: ObjectId,
+  auth: AuthType,
+  enqueue: EnqueueRecognitionCoordinator = enqueueRecognitionWorker,
+): Promise<string | undefined> {
+  const existing = await findRunnableRecognitionCoordinator(db, batchId);
+  if (existing?._id) {
+    await persistRunnableRecognitionCoordinator(db, batchId, existing._id);
+    return String(existing._id);
+  }
+
+  const now = new Date();
+  const claimId = randomUUID();
+  const claimed = await db.collection<any>("media_recognition_batches")
+    .findOneAndUpdate(
+      {
+        _id: batchId,
+        status: { $in: ["queued", "running"] },
+        $or: [
+          { coordinatorEnqueueClaim: { $exists: false } },
+          { "coordinatorEnqueueClaim.expiresAt": { $lte: now } },
+        ],
+      },
+      {
+        $set: {
+          coordinatorEnqueueClaim: {
+            id: claimId,
+            expiresAt: new Date(now.getTime() + COORDINATOR_ENQUEUE_CLAIM_MS),
+          },
+          updatedAt: now,
+        },
+      },
+      { returnDocument: "after" },
+    );
+
+  if (!claimed) {
+    // A concurrent confirmer or the watchdog owns the enqueue lease. Give it
+    // a short window to commit the canonical job record, but never enqueue a
+    // speculative sibling if it is still in flight.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      const concurrent = await findRunnableRecognitionCoordinator(db, batchId);
+      if (concurrent?._id) {
+        await persistRunnableRecognitionCoordinator(
+          db,
+          batchId,
+          concurrent._id,
+        );
+        return String(concurrent._id);
+      }
+    }
+    return undefined;
+  }
+
+  try {
+    const jobId = await enqueue(batchId, auth);
+    if (!ObjectId.isValid(jobId)) {
+      throw new Error("Recognition coordinator returned an invalid job id");
+    }
+    await db.collection("media_recognition_batches").updateOne(
+      { _id: batchId, "coordinatorEnqueueClaim.id": claimId },
+      {
+        $set: {
+          coordinatorJobId: new ObjectId(jobId),
+          updatedAt: new Date(),
+        },
+        $unset: { coordinatorEnqueueClaim: "", safeError: "" },
+      },
+    );
+    return jobId;
+  } catch (error) {
+    await db.collection("media_recognition_batches").updateOne(
+      { _id: batchId, "coordinatorEnqueueClaim.id": claimId },
+      {
+        $set: {
+          safeError: `Coordinator will resume automatically: ${
+            safeError(error)
+          }`,
+          updatedAt: new Date(),
+        },
+        $unset: { coordinatorEnqueueClaim: "" },
+      },
+    );
+    throw error;
+  }
+}
+
+type RecognitionQueueCancellation =
+  | "cancelled"
+  | "active"
+  | "settled"
+  | "unavailable";
+
+type CancelRecognitionQueueJob = (
+  jobId: string,
+  persistedJob?: Record<string, any> | null,
+  beforeRemove?: () => Promise<void>,
+) => Promise<RecognitionQueueCancellation>;
+
+const REMOVABLE_RECOGNITION_QUEUE_STATES = new Set([
+  "waiting",
+  "delayed",
+  "prioritized",
+  "paused",
+  "waiting-children",
+  "unknown",
+]);
+
+async function cancelRecognitionQueueJob(
+  jobId: string,
+  persistedJob?: Record<string, any> | null,
+  beforeRemove?: () => Promise<void>,
+): Promise<RecognitionQueueCancellation> {
+  if (persistedJob?.state === "active") return "active";
+  if (["completed", "failed"].includes(String(persistedJob?.state))) {
+    return "settled";
+  }
+
+  try {
+    const queueJob = await getQueue("mediaRecognition").getJob(jobId);
+    if (!queueJob) {
+      await beforeRemove?.();
+      return "cancelled";
+    }
+    const state = await queueJob.getState();
+    if (state === "active") return "active";
+    if (["completed", "failed"].includes(state)) return "settled";
+    if (!REMOVABLE_RECOGNITION_QUEUE_STATES.has(state)) {
+      return "unavailable";
+    }
+    try {
+      // Persist the cancellation before removing BullMQ state. If the process
+      // stops between the two writes, maintenance sees a cancelled Mongo row
+      // and cannot resurrect a provider call that the user already stopped.
+      await beforeRemove?.();
+      await queueJob.remove();
+      return "cancelled";
+    } catch {
+      const current = await queueJob.getState().catch(() => "unknown");
+      if (current === "active") return "active";
+      if (["completed", "failed"].includes(current)) return "settled";
+      return "unavailable";
+    }
+  } catch {
+    // A transient Redis failure must not guess that a provider call is idle.
+    // The long-lived coordinator will retry cancellation on its next poll.
+    return "unavailable";
+  }
+}
+
+const MEDIA_BATCH_CHILD_CANCEL_REASON = "media_recognition_batch_cancelled";
+
+async function stageRecognitionAssetAfterCancellation(
+  db: Db,
+  batch: any,
+  item: any,
+): Promise<boolean> {
+  const updated = await db.collection("media_assets").updateOne(
+    {
+      _id: item.assetId,
+      owner: batch.owner,
+      status: "queued",
+      currentRunId: { $exists: false },
+    },
+    {
+      $set: { status: "staged", updatedAt: new Date() },
+      $unset: { safeError: "" },
+    },
+  );
+  if (updated.modifiedCount === 1) return true;
+
+  const asset = await db.collection<any>("media_assets").findOne(
+    { _id: item.assetId, owner: batch.owner },
+    { projection: { status: 1, currentRunId: 1 } },
+  );
+  // Missing assets and an already-staged asset are both terminal-safe. A
+  // processing/ready/failed asset must instead be reconciled from its worker.
+  return !asset ||
+    (asset.status === "staged" && !asset.currentRunId);
+}
+
+async function markRecognitionChildCancellationIntent(
+  db: Db,
+  batch: any,
+  item: any,
+  jobId: ObjectId,
+  claimId: string,
+): Promise<boolean> {
+  const now = new Date();
+  const result = await db.collection("jobs").updateOne(
+    {
+      _id: jobId,
+      type: "mediaRecognition",
+      $or: [
+        { state: { $in: ["waiting", "delayed", "paused", "prioritized"] } },
+        {
+          state: "cancelled",
+          cancelReason: MEDIA_BATCH_CHILD_CANCEL_REASON,
+        },
+      ],
+    },
+    {
+      $set: {
+        state: "cancelled",
+        cancelReason: MEDIA_BATCH_CHILD_CANCEL_REASON,
+        finishedAt: now,
+        updatedAt: now,
+        mediaBatchCancellation: {
+          id: claimId,
+          batchId: String(batch._id),
+          itemId: String(item._id),
+          requestedAt: batch.cancelRequestedAt ?? now,
+        },
+      },
+    },
+  );
+  return result.modifiedCount === 1;
+}
+
+async function restoreRacedActiveRecognitionChild(
+  db: Db,
+  jobId: ObjectId,
+  claimId: string,
+) {
+  await db.collection("jobs").updateOne(
+    {
+      _id: jobId,
+      type: "mediaRecognition",
+      state: "cancelled",
+      "mediaBatchCancellation.id": claimId,
+    },
+    {
+      $set: { state: "active", updatedAt: new Date() },
+      $unset: {
+        cancelReason: "",
+        finishedAt: "",
+        mediaBatchCancellation: "",
+      },
+    },
+  );
+}
+
+/** Cancel queue-resident photo jobs without interrupting active providers. */
+export async function cancelQueuedRecognitionChildren(
+  db: Db,
+  batch: any,
+  cancelQueueJob: CancelRecognitionQueueJob = cancelRecognitionQueueJob,
+  publishUpdate: typeof publishJobUpdate = publishJobUpdate,
+  hooks: {
+    afterAssetReset?: (item: any) => Promise<void>;
+  } = {},
+) {
+  const items = await db.collection<any>("media_recognition_batch_items").find(
+    { batchId: batch._id, state: { $in: ["queued", "claiming"] } },
+  ).limit(RECOGNITION_WINDOW * 2).toArray();
+  let cancelled = 0;
+  let active = 0;
+
+  for (const item of items) {
+    const jobId = item.jobId && ObjectId.isValid(item.jobId)
+      ? new ObjectId(item.jobId)
+      : undefined;
+    const persistedJob = jobId
+      ? await db.collection<any>("jobs").findOne({
+        _id: jobId,
+        type: "mediaRecognition",
+      })
+      : null;
+    const cancellationClaimId = randomUUID();
+    let cancellationIntentPersisted = false;
+    const outcome = jobId
+      ? await cancelQueueJob(
+        String(jobId),
+        persistedJob,
+        async () => {
+          cancellationIntentPersisted =
+            await markRecognitionChildCancellationIntent(
+              db,
+              batch,
+              item,
+              jobId,
+              cancellationClaimId,
+            );
+        },
+      )
+      : "cancelled";
+    if (outcome === "active") {
+      active += 1;
+      if (jobId && cancellationIntentPersisted) {
+        await restoreRacedActiveRecognitionChild(
+          db,
+          jobId,
+          cancellationClaimId,
+        );
+      }
+      if (item.state === "claiming") {
+        await db.collection("media_recognition_batch_items").updateOne(
+          { _id: item._id, batchId: batch._id, state: "claiming" },
+          {
+            $set: { state: "processing", updatedAt: new Date() },
+            $unset: { claimedAt: "" },
+          },
+        );
+      }
+      continue;
+    }
+    if (outcome === "unavailable") continue;
+    if (outcome === "settled" && item.state === "claiming") {
+      await db.collection("media_recognition_batch_items").updateOne(
+        { _id: item._id, batchId: batch._id, state: "claiming" },
+        {
+          $set: { state: "queued", updatedAt: new Date() },
+          $unset: { claimedAt: "" },
+        },
+      );
+    }
+
+    // Asset recovery precedes the terminal item transition. A crash after this
+    // write leaves an open item for the next poll; it can never leave a
+    // terminal batch item pointing at a permanently queued asset.
+    const assetSafeToCancel = await stageRecognitionAssetAfterCancellation(
+      db,
+      batch,
+      item,
+    );
+    if (!assetSafeToCancel) continue;
+    await hooks.afterAssetReset?.(item);
+
+    const cancelledAt = new Date();
+    const itemResult = await db.collection("media_recognition_batch_items")
+      .updateOne(
+        {
+          _id: item._id,
+          batchId: batch._id,
+          state: { $in: ["queued", "claiming"] },
+        },
+        {
+          $set: { state: "cancelled", updatedAt: cancelledAt },
+          $unset: { claimedAt: "", safeError: "" },
+        },
+      );
+    if (itemResult.modifiedCount !== 1) continue;
+
+    cancelled += 1;
+    if (jobId && cancellationIntentPersisted) {
+      await publishUpdate(
+        String(jobId),
+        "mediaRecognition",
+        "job.state",
+        { state: "cancelled", finishedOn: cancelledAt.getTime() },
+      ).catch(() => undefined);
+    }
+  }
+
+  return { cancelled, active };
+}
+
 async function stateCounts(
   db: Db,
   collection: string,
@@ -466,6 +866,70 @@ function publicRecognitionCounts(counts: Record<string, number>) {
     skipped: counts.skipped ?? 0,
     failed: (counts.failed ?? 0) + (counts.budget_blocked ?? 0),
     cancelled: counts.cancelled ?? 0,
+  };
+}
+
+export function recognitionBatchProgress(
+  status: string,
+  rawCounts: Record<string, number>,
+  batchId?: unknown,
+) {
+  const counts = publicRecognitionCounts(rawCounts);
+  const processed = counts.ready + counts.skipped + counts.failed +
+    counts.cancelled;
+  const total = Math.max(counts.total, processed);
+  const remaining = Math.max(0, total - processed);
+  const percent = total > 0 ? processed / total * 100 : 100;
+  const stage = status === "idle"
+    ? "idle"
+    : status === "completed"
+    ? "completed"
+    : status === "completed_with_errors"
+    ? "completed_with_errors"
+    : status === "cancelled"
+    ? "cancelled"
+    : status === "paused"
+    ? "paused"
+    : counts.processing > 0
+    ? "processing"
+    : counts.queued > 0
+    ? "queued"
+    : "preparing";
+
+  return {
+    stage,
+    status,
+    processed,
+    total,
+    remaining,
+    percent,
+    pending: counts.pending,
+    queued: counts.queued,
+    processing: counts.processing,
+    ready: counts.ready,
+    skipped: counts.skipped,
+    failed: counts.failed,
+    cancelled: counts.cancelled,
+    ...(batchId ? { batchId: String(batchId) } : {}),
+  };
+}
+
+function recognitionWorkerResult(
+  batch: any | null,
+  processed: number,
+  hasMore: boolean,
+) {
+  const status = batch ? String(batch.status) : "idle";
+  const counts = batch?.counts && typeof batch.counts === "object"
+    ? batch.counts as Record<string, number>
+    : {};
+  return {
+    success: true,
+    ...(batch ? { batchId: String(batch._id) } : { idle: true }),
+    processed,
+    hasMore,
+    counts,
+    progress: recognitionBatchProgress(status, counts, batch?._id),
   };
 }
 
@@ -1397,7 +1861,15 @@ export async function reconcileRecognitionBatch(
       jobIds.length
         ? db.collection("jobs").find(
           { _id: { $in: jobIds } },
-          { projection: { state: 1, failedReason: 1 } },
+          {
+            projection: {
+              state: 1,
+              failedReason: 1,
+              cancelReason: 1,
+              mediaBatchCancellation: 1,
+              result: 1,
+            },
+          },
         ).toArray()
         : [],
       db.collection("media_assets").find(
@@ -1424,7 +1896,18 @@ export async function reconcileRecognitionBatch(
         error = asset?.safeError;
       } else if (job?.state === "active") state = "processing";
       else if (["waiting", "delayed"].includes(job?.state)) state = "queued";
-      else if (["failed", "cancelled"].includes(job?.state)) {
+      else if (job?.state === "completed" && job?.result?.cancelled === true) {
+        state = "cancelled";
+      } else if (
+        job?.state === "cancelled" && batch.cancelRequestedAt &&
+        job?.cancelReason === MEDIA_BATCH_CHILD_CANCEL_REASON &&
+        job?.mediaBatchCancellation
+      ) {
+        // Queue removal is intentionally crash-resumable. Until the cancel
+        // coordinator has reset the asset and closed the item, keep it open
+        // instead of converting an in-flight cancellation into a failure.
+        state = item.state;
+      } else if (["failed", "cancelled"].includes(job?.state)) {
         state = "failed";
         error = safeError(job?.failedReason ?? "Recognition job failed");
       } else if (job?.state === "completed") {
@@ -1434,6 +1917,24 @@ export async function reconcileRecognitionBatch(
             asset?.safeError ?? "Recognition completed without a ready asset",
           )
           : undefined;
+      }
+      if (
+        ["failed", "cancelled"].includes(state) &&
+        asset?.status === "queued" && !asset.currentRunId
+      ) {
+        // The queue can become active after cancellation intent is persisted,
+        // then fail closed before the provider starts. Re-stage its untouched
+        // asset before closing the item so a crash or event-ordering race can
+        // never leave terminal batch work pointing at `queued` forever.
+        const assetSafeToClose = await stageRecognitionAssetAfterCancellation(
+          db,
+          batch,
+          item,
+        );
+        if (!assetSafeToClose) {
+          state = item.state;
+          error = undefined;
+        }
       }
       if (state !== item.state || error) {
         writes.push({
@@ -1914,7 +2415,7 @@ async function confirmRecognitionBatch(
       );
     if (["queued", "running"].includes(resumed.status)) {
       try {
-        await enqueueRecognitionWorker(resumed._id, auth);
+        await ensureRecognitionCoordinator(db, resumed._id, auth);
       } catch {
         // The periodic coordinator is the durable recovery path.
       }
@@ -2048,27 +2549,13 @@ async function confirmRecognitionBatch(
   let coordinatorJobId: string | undefined;
   if (exactRefs.length > 0) {
     try {
-      coordinatorJobId = await enqueueRecognitionWorker(batchId, auth);
-      await db.collection("media_recognition_batches").updateOne(
-        { _id: batchId },
-        {
-          $set: {
-            coordinatorJobId: new ObjectId(coordinatorJobId),
-            updatedAt: new Date(),
-          },
-        },
+      coordinatorJobId = await ensureRecognitionCoordinator(
+        db,
+        batchId,
+        auth,
       );
-    } catch (error) {
-      await db.collection("media_recognition_batches").updateOne(
-        { _id: batchId },
-        {
-          $set: {
-            safeError: `Coordinator will resume automatically: ${
-              safeError(error)
-            }`,
-          },
-        },
-      );
+    } catch {
+      // The periodic coordinator is the durable recovery path.
     }
   } else {
     await db.collection("media_recognition_batches").updateOne(
@@ -2088,22 +2575,31 @@ async function confirmRecognitionBatch(
   };
 }
 
-async function processRecognitionBatch(
+export async function processRecognitionBatch(
   db: Db,
   requestedBatchId?: ObjectId,
+  currentCoordinatorJobId?: ObjectId,
 ): Promise<Record<string, unknown>> {
   const batches = db.collection<any>("media_recognition_batches");
   let batch = requestedBatchId
     ? await batches.findOne({
       _id: requestedBatchId,
-      status: { $in: ["queued", "running"] },
     })
     : await batches.findOne(
       { status: { $in: ["queued", "running"] } },
       { sort: { updatedAt: 1 } },
     );
   if (!batch) {
-    return { success: true, idle: true, processed: 0, hasMore: false };
+    return recognitionWorkerResult(null, 0, false);
+  }
+  if (currentCoordinatorJobId) {
+    await persistRunnableRecognitionCoordinator(
+      db,
+      batch._id,
+      currentCoordinatorJobId,
+      false,
+    );
+    batch = { ...batch, coordinatorJobId: currentCoordinatorJobId };
   }
   if (batch.materializationPending && !batch.materializedAt) {
     const durableRefs = Array.isArray(batch.materializationAssetRefs)
@@ -2121,12 +2617,7 @@ async function processRecognitionBatch(
           },
         },
       );
-      return {
-        success: true,
-        batchId: String(batch._id),
-        processed: 0,
-        hasMore: false,
-      };
+      return recognitionWorkerResult({ ...batch, status: "paused" }, 0, false);
     }
     batch = await materializeRecognitionBatch(
       db,
@@ -2139,27 +2630,31 @@ async function processRecognitionBatch(
   if (
     ["completed", "completed_with_errors", "cancelled"].includes(batch.status)
   ) {
-    return {
-      success: true,
-      batchId: String(batch._id),
-      processed: 0,
-      hasMore: false,
-    };
+    return recognitionWorkerResult(batch, 0, false);
   }
   await recoverStaleRecognitionClaims(db, batch);
   const items = db.collection<any>("media_recognition_batch_items");
   if (batch.cancelRequestedAt) {
+    await cancelQueuedRecognitionChildren(db, batch);
     const result = await items.updateMany(
-      { batchId: batch._id, state: "pending" },
+      {
+        batchId: batch._id,
+        $or: [
+          { state: "pending" },
+          { state: "claiming", jobId: { $exists: false } },
+        ],
+      },
       { $set: { state: "cancelled", updatedAt: new Date() } },
     );
-    await reconcileRecognitionBatch(db, batch);
-    return {
-      success: true,
-      batchId: String(batch._id),
-      processed: result.modifiedCount,
-      hasMore: false,
-    };
+    const reconciled = await reconcileRecognitionBatch(db, batch);
+    const hasMore = Number(reconciled.counts?.pending ?? 0) > 0 ||
+      Number(reconciled.counts?.queued ?? 0) > 0 ||
+      Number(reconciled.counts?.processing ?? 0) > 0;
+    return recognitionWorkerResult(
+      reconciled,
+      result.modifiedCount,
+      hasMore,
+    );
   }
   const active = await items.countDocuments({
     batchId: batch._id,
@@ -2253,6 +2748,41 @@ async function processRecognitionBatch(
       );
       continue;
     }
+    const [latestBatch, stillClaimed] = await Promise.all([
+      batches.findOne(
+        { _id: batch._id },
+        { projection: { cancelRequestedAt: 1 } },
+      ),
+      items.findOne(
+        { _id: item._id, state: "claiming", jobId },
+        { projection: { _id: 1 } },
+      ),
+    ]);
+    if (latestBatch?.cancelRequestedAt || !stillClaimed) {
+      await db.collection("media_assets").updateOne(
+        {
+          _id: item.assetId,
+          owner: batch.owner,
+          status: "queued",
+          currentRunId: { $exists: false },
+        },
+        {
+          $set: { status: "staged", updatedAt: new Date() },
+          $unset: { safeError: "" },
+        },
+      );
+      if (latestBatch?.cancelRequestedAt) {
+        await items.updateOne(
+          { _id: item._id, state: "claiming" },
+          {
+            $set: { state: "cancelled", updatedAt: new Date() },
+            $unset: { claimedAt: "", safeError: "" },
+          },
+        );
+        break;
+      }
+      continue;
+    }
     const queuedJobId = await enqueueConfirmedAsset(
       db,
       item.assetId,
@@ -2263,6 +2793,7 @@ async function processRecognitionBatch(
       undefined,
       String(jobId),
       true,
+      String(batch._id),
     );
     await items.updateOne(
       { _id: item._id, state: "claiming" },
@@ -2284,13 +2815,7 @@ async function processRecognitionBatch(
   batch = await reconcileRecognitionBatch(db, batch);
   const hasMore = batch.counts.pending > 0 || batch.counts.queued > 0 ||
     batch.counts.processing > 0;
-  return {
-    success: true,
-    batchId: String(batch._id),
-    processed,
-    hasMore,
-    counts: batch.counts,
-  };
+  return recognitionWorkerResult(batch, processed, hasMore);
 }
 
 async function startFolderCampaign(
@@ -2854,6 +3379,7 @@ export class MediaLibraryResource
           );
           return { batch: cancelled ?? batch };
         }
+        await cancelQueuedRecognitionChildren(db, batch);
         await db.collection("media_recognition_batch_items").updateMany(
           { batchId: batch._id, state: "pending" },
           { $set: { state: "cancelled", updatedAt: now } },
@@ -2964,7 +3490,7 @@ export class MediaLibraryResource
             },
           );
           try {
-            await enqueueRecognitionWorker(batch._id, auth);
+            await ensureRecognitionCoordinator(db, batch._id, auth);
           } catch {
             // The periodic coordinator resumes this durable batch.
           }
@@ -2994,9 +3520,11 @@ export class MediaLibraryResource
         if (input.batchId && trustedId && input.batchId !== trustedId) {
           throw new Error("Recognition batch does not match its signed job");
         }
+        const effectiveBatchId = input.batchId ?? trustedId;
         return await processRecognitionBatch(
           db,
-          input.batchId ? new ObjectId(input.batchId) : undefined,
+          effectiveBatchId ? new ObjectId(effectiveBatchId) : undefined,
+          new ObjectId(input.jobId),
         );
       }
       case "timeline":

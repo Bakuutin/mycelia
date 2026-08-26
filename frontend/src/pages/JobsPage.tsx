@@ -93,7 +93,16 @@ import type {
   TimelineIntegrityReport,
 } from "@/types/timelineRecovery";
 import { getDiarizationJobRoute } from "@/lib/jobRouting";
-import { getToggledWorkerFilter } from "@/lib/jobFilters";
+import {
+  canClearWorkerQueue,
+  getToggledWorkerFilter,
+  GLOBAL_QUEUE_CLEAR_DESCRIPTION,
+  managedWorkerDestination,
+  MEDIA_RECOGNITION_ITEM_JOB_TYPE,
+  normalizeMediaRecognitionJobParams,
+  selectedJobTypeTotals,
+  selectionUsesLogicalCampaign,
+} from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
 import { getJobsListView, withJobsListView } from "@/lib/jobListView";
 import { parseJobError } from "@/lib/jobs";
@@ -105,6 +114,10 @@ import {
   getDiarizationProgressView,
 } from "@/lib/diarizationProgress";
 import { getSpeakerIdentityProgressView } from "@/lib/speakerIdentityProgress";
+import {
+  getMediaRecognitionBatchProgress,
+  mediaRecognitionBatchStageLabel,
+} from "@/lib/mediaRecognitionBatchProgress";
 import {
   type DiarizationRouteConfig,
   getEnabledDiarizationCapacity,
@@ -553,7 +566,7 @@ function JobDateRange({
  * Renders the Progress column content for a job row.
  * Handles all job types with type-specific displays.
  */
-function JobProgressCell({ job }: { job: JobInfo }) {
+export function JobProgressCell({ job }: { job: JobInfo }) {
   const result = job.result || {};
   const progress = job.progress || {};
   // Treat as completed if state is completed, OR if active but result already populated
@@ -562,6 +575,62 @@ function JobProgressCell({ job }: { job: JobInfo }) {
   const isCompleted = job.state === "completed" ||
     (job.state === "active" && hasResult);
   const isActive = job.state === "active" && !hasResult;
+
+  // --- Durable photo recognition batch ---
+  if (job.type === "mediaRecognitionBatch") {
+    const storedProgress = Object.keys(progress).length > 0
+      ? progress
+      : (result.progress ?? {});
+    const view = getMediaRecognitionBatchProgress({
+      status: storedProgress.status ?? storedProgress.stage ?? job.state,
+      progress: storedProgress,
+      counts: storedProgress.counts ?? result.counts,
+    });
+    const progressText = `${view.done} of ${view.total} photos complete`;
+    return (
+      <div className="min-w-[260px] space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <Badge
+            variant="secondary"
+            className="bg-blue-500/10 text-blue-500 text-xs"
+          >
+            {mediaRecognitionBatchStageLabel(view.stage)}
+          </Badge>
+          <Link
+            to="/media/analysis"
+            className="text-xs text-primary hover:underline"
+          >
+            Open photo analysis
+          </Link>
+        </div>
+        <Progress
+          value={view.percent}
+          className="h-1.5"
+          aria-label="Photo analysis batch progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={view.percent}
+          aria-valuetext={progressText}
+        />
+        <div
+          className="flex justify-between gap-3 text-[11px] text-muted-foreground"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span>{view.done}/{view.total} photos complete</span>
+          <span>{view.percent.toFixed(1)}%</span>
+        </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <span>pending {view.pending}</span>
+          <span>queued {view.queued}</span>
+          <span>processing {view.processing}</span>
+          <span className={view.failed > 0 ? "text-red-500" : undefined}>
+            failed {view.failed}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   // --- Failed and cancelled jobs: show parsed error ---
   // Queue maintenance cancels jobs (timeout, queue_record_missing) rather than
@@ -1590,9 +1659,15 @@ export default function JobsPage() {
   ];
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const jobsView = getJobsListView(searchParams);
+  const normalizedSearchParams = useMemo(
+    () => normalizeMediaRecognitionJobParams(searchParams),
+    [searchParams],
+  );
+  const currentSearch = searchParams.toString();
+  const normalizedSearch = normalizedSearchParams.toString();
+  const jobsView = getJobsListView(normalizedSearchParams);
   const isEmptyView = jobsView === "idle_auto";
-  const typeParam = searchParams.get("type");
+  const typeParam = normalizedSearchParams.get("type");
   const [quickFilter, setQuickFilter] = useState<string>("all");
   const [filterStatuses, setFilterStatuses] = useState<Set<string>>(
     new Set(ALL_STATUSES),
@@ -1636,6 +1711,16 @@ export default function JobsPage() {
   const [timelinePeriodStart, setTimelinePeriodStart] = useState("");
   const [timelinePeriodEnd, setTimelinePeriodEnd] = useState("");
 
+  useEffect(() => {
+    if (currentSearch === normalizedSearch) return;
+    setSearchParams(normalizedSearchParams, { replace: true });
+  }, [
+    currentSearch,
+    normalizedSearch,
+    normalizedSearchParams,
+    setSearchParams,
+  ]);
+
   const setJobsView = (view: "operational" | "idle_auto") => {
     setSearchParams(withJobsListView(searchParams, view));
     setQuickFilter("all");
@@ -1648,6 +1733,9 @@ export default function JobsPage() {
       newParams.delete("type");
     } else {
       newParams.set("type", Array.from(types).join(","));
+    }
+    if (allSelected || !types.has(MEDIA_RECOGNITION_ITEM_JOB_TYPE)) {
+      newParams.delete("internal");
     }
     setSearchParams(newParams);
   };
@@ -3224,28 +3312,8 @@ export default function JobsPage() {
   // Aggregate backend stats for selected types (accurate totals when filtering)
   const filteredTypeTotals = useMemo(() => {
     if (!jobStatsResponse?.stats || allTypesSelected) return null;
-
-    const totals = {
-      active: 0,
-      waiting: 0,
-      completed: 0,
-      failed: 0,
-      delayed: 0,
-      total: 0,
-      idleAutoRuns: 0,
-    };
-    for (const stat of jobStatsResponse.stats) {
-      if (filterTypes.has(stat.type)) {
-        totals.active += stat.active || 0;
-        totals.waiting += stat.waiting || 0;
-        totals.delayed += stat.delayed || 0;
-        totals.completed += stat.completed || 0;
-        totals.failed += stat.failed || 0;
-        totals.total += stat.totalRuns || 0;
-        totals.idleAutoRuns += stat.idleAutoRuns || 0;
-      }
-    }
-    return totals;
+    if (selectionUsesLogicalCampaign(filterTypes)) return null;
+    return selectedJobTypeTotals(jobStatsResponse.stats, filterTypes);
   }, [jobStatsResponse, allTypesSelected, filterTypes]);
 
   const totalIdleAutoRuns = useMemo(() => {
@@ -3256,34 +3324,27 @@ export default function JobsPage() {
     );
   }, [jobStatsResponse]);
 
+  const hiddenItemTypeTotals = useMemo(
+    () =>
+      selectedJobTypeTotals(
+        jobStatsResponse?.stats,
+        new Set([MEDIA_RECOGNITION_ITEM_JOB_TYPE]),
+      ),
+    [jobStatsResponse],
+  );
+  const visibleIdleAutoRuns = Math.max(
+    0,
+    totalIdleAutoRuns - (hiddenItemTypeTotals?.idleAutoRuns ?? 0),
+  );
+
   // Status totals follow the server-side view, so no-op checks do not inflate
   // the operational list while the Empty view reports only those checks.
   const displayCounts = useMemo(() => {
     if (allTypesSelected) {
-      const totals = jobStatsResponse?.totals;
-      if (!totals) return jobCounts;
-
-      if (isEmptyView) {
-        return {
-          active: 0,
-          waiting: 0,
-          failed: 0,
-          completed: totalIdleAutoRuns,
-          delayed: 0,
-          total: totalIdleAutoRuns,
-        };
-      }
-      return {
-        // Live lifecycle counts come from the queue-reconciled list. Mongo
-        // aggregates remain authoritative for large terminal history only.
-        active: jobCounts.active,
-        waiting: jobCounts.waiting,
-        failed: totals.failed ?? jobCounts.failed,
-        completed: (totals.completed ?? jobCounts.completed) -
-          totalIdleAutoRuns,
-        delayed: jobCounts.delayed,
-        total: (totals.total ?? jobCounts.total) - totalIdleAutoRuns,
-      };
+      // The API groups folder/recognition coordinator attempts into one
+      // logical campaign and hides photo child jobs. Raw lifetime aggregates
+      // cannot represent that view, so list badges must follow live rows.
+      return jobCounts;
     } else {
       const totals = filteredTypeTotals;
       if (!totals) return jobCounts;
@@ -3309,21 +3370,19 @@ export default function JobsPage() {
     }
   }, [
     allTypesSelected,
-    jobStatsResponse,
     filteredTypeTotals,
     jobCounts,
     isEmptyView,
-    totalIdleAutoRuns,
   ]);
 
   const idleViewCount = allTypesSelected
-    ? totalIdleAutoRuns
+    ? isEmptyView ? jobCounts.total : visibleIdleAutoRuns
     : filteredTypeTotals?.idleAutoRuns ?? 0;
   const operationalViewCount = allTypesSelected
-    ? Math.max(
+    ? !isEmptyView ? jobCounts.total : Math.max(
       0,
-      (jobStatsResponse?.totals.total ?? jobCounts.total) -
-        totalIdleAutoRuns,
+      (jobStatsResponse?.totals.total ?? 0) - visibleIdleAutoRuns -
+        (hiddenItemTypeTotals?.total ?? 0),
     )
     : Math.max(
       0,
@@ -3758,6 +3817,7 @@ export default function JobsPage() {
     setErrorFilter(null);
     const newParams = new URLSearchParams(searchParams);
     newParams.delete("type");
+    newParams.delete("internal");
     newParams.delete("hideEmpty");
     setSearchParams(newParams);
   };
@@ -3863,8 +3923,7 @@ export default function JobsPage() {
     if (
       !await confirmAction({
         title: "Clear all queued jobs?",
-        description:
-          "Active jobs will keep running so their locks and saved results remain consistent.",
+        description: GLOBAL_QUEUE_CLEAR_DESCRIPTION,
         actionLabel: "Clear queued jobs",
         destructive: true,
       })
@@ -5854,6 +5913,9 @@ export default function JobsPage() {
                               0,
                               (runtime?.effectiveConcurrency ?? 1) - liveJobs,
                             );
+                            const managedDestination = managedWorkerDestination(
+                              worker.type,
+                            );
                             return (
                               <TableRow
                                 key={worker.type}
@@ -5887,8 +5949,8 @@ export default function JobsPage() {
                                           size="sm"
                                           className="h-7 px-2 text-[10px]"
                                         >
-                                          <Link to="/audio/pipeline">
-                                            Audio Pipeline
+                                          <Link to={managedDestination.to}>
+                                            {managedDestination.label}
                                           </Link>
                                         </Button>
                                       )
@@ -5917,33 +5979,36 @@ export default function JobsPage() {
                                           </TooltipContent>
                                         </Tooltip>
                                       )}
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-7 w-7"
-                                          aria-label={`Clear ${worker.type} queue`}
-                                          disabled={clearQueueMutation
-                                            .isPending ||
-                                            !worker.capabilities.pause ||
-                                            ((runtime?.waiting ?? 0) +
-                                                (runtime?.delayed ?? 0) === 0)}
-                                          onClick={() =>
-                                            handleClearWorkerQueue(
-                                              worker.type,
-                                              runtime?.active ?? 0,
-                                              runtime?.waiting ?? 0,
-                                              runtime?.delayed ?? 0,
-                                            )}
-                                        >
-                                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        Clear {worker.type} queue
-                                      </TooltipContent>
-                                    </Tooltip>
+                                    {canClearWorkerQueue(worker.type) && (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-7 w-7"
+                                            aria-label={`Clear ${worker.type} queue`}
+                                            disabled={clearQueueMutation
+                                              .isPending ||
+                                              !worker.capabilities.pause ||
+                                              ((runtime?.waiting ?? 0) +
+                                                  (runtime?.delayed ?? 0) ===
+                                                0)}
+                                            onClick={() =>
+                                              handleClearWorkerQueue(
+                                                worker.type,
+                                                runtime?.active ?? 0,
+                                                runtime?.waiting ?? 0,
+                                                runtime?.delayed ?? 0,
+                                              )}
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          Clear {worker.type} queue
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    )}
                                     <DropdownMenu>
                                       <Tooltip>
                                         <TooltipTrigger asChild>

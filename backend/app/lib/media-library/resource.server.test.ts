@@ -19,6 +19,7 @@ import {
   publicFolderCounts,
   RECOGNITION_WINDOW,
   recognitionBatchOwnerQuery,
+  recognitionBatchProgress,
   recognitionEligibilityQuery,
   recognitionSelectionQuery,
   selectionDigest,
@@ -92,6 +93,44 @@ Deno.test("folder scan progress separates checked ready files from pending work"
   });
   assertEquals(interrupted.waitingForRecovery, true);
   assertEquals(interrupted.etaSeconds, undefined);
+});
+
+Deno.test("recognition batch progress reports terminal work and live queue states", () => {
+  assertEquals(
+    recognitionBatchProgress("running", {
+      total: 20,
+      pending: 2,
+      queued: 10,
+      processing: 3,
+      ready: 4,
+      failed: 1,
+    }, "0123456789abcdef01234567"),
+    {
+      stage: "processing",
+      status: "running",
+      processed: 5,
+      total: 20,
+      remaining: 15,
+      percent: 25,
+      pending: 2,
+      queued: 10,
+      processing: 3,
+      ready: 4,
+      skipped: 0,
+      failed: 1,
+      cancelled: 0,
+      batchId: "0123456789abcdef01234567",
+    },
+  );
+  assertEquals(
+    recognitionBatchProgress("cancelled", {
+      total: 20,
+      ready: 4,
+      failed: 1,
+      cancelled: 15,
+    }).percent,
+    100,
+  );
 });
 
 Deno.test("bulk photo knowledge is provider-neutral and fixes the safe task package", () => {

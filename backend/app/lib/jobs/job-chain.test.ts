@@ -97,6 +97,15 @@ Deno.test("timeline campaign continuation is owned by the durable reconciler", (
   ).toBe(true);
 });
 
+Deno.test("media recognition coordinator owns its polling loop", () => {
+  expect(
+    shouldScheduleGenericContinuation(
+      { type: "mediaRecognitionBatch", batchId: "batch-1" },
+      { hasMore: true, processed: 16 },
+    ),
+  ).toBe(false);
+});
+
 Deno.test("diarization continuation adopts the campaign created by the first batch", () => {
   expect(getContinuationJobData(
     { type: "diarization", mode: "missing", limit: 4 },

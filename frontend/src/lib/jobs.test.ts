@@ -3,7 +3,17 @@
 import { describe, expect, it } from "vitest";
 import { formatJobDuration } from "./jobDuration";
 import { getJobErrorCode, parseJobError } from "./jobErrors";
-import { getToggledWorkerFilter } from "./jobFilters";
+import {
+  canCancelJobFromJobs,
+  canClearWorkerQueue,
+  canRerunJobFromJobs,
+  getToggledWorkerFilter,
+  GLOBAL_QUEUE_CLEAR_DESCRIPTION,
+  managedWorkerDestination,
+  normalizeMediaRecognitionJobParams,
+  selectedJobTypeTotals,
+  selectionUsesLogicalCampaign,
+} from "./jobFilters";
 
 describe("parseJobError", () => {
   it("explains an unavailable configured inference server", () => {
@@ -149,5 +159,82 @@ describe("getToggledWorkerFilter", () => {
     );
     expect(restored.allSelected).toBe(true);
     expect([...restored.selectedTypes]).toEqual([]);
+  });
+});
+
+describe("photo job filters", () => {
+  it("routes legacy item-job links to the durable batch", () => {
+    const normalized = normalizeMediaRecognitionJobParams(
+      new URLSearchParams("type=mediaRecognition&view=empty"),
+    );
+    expect(normalized.get("type")).toBe("mediaRecognitionBatch");
+    expect(normalized.get("view")).toBe("empty");
+  });
+
+  it("keeps item jobs available behind the explicit internal flag", () => {
+    const normalized = normalizeMediaRecognitionJobParams(
+      new URLSearchParams("type=mediaRecognition&internal=1"),
+    );
+    expect(normalized.get("type")).toBe("mediaRecognition");
+    expect(normalized.get("internal")).toBe("1");
+  });
+
+  it("falls back to live rows when the stats snapshot lacks a selected type", () => {
+    expect(selectedJobTypeTotals([
+      { type: "transcription", totalRuns: 10 },
+    ], new Set(["mediaRecognition"]))).toBeNull();
+    expect(selectedJobTypeTotals([
+      { type: "mediaRecognition", totalRuns: 50, active: 2 },
+    ], new Set(["mediaRecognition"]))).toMatchObject({
+      total: 50,
+      active: 2,
+    });
+  });
+
+  it("uses live grouped rows for durable media campaigns", () => {
+    expect(selectionUsesLogicalCampaign(new Set(["mediaFolderImport"]))).toBe(
+      true,
+    );
+    expect(
+      selectionUsesLogicalCampaign(new Set(["mediaRecognitionBatch"])),
+    ).toBe(true);
+    expect(selectionUsesLogicalCampaign(new Set(["transcription"]))).toBe(
+      false,
+    );
+  });
+
+  it("routes durable media workers to their domain controls", () => {
+    expect(managedWorkerDestination("mediaFolderImport")).toEqual({
+      to: "/media",
+      label: "Media library",
+    });
+    expect(managedWorkerDestination("mediaRecognitionBatch")).toEqual({
+      to: "/media/analysis",
+      label: "Photo analysis",
+    });
+    expect(managedWorkerDestination("mediaRecognition")).toEqual({
+      to: "/media/analysis",
+      label: "Photo analysis",
+    });
+    expect(managedWorkerDestination("ingestion")).toEqual({
+      to: "/audio/pipeline",
+      label: "Audio Pipeline",
+    });
+    expect(canClearWorkerQueue("mediaFolderImport")).toBe(false);
+    expect(canClearWorkerQueue("mediaRecognitionBatch")).toBe(false);
+    expect(canClearWorkerQueue("mediaRecognition")).toBe(false);
+    expect(canClearWorkerQueue("transcription")).toBe(true);
+    expect(canRerunJobFromJobs("mediaFolderImport")).toBe(false);
+    expect(canRerunJobFromJobs("mediaRecognitionBatch")).toBe(false);
+    expect(canRerunJobFromJobs("mediaRecognition")).toBe(false);
+    expect(canRerunJobFromJobs("transcription")).toBe(true);
+    expect(canCancelJobFromJobs("mediaFolderImport")).toBe(false);
+    expect(canCancelJobFromJobs("mediaRecognitionBatch")).toBe(false);
+    expect(canCancelJobFromJobs("mediaRecognition")).toBe(false);
+    expect(canCancelJobFromJobs("transcription")).toBe(true);
+    expect(GLOBAL_QUEUE_CLEAR_DESCRIPTION).toContain(
+      "Media import and photo analysis campaigns",
+    );
+    expect(GLOBAL_QUEUE_CLEAR_DESCRIPTION).toContain("remain untouched");
   });
 });

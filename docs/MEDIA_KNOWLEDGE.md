@@ -107,10 +107,11 @@ without following symlinks, inventories unsupported files, hashes and inspects
 25 entries per durable step, and survives backend restarts. One visible
 `mediaFolderImport` job carries the whole normal campaign and reports the phase,
 checked/total count, percentage, speed, ETA and last progress time; a recovery
-job is created only after an interruption. Its local report separates imported,
-duplicate, unsupported, changed, and failed entries before or during
-confirmation. Originals remain read-only external references; only EXIF/GPS,
-stripped WebP previews, hashes, and derived data enter Mycelia.
+job is created only after an interruption. Jobs groups those technical attempts
+by `campaignId`, so the campaign remains one visible row. Its local report
+separates imported, duplicate, unsupported, changed, and failed entries before
+or during confirmation. Originals remain read-only external references; only
+EXIF/GPS, stripped WebP previews, hashes, and derived data enter Mycelia.
 
 ```bash
 docker compose \
@@ -400,7 +401,10 @@ The batch action first creates a local preview receipt with a cutoff, exact
 asset IDs/SHA-256 values, the pinned provider profile, tasks, per-photo estimate,
 and total gross ceiling. Confirmation returns immediately. A durable coordinator
 keeps a bounded queue window and creates one ordinary `mediaRecognition` job per
-photo. It skips `ready`, `queued`, and `processing`; missing references become
+photo internally. Jobs exposes one `mediaRecognitionBatch` row for the whole
+confirmed batch, with aggregate progress and pending/queued/processing/failure
+counters; child jobs and recovery attempts stay available only as diagnostics.
+It skips `ready`, `queued`, and `processing`; missing references become
 `source_missing` under Needs attention. Stop prevents new jobs while
 already-started provider calls finish and remain accounted. Failed Google items
 must be reviewed as a new exact batch with a new cost ceiling; the original

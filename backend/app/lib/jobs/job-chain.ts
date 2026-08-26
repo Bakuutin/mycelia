@@ -23,6 +23,9 @@ export function shouldScheduleGenericContinuation(
   data: Record<string, unknown>,
   result: unknown,
 ): boolean {
+  if (data.type === "mediaRecognitionBatch") {
+    return false;
+  }
   if (
     data.type === "histRecalculation" &&
     typeof data.timelineRebuildCampaignId === "string"

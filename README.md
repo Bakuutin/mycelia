@@ -90,8 +90,12 @@ your own words.
   The gallery is cursor-paginated and refreshes while folder imports or
   recognition jobs advance. An exact SHA-bound provider batch on the Analysis
   page can process every eligible photo matching the server-side filters with
-  one ordinary recognition job per item; active batches do not lock browsing or
-  local import.
+  one visible **Photo analysis batch** row and aggregate progress in Jobs.
+  Per-photo recognition jobs remain internal recovery details and do not flood
+  the default Jobs list; active batches do not lock browsing or local import.
+  Generic Jobs launch/restart/cancel/clear actions cannot recreate or remove
+  folder-import or paid recognition campaigns; their lifecycle stays under the
+  Media library and Photo analysis controls.
   Individual photos have a default Photos map layer and adaptive Photos Timeline
   track; missing time/GPS stays visible as Unplaced and can be assigned locally
   with audit history.

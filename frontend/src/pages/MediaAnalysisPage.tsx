@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { getMediaRecognitionBatchProgress } from "@/lib/mediaRecognitionBatchProgress";
 import { AuthenticatedMediaImage } from "@/components/media/AuthenticatedMediaImage";
 import { MediaSectionNav } from "@/components/media/MediaSectionNav";
 import { Badge } from "@/components/ui/badge";
@@ -93,6 +94,8 @@ interface Batch {
   profileName?: string;
   requestedTasks?: RecognitionTask[];
   counts?: Record<string, number>;
+  progress?: Record<string, unknown>;
+  coordinatorJobId?: unknown;
   updatedAt?: string | Date;
   createdAt?: string | Date;
 }
@@ -180,18 +183,6 @@ function resultCopy(asset: Asset): string {
     (asset.status === "ready"
       ? "Analysis is ready"
       : "No visual description yet");
-}
-
-function batchProgress(batch: Batch) {
-  const counts = batch.counts ?? {};
-  const total = Number(counts.total ?? 0);
-  const done = Number(counts.ready ?? 0) + Number(counts.failed ?? 0) +
-    Number(counts.cancelled ?? 0) + Number(counts.skipped ?? 0);
-  return {
-    total,
-    done,
-    percent: total > 0 ? Math.min(100, (done / total) * 100) : 0,
-  };
 }
 
 export default function MediaAnalysisPage() {
@@ -1103,7 +1094,8 @@ export default function MediaAnalysisPage() {
             )
             : batches.map((batch) => {
               const batchId = idOf(batch._id);
-              const progress = batchProgress(batch);
+              const progress = getMediaRecognitionBatchProgress(batch);
+              const coordinatorJobId = idOf(batch.coordinatorJobId);
               const failed = Number(batch.counts?.failed ?? 0);
               return (
                 <div key={batchId} className="space-y-3 rounded-lg border p-4">
@@ -1123,6 +1115,16 @@ export default function MediaAnalysisPage() {
                       </div>
                     </div>
                     <div className="flex gap-2">
+                      {coordinatorJobId && (
+                        <Button size="sm" variant="ghost" asChild>
+                          <Link
+                            to={`/jobs/${encodeURIComponent(coordinatorJobId)}`}
+                            aria-label={`Open coordinator job for analysis batch ${batchId}`}
+                          >
+                            Open batch job
+                          </Link>
+                        </Button>
+                      )}
                       {ACTIVE_BATCH_STATES.has(batch.status) && (
                         <Button
                           size="sm"
@@ -1165,7 +1167,15 @@ export default function MediaAnalysisPage() {
                       <span>{progress.done} terminal of {progress.total}</span>
                       <span>{progress.percent.toFixed(1)}%</span>
                     </div>
-                    <Progress value={progress.percent} className="h-2" />
+                    <Progress
+                      value={progress.percent}
+                      className="h-2"
+                      aria-label={`Analysis batch ${batchId} progress`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={progress.percent}
+                      aria-valuetext={`${progress.done} of ${progress.total} photos complete`}
+                    />
                     <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                       {Object.entries(batch.counts ?? {})
                         .filter(([, count]) =>
