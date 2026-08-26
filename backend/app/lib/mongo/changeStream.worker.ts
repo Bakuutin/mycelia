@@ -11,6 +11,10 @@ import {
   recoverObjectDensityPending,
 } from "@/lib/objects/timeline-density.worker.ts";
 import type { ChangeStreamOptions, Db } from "mongodb";
+import {
+  enqueueConversationProjectionChange,
+  shouldQueueConversationProjectionChange,
+} from "@/lib/location/conversation-map.server.ts";
 
 let changeStreamWorker: { stop: () => Promise<void> } | null = null;
 
@@ -228,7 +232,8 @@ export function shouldRefreshObjectDensity(
 }
 
 export function shouldSuppressMongoChange(collectionName: string): boolean {
-  return collectionName === "object_timeline_density_pending";
+  return collectionName === "object_timeline_density_pending" ||
+    collectionName === "location_conversation_projection_pending";
 }
 
 export async function correctObjectListCategories(
@@ -327,6 +332,12 @@ async function publishMongoChange(
       "object_timeline_density",
       "object_timeline_density_sources",
       "object_timeline_density_state",
+      "location_conversation_projection",
+      "location_conversation_projection_state",
+      "location_route_fragments",
+      "location_route_geometry",
+      "location_route_breaks",
+      "location_route_projection_state",
       "access_logs",
     ].includes(collectionName)
   ) {
@@ -450,6 +461,43 @@ export async function startChangeStreamWorker(): Promise<void> {
               await enqueueObjectDensityChange(
                 { operationType, documentId, document },
                 db,
+              );
+            }
+
+            if (
+              collectionName === "objects" &&
+              shouldQueueConversationProjectionChange(
+                operationType,
+                normalizeChangedFields(updateDescription),
+              )
+            ) {
+              await enqueueConversationProjectionChange(db, {
+                kind: "object",
+                documentId: change.documentKey &&
+                    typeof change.documentKey === "object"
+                  ? (change.documentKey as { _id?: unknown })._id
+                  : document?._id,
+              });
+            }
+            if (collectionName === "location_segments") {
+              await enqueueConversationProjectionChange(db, {
+                kind: "segments",
+              });
+            }
+            if (
+              collectionName === "location_tracks" ||
+              collectionName === "location_track_geometry"
+            ) {
+              await db.collection("location_route_projection_state").updateOne(
+                { _id: "current" },
+                {
+                  $set: {
+                    dirty: true,
+                    status: "stale",
+                    sourceChangedAt: new Date(),
+                  },
+                },
+                { upsert: true },
               );
             }
 

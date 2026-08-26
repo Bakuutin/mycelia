@@ -11,8 +11,10 @@ import { Badge } from "@/components/ui/badge";
 import {
   useLocationConflicts,
   useLocationMetadataConflicts,
+  useLocationRouteConflicts,
   useResolveLocationConflict,
   useResolveLocationMetadataConflict,
+  useResolveLocationRouteConflict,
 } from "@/hooks/useLocationQueries";
 
 function coordinate(point: { loc: { coordinates: [number, number] } }): string {
@@ -33,8 +35,12 @@ export function LocationConflictReviewDialog({
     useLocationMetadataConflicts("pending", open);
   const resolve = useResolveLocationConflict();
   const resolveMetadata = useResolveLocationMetadataConflict();
+  const { data: routeData, isLoading: routesLoading } =
+    useLocationRouteConflicts("pending", open);
+  const resolveRoute = useResolveLocationRouteConflict();
   const hasCoordinateConflicts = (data?.conflicts.length ?? 0) > 0;
   const hasMetadataConflicts = (metadataData?.conflicts.length ?? 0) > 0;
+  const hasRouteConflicts = (routeData?.conflicts.length ?? 0) > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -47,13 +53,14 @@ export function LocationConflictReviewDialog({
             explicitly choose a value.
           </DialogDescription>
         </DialogHeader>
-        {isLoading || metadataLoading
+        {isLoading || metadataLoading || routesLoading
           ? (
             <div className="flex justify-center p-8">
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
           )
-          : !hasCoordinateConflicts && !hasMetadataConflicts
+          : !hasCoordinateConflicts && !hasMetadataConflicts &&
+              !hasRouteConflicts
           ? (
             <p className="text-sm text-muted-foreground">
               Nothing needs review.
@@ -61,6 +68,73 @@ export function LocationConflictReviewDialog({
           )
           : (
             <div className="space-y-5">
+              {hasRouteConflicts && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold">
+                    Overlapping route sources ({routeData!.conflicts.length})
+                  </h3>
+                  {routeData!.conflicts.map((conflict) => (
+                    <section
+                      key={String(conflict._id)}
+                      className="space-y-3 rounded-md border p-3 text-sm"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-medium">
+                          {new Date(conflict.overlapStart).toLocaleString()} —
+                          {" "}
+                          {new Date(conflict.overlapEnd).toLocaleString()}
+                        </p>
+                        <Badge variant="outline">needs review</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {conflict.trackNames[0] || "Source 1"} and{" "}
+                        {conflict.trackNames[1] || "Source 2"} are separated by
+                        {" "}
+                        {(conflict.medianSeparationM / 1000).toFixed(0)}{" "}
+                        km in the same period. Both remain visible until you
+                        decide.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={resolveRoute.isPending}
+                          onClick={() =>
+                            resolveRoute.mutate({
+                              id: String(conflict._id),
+                              resolution: "use_first",
+                            })}
+                        >
+                          Use {conflict.trackNames[0] || "source 1"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={resolveRoute.isPending}
+                          onClick={() =>
+                            resolveRoute.mutate({
+                              id: String(conflict._id),
+                              resolution: "use_second",
+                            })}
+                        >
+                          Use {conflict.trackNames[1] || "source 2"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={resolveRoute.isPending}
+                          onClick={() =>
+                            resolveRoute.mutate({
+                              id: String(conflict._id),
+                              resolution: "keep_both",
+                            })}
+                        >
+                          Keep both
+                        </Button>
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              )}
               {hasCoordinateConflicts && (
                 <div className="space-y-3">
                   <h3 className="text-sm font-semibold">

@@ -2,7 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import Layout from "./components/Layout";
 import HomePage from "./pages/HomePage";
 import TimelinePage from "./pages/TimelinePage";
-import MapPage from "./pages/MapPage";
+import MapPage from "./pages/MapExperiencePage";
 import ChatPage from "./pages/ChatPage";
 import SettingsLayout from "./components/SettingsLayout";
 import GeneralSettingsPage from "./pages/settings/GeneralSettingsPage";

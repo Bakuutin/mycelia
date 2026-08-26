@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   CircleMarker,
   MapContainer,
@@ -6,10 +6,11 @@ import {
   TileLayer,
   Tooltip,
   useMap,
+  useMapEvents,
 } from "react-leaflet";
 import type { LatLngBoundsExpression, LatLngExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
-import type { LocationSegment } from "@/types/location";
+import type { LocationSegment, MapBounds } from "@/types/location";
 import { formatPlace, segmentDurationMs } from "@/types/location";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -67,17 +68,24 @@ export function segmentsBounds(
   ];
 }
 
-function FitBounds({ bounds }: { bounds: LatLngBoundsExpression | null }) {
+function FitBounds({
+  bounds,
+  requestKey,
+}: {
+  bounds: LatLngBoundsExpression | null;
+  requestKey: number;
+}) {
   const map = useMap();
-  const boundsKey = JSON.stringify(bounds);
+  const handled = useRef<number | null>(null);
   useEffect(() => {
-    if (!bounds) return;
+    if (!bounds || handled.current === requestKey) return;
     let fitted = false;
     const tryFit = () => {
       const size = map.getSize();
       if (size.x > 0 && size.y > 0) {
         map.fitBounds(bounds, { animate: false });
         fitted = true;
+        handled.current = requestKey;
       }
     };
     tryFit();
@@ -90,7 +98,51 @@ function FitBounds({ bounds }: { bounds: LatLngBoundsExpression | null }) {
     return () => {
       map.off("resize", onResize);
     };
-  }, [map, boundsKey]);
+  }, [map, bounds, requestKey]);
+  return null;
+}
+
+function ViewportBridge({
+  onChange,
+}: {
+  onChange?: (viewport: {
+    center: [number, number];
+    zoom: number;
+    bounds: MapBounds;
+  }) => void;
+}) {
+  const report = (map: ReturnType<typeof useMap>) => {
+    if (!onChange) return;
+    const center = map.getCenter();
+    const bounds = map.getBounds();
+    onChange({
+      center: [center.lat, center.lng],
+      zoom: map.getZoom(),
+      bounds: {
+        west: bounds.getWest(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        north: bounds.getNorth(),
+      },
+    });
+  };
+  const map = useMapEvents({
+    moveend: () => report(map),
+    zoomend: () => report(map),
+  });
+  useEffect(() => report(map), [map]);
+  return null;
+}
+
+function ViewportRequest({
+  request,
+}: {
+  request?: { center: [number, number]; zoom: number; key: number };
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (request) map.setView(request.center, request.zoom, { animate: false });
+  }, [map, request?.key]);
   return null;
 }
 
@@ -118,6 +170,18 @@ export interface LocationMapProps {
   children?: React.ReactNode;
   scrollWheelZoom?: boolean;
   extraBoundsPoints?: Array<[number, number]>;
+  initialCenter?: [number, number];
+  initialZoom?: number;
+  fitRequestKey?: number;
+  viewportRequest?: { center: [number, number]; zoom: number; key: number };
+  onViewportChange?: (viewport: {
+    center: [number, number];
+    zoom: number;
+    bounds: MapBounds;
+  }) => void;
+  showStays?: boolean;
+  showMoves?: boolean;
+  showGaps?: boolean;
 }
 
 export function LocationMap({
@@ -129,6 +193,14 @@ export function LocationMap({
   children,
   scrollWheelZoom = true,
   extraBoundsPoints,
+  initialCenter = [20, 0],
+  initialZoom = 2,
+  fitRequestKey = 0,
+  viewportRequest,
+  onViewportChange,
+  showStays = true,
+  showMoves = true,
+  showGaps = true,
 }: LocationMapProps) {
   const tileUrl = useSettingsStore((state) => state.mapTileUrl);
   const bounds = useMemo(
@@ -146,17 +218,19 @@ export function LocationMap({
 
   return (
     <MapContainer
-      center={[20, 0]}
-      zoom={2}
+      center={initialCenter}
+      zoom={initialZoom}
       className={className ?? "h-full w-full"}
       scrollWheelZoom={scrollWheelZoom}
       attributionControl
     >
       <TileLayer url={tileUrl} attribution={OSM_ATTRIBUTION} />
       <InvalidateOnResize />
-      <FitBounds bounds={bounds} />
+      <ViewportBridge onChange={onViewportChange} />
+      <ViewportRequest request={viewportRequest} />
+      <FitBounds bounds={bounds} requestKey={fitRequestKey} />
 
-      {gaps.map((s) => (
+      {showGaps && gaps.map((s) => (
         <Polyline
           key={String(s._id)}
           positions={segmentLatLngs(s)}
@@ -177,7 +251,7 @@ export function LocationMap({
         </Polyline>
       ))}
 
-      {moves.map((s) => (
+      {showMoves && moves.map((s) => (
         <Polyline
           key={String(s._id)}
           positions={segmentLatLngs(s)}
@@ -193,7 +267,7 @@ export function LocationMap({
         </Polyline>
       ))}
 
-      {stays.map((s) => {
+      {showStays && stays.map((s) => {
         const [lng, lat] = s.loc!.coordinates;
         const selected = selectedSegmentId != null &&
           String(s._id) === selectedSegmentId;

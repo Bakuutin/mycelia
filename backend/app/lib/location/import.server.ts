@@ -29,7 +29,7 @@ const GEOMETRY_CHUNK_SIZE = 2000;
 const PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 export const LOCATION_PARSER_VERSION = 3;
 export const LOCATION_POINT_HASH_VERSION = 1;
-export const LOCATION_CONTENT_PROFILE_VERSION = 2;
+export const LOCATION_CONTENT_PROFILE_VERSION = 3;
 
 type MongoCall = (input: any) => Promise<any>;
 
@@ -1007,6 +1007,12 @@ async function replaceTrackGeometry(
                 coordinates: [point.lng, point.lat],
                 ...(point.ele !== undefined ? { ele: point.ele } : {}),
                 ...(point.ts ? { ts: point.ts } : {}),
+                ...(point.sourceFragmentIndex !== undefined
+                  ? { sourceFragmentIndex: point.sourceFragmentIndex }
+                  : {}),
+                ...(point.sourcePointIndex !== undefined
+                  ? { sourcePointIndex: point.sourcePointIndex }
+                  : {}),
                 quality: point.ts ? "timed" : "untimed",
               })),
               updatedAt: new Date(),
@@ -1148,6 +1154,7 @@ async function upsertTracks(
             geometryCompleteness: "full",
             geometryPriority: metadataPriority(format),
             contentProfileVersion: LOCATION_CONTENT_PROFILE_VERSION,
+            routeBoundaryCompleteness: "full",
             timedPointCount: descriptor.track.coordinates.filter((point) =>
               point.ts
             ).length,

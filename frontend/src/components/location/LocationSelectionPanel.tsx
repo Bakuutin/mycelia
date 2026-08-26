@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Info, Pencil, X } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Info, MapPinned, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,6 +56,23 @@ export function LocationSelectionPanel({
           ))}
         </CardTitle>
         <div className="flex items-center gap-1">
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            title="Show on map"
+          >
+            <Link
+              to={`/map?start=${
+                new Date(effectiveTime).getTime() - 60 * 60 * 1000
+              }&end=${new Date(effectiveTime).getTime() + 60 * 60 * 1000}&at=${
+                new Date(effectiveTime).getTime()
+              }`}
+            >
+              <MapPinned className="h-3.5 w-3.5" />
+            </Link>
+          </Button>
           {segment && (
             <>
               <Button

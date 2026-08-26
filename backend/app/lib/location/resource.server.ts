@@ -3,7 +3,7 @@ import { z } from "zod";
 import tzLookup from "tz-lookup";
 import { type Auth } from "@/lib/auth/core.server.ts";
 import { type Resource } from "@/lib/auth/resources.ts";
-import { getMongoResource } from "@/lib/mongo/core.server.ts";
+import { getMongoResource, getRootDB } from "@/lib/mongo/core.server.ts";
 import { getJobsResource } from "@/lib/resources/worker.ts";
 import { getFsResource } from "@/lib/mongo/fs.server.ts";
 import {
@@ -14,6 +14,18 @@ import {
 } from "@/lib/location/import.server.ts";
 import { zDateOrString } from "@myceliasdk/zod-json-schema.ts";
 import { createSingleFlightBackoff } from "@/lib/location/query-backoff.ts";
+import {
+  getConversationMapClusterGroups,
+  getConversationMapGroupItems,
+  getMapDensity,
+  getMapTimelineSummary,
+} from "@/lib/location/conversation-map.server.ts";
+import {
+  getMapRouteDetail,
+  listRouteConflicts,
+  resolveRouteConflict,
+} from "@/lib/location/route-projection.server.ts";
+import { MAP_CELL_ZOOMS } from "@/lib/location/map-spatial.ts";
 
 const SEGMENTS = "location_segments";
 const POINTS = "location_points";
@@ -125,6 +137,83 @@ const conversationsOnMapSchema = z.object({
   end: zDateOrString().optional(),
 });
 
+const mapBoundsSchema = z.object({
+  west: z.number().min(-180).max(180),
+  south: z.number().min(-90).max(90),
+  east: z.number().min(-180).max(180),
+  north: z.number().min(-90).max(90),
+}).refine((bounds) => bounds.north > bounds.south, {
+  message: "Map bounds north must be greater than south",
+});
+
+const mapDensitySchema = z.object({
+  action: z.literal("map-density"),
+  start: zDateOrString(),
+  end: zDateOrString(),
+  bounds: mapBoundsSchema,
+  zoom: z.number().min(0).max(24),
+  layers: z.array(z.enum(["presence", "conversations"]))
+    .default(["presence", "conversations"]),
+  maxClusters: z.number().int().min(1).max(2000).default(1200),
+}).refine((value) => value.end > value.start, {
+  message: "Map density end must be after start",
+});
+
+const conversationMapClusterGroupsSchema = z.object({
+  action: z.literal("conversation-map-cluster-groups"),
+  start: zDateOrString(),
+  end: zDateOrString(),
+  cell: z.object({
+    z: z.number().int().refine((value) =>
+      MAP_CELL_ZOOMS.includes(value as (typeof MAP_CELL_ZOOMS)[number])
+    ),
+    x: z.number().int().min(0),
+    y: z.number().int().min(0),
+  }),
+  revision: z.number().int().min(0).optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(20).default(20),
+});
+
+const conversationMapGroupItemsSchema = z.object({
+  action: z.literal("conversation-map-group-items"),
+  start: zDateOrString(),
+  end: zDateOrString(),
+  groupKey: z.string().min(1),
+  revision: z.number().int().min(0).optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(20).default(20),
+});
+
+const mapRouteDetailSchema = z.object({
+  action: z.literal("map-route-detail"),
+  start: zDateOrString(),
+  end: zDateOrString(),
+  bounds: mapBoundsSchema,
+  zoom: z.number().min(0).max(24),
+  includeConnectors: z.boolean().default(false),
+});
+
+const mapTimelineSummarySchema = z.object({
+  action: z.literal("map-timeline-summary"),
+  start: zDateOrString().optional(),
+  end: zDateOrString().optional(),
+  maxBuckets: z.number().int().min(1).max(512).default(256),
+});
+
+const listRouteConflictsSchema = z.object({
+  action: z.literal("list-route-conflicts"),
+  status: z.enum(["pending", "resolved", "superseded"]).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+  skip: z.number().int().min(0).default(0),
+});
+
+const resolveRouteConflictSchema = z.object({
+  action: z.literal("resolve-route-conflict"),
+  id: z.string().min(1),
+  resolution: z.enum(["use_first", "use_second", "keep_both"]),
+});
+
 const statusSchema = z.object({
   action: z.literal("status"),
 });
@@ -204,6 +293,13 @@ export const locationRequestSchema = z.discriminatedUnion("action", [
   listGeotagsSchema,
   updateSegmentSchema,
   conversationsOnMapSchema,
+  mapDensitySchema,
+  conversationMapClusterGroupsSchema,
+  conversationMapGroupItemsSchema,
+  mapRouteDetailSchema,
+  mapTimelineSummarySchema,
+  listRouteConflictsSchema,
+  resolveRouteConflictSchema,
   statusSchema,
   listImportsSchema,
   deleteImportSchema,
@@ -390,10 +486,17 @@ export class LocationResource
           },
           options: { sort: { ts: 1 }, limit: 1 },
         });
-        const candidates = [before, after].filter(Boolean).filter((p) =>
-          Math.abs(new Date(p.ts).getTime() - time.getTime()) <
-            30 * 60 * 1000
-        );
+        const candidates = segment?.type === "gap"
+          ? []
+          : [before, after].filter(Boolean).filter((p) => {
+            const timestamp = new Date(p.ts).getTime();
+            if (Math.abs(timestamp - time.getTime()) >= 30 * 60 * 1000) {
+              return false;
+            }
+            return segment?.type !== "move" ||
+              (timestamp >= new Date(segment.start).getTime() &&
+                timestamp <= new Date(segment.end).getTime());
+          });
         candidates.sort((a, b) =>
           Math.abs(new Date(a.ts).getTime() - time.getTime()) -
           Math.abs(new Date(b.ts).getTime() - time.getTime())
@@ -958,6 +1061,67 @@ export class LocationResource
           unmatched: conversations.length - matched,
           conversationCount: matched,
         };
+      }
+
+      case "map-density": {
+        const db = await getRootDB();
+        return await getMapDensity(db, {
+          start: input.start,
+          end: input.end,
+          bounds: input.bounds,
+          zoom: input.zoom,
+          layers: input.layers,
+          maxClusters: input.maxClusters,
+          cacheScope: auth.principal,
+        });
+      }
+
+      case "conversation-map-cluster-groups": {
+        const db = await getRootDB();
+        return await getConversationMapClusterGroups(db, {
+          start: input.start,
+          end: input.end,
+          cell: input.cell as any,
+          revision: input.revision,
+          cursor: input.cursor,
+          limit: input.limit,
+        });
+      }
+
+      case "conversation-map-group-items": {
+        const db = await getRootDB();
+        return await getConversationMapGroupItems(db, {
+          start: input.start,
+          end: input.end,
+          groupKey: input.groupKey,
+          revision: input.revision,
+          cursor: input.cursor,
+          limit: input.limit,
+        });
+      }
+
+      case "map-route-detail": {
+        const db = await getRootDB();
+        return await getMapRouteDetail(db, input);
+      }
+
+      case "map-timeline-summary": {
+        const db = await getRootDB();
+        return await getMapTimelineSummary(db, input);
+      }
+
+      case "list-route-conflicts": {
+        const db = await getRootDB();
+        return await listRouteConflicts(db, input);
+      }
+
+      case "resolve-route-conflict": {
+        const db = await getRootDB();
+        return await resolveRouteConflict(db, {
+          id: input.id,
+          resolution: input.resolution,
+          principal: auth.principal,
+        });
       }
 
       case "status": {

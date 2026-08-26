@@ -47,30 +47,52 @@ event, …) shows the same mini-map for the moment it happened.
 
 ### Map page (`/map`)
 
-All movements for a selectable period:
+The Map has one shared selected period for presence, routes and conversations:
 
-- Time presets (Day / Week / Month / Year / All); the range is shared with the
-  timeline via the `?start`/`?end` URL params, so links round-trip between the
-  two pages.
-- **Stay circles** — radius encodes dwell time (`4·√hours`, clamped 4–24 px).
-- **Blue polylines** — movements. Long ranges are automatically simplified
-  server-side (point budget per request) so even "All" stays fast.
-- **Grey dashed lines** — assumed routes across data gaps. Click one to assign a
-  location to that period manually.
-- **Conversation clusters** (toggle in the toolbar) — 💬 badges show how many
-  conversations happened at each place; at low zoom nearby places merge, click
-  to zoom in. Clicking a single place opens the list of its conversations
-  (switchable between the selected period and all time); each entry links to the
-  conversation and re-centers the map on its spot.
-- **Saved places** (toggle) — bookmarks from GPX/KML/KMZ with source names,
+- Presets (Day / Week / Month / Year / All) and the compact navigator update the
+  shared `start`/`end` range. Dragging a handle changes only a draft range and
+  commits once on release. Clicking a density bucket sets `at`; Mycelia flies to
+  a confirmed stay/manual position or accepted point inside a move. A gap shows
+  **No GPS near this time** and never invents a coordinate.
+- Exact links persist `start`, `end`, `lat`, `lng`, `z`, optional `at` and the
+  selected `layers`. A valid saved viewport wins over automatic fitting;
+  back/forward and reload restore it. **Fit selected data** is the explicit way
+  to recalculate the viewport after changing the period.
+- The bottom layer bar controls **Presence**, **Conversations**, **Routes**,
+  **Unrecorded connections** and **Source tracks**. Conversations and Routes are
+  on by default; unrecorded connectors and raw source tracks are off. Changing a
+  layer never resets the viewport.
+- At far zoom, **Presence** circles aggregate dwell overlap and visit count;
+  their size and brightness do not depend on GPS sampling frequency. At zoom 14
+  and closer, individual stay/manual circles replace the aggregate.
+- 💬 **Conversation** badges use exact persistent counts. Clicking a spatial
+  cluster zooms to its bounds; at maximum zoom or coincident coordinates a panel
+  opens with 20 location groups per page and then 20 conversations per page. The
+  map does not scan the raw objects collection. During the first index build it
+  shows **Preparing map index**; a refresh keeps the previous markers dimmed
+  until the new revision arrives.
+- Blue **Routes** are continuity-aware fragments from the complete normalized
+  source geometry. Zoom below 14 uses a light overview; zoom 14 and above
+  requests buffered viewport detail simplified to at most 0.75 screen pixel. If
+  the 50,000-coordinate detail budget is exceeded, the overview remains visible
+  and the UI says **Zoom in for full detail**.
+- Explicit GPX/KML segment boundaries, reverse/non-increasing time, pauses over
+  30 minutes, teleports over 500 km and locally sparse jumps split a route.
+  Hidden-by-default dashed **Unrecorded connections** can show those breaks.
+  Independent sources are never joined by a common timestamp sort.
+- Simultaneous independent tracks separated by more than 20 km for at least five
+  minutes remain separate and appear in Review. Choose either source or keep
+  both; the decision is audited and raw geometry is not deleted.
+- **Saved places** — bookmarks from GPX/KML/KMZ with source names,
   localized variants, descriptions, categories, color/icon metadata and the time
   the bookmark was saved. A bookmark timestamp is never interpreted as proof
   that you were at that coordinate.
 - **Recorded tracks** (toggle) — source track/route geometry with its original
-  name, color and width. The map uses a reduced render path, while every source
-  coordinate (timestamped or untimed, including elevation) remains available in
-  normalized geometry chunks. Untimed `LineString`/GPX routes are map-only and
-  never generate stays or timezone periods.
+  name, color and width. This is the optional raw source layer; the main Routes
+  layer uses the continuity projection. Every source coordinate (timestamped or
+  untimed, including elevation) remains available in normalized geometry chunks.
+  Untimed `LineString`/GPX routes are map-only and never generate stays or
+  timezone periods.
 - **Import tracks** button — preview/confirm import with a durable receipt:
   source size/hash/parser, the selected KML member, new and matched GPS points,
   repeated items inside the file, track kinds and coordinate counts, saved
@@ -168,6 +190,14 @@ re-clips the assumed gaps around it. Manual segments can be deleted from the API
   geocodes stays against GeoNames, and derives timezone periods.
 - Everything derived is rebuilt idempotently per time window — re-importing or
   deleting an import re-generates segments for the affected period only.
+- `locationMapProjection` is a separate controlled Jobs worker. It publishes
+  atomic generations of conversation placement and source-aware route fragments;
+  migrations only create the empty collections and indexes. Subsequent object,
+  segment and track changes are coalesced through durable pending/dirty state.
+- Parser/content profile v3 retains GPX `trkseg`, KML `gx:Track` and
+  `gx:MultiTrack` child boundaries plus source point order. During rollout,
+  reparsing committed originals enriches old full geometry; missing originals
+  are marked incomplete rather than reconstructed from a reduced preview.
 
 ## Limits and notes
 

@@ -328,15 +328,15 @@ Keep live service availability separate from corpus-wide statistics:
 - Completed summarization claims are released in indexed batches of at most 100
   per maintenance pass. Do not replace this with an unbounded `updateMany`
   predicate over all objects.
-- The Map conversation overlay is off by default and runs only through **Load
-  conversations**. It sends one bounded, indexed range query, cancels stale
-  browser requests, and does not retry a database deadline automatically. The
-  backend requires the explicit `manual: true` request marker, so an old browser
-  bundle cannot keep the former automatic polling behavior alive. Identical
-  server requests share one query, and a database deadline starts a one-minute
-  backoff for that same window so stale browser tabs cannot amplify the timeout.
-  Historical diarization metadata cursors stop after 5000 documents per job and
-  retain the five-second deadline.
+- The Map page reads conversations only from the durable
+  `location_conversation_projection`. It never falls back to scanning raw
+  `objects`; while the first generation is absent it returns a typed
+  `not-built`/`building` state. Summary requests use projection revision,
+  viewport, zoom, range, layers and principal in their bounded LRU/single-flight
+  cache key. The legacy manual `conversations-on-map` action remains only for
+  UAT parity and is no longer called by the Map page. Historical diarization
+  metadata cursors stop after 5000 documents per job and retain the five-second
+  deadline.
 
 Migration `0056_pipeline_dashboard_indexes.ts` adds the partial Jobs index used
 for recent completed transcription batch history and the compound Map index for
@@ -344,6 +344,48 @@ conversation time ranges. Migration `0063_jobs_dashboard_snapshots.ts` adds
 the dashboard cursor/rollup indexes, durable snapshot and campaign collections,
 the unique campaign/batch constraint, and the partial entity-typing marker
 index. Apply pending migrations before relying on the new query hints.
+
+#### Location Map projection rollout
+
+Migrations `0068_location_conversation_projection.ts` and
+`0069_location_route_projection.ts` create only derived collections, state and
+indexes. They do not scan conversations, reparse track files or rebuild data at
+startup. Canonical `objects`, `location_points`, source geometry and saved
+originals remain unchanged.
+
+For an existing database, use this controlled rollout:
+
+1. Recreate only the changed application services, restart nginx, and verify
+   their bind mounts and effective dev commands as described in **Readiness and
+   reload diagnostics**. Wait for frontend/backend `[READY]`, healthy app
+   containers and `/readiness = 200`; do not restart MongoDB or Redis.
+2. In **Jobs**, run **Location map index** with `mode: "all"` and
+   `reparseOriginals: true`. Reparse upgrades retained GPX `trkseg` and KML/gx
+   track boundaries before route projection. An unavailable or invalid original
+   is marked `routeBoundaryCompleteness: "incomplete"`; existing raw geometry is
+   retained.
+3. Treat conversations as ready only when
+   `location_conversation_projection_state._id = "current"` has `ready: true`,
+   `building: false`, an `activeGeneration` and a revision. During later
+   rebuilds, the previous generation stays readable with `stale: true` until the
+   atomic generation swap.
+4. Treat routes as ready only when
+   `location_route_projection_state._id = "current"` has `ready: true`,
+   `building: false`, `dirty: false` and an `activeGeneration`. Review pending
+   `location_route_conflicts`; a decision changes derived visibility and never
+   deletes the source geometry.
+5. Verify a representative far-zoom density request, a zoom-14+ route-detail
+   request and a coincident conversation cluster. Summary responses must be
+   bounded to at most 2000 clusters; route responses over 50,000 simplified
+   coordinates must return overview data with `detailLimited: true`, not a
+   silently truncated detail path.
+
+Conversation/object changes enter `location_conversation_projection_pending`;
+location segment changes request a coalesced full association rebuild.
+Track/geometry changes mark the route state dirty. The `locationMapProjection`
+watchdog drains both paths and has concurrency one. A failed rebuild leaves the
+prior published generation intact where one exists and records the error in the
+corresponding state document.
 
 Mongo's Compose health check is an exec-form, one-row native `mongostat` probe
 every 30 seconds, with 1.5-second connection/server/socket deadlines and a
