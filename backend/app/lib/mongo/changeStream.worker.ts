@@ -488,7 +488,12 @@ export async function startChangeStreamWorker(): Promise<void> {
               collectionName === "location_tracks" ||
               collectionName === "location_track_geometry"
             ) {
-              await db.collection("location_route_projection_state").updateOne(
+              await db.collection<{
+                _id: string;
+                dirty?: boolean;
+                status?: string;
+                sourceChangedAt?: Date;
+              }>("location_route_projection_state").updateOne(
                 { _id: "current" },
                 {
                   $set: {
