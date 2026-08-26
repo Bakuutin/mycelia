@@ -104,8 +104,9 @@ your own words.
 ### Hybrid Knowledge Search
 
 - Optional Qdrant-backed dense + sparse search across transcriptions, messages,
-  objects, and active media descriptions, with source/time filters and links
-  back to canonical Mycelia records.
+  objects, and active media descriptions. Typed date/source/message platform and
+  sender filters are revalidated against current MongoDB records; results are
+  capped per chat/recording/source and link back to canonical Mycelia records.
 - Independent projection lifecycle with durable checkpoints, source/chunk
   ledger, incremental change-stream updates, periodic reconciliation, and
   blue/green rebuilds that keep the previous active generation searchable.

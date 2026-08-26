@@ -56,6 +56,7 @@ export type RagScoreBreakdown = {
 };
 
 export type RagSearchResult = {
+  evidenceId?: string;
   pointId?: string;
   id?: string;
   score: number;
@@ -78,6 +79,10 @@ export type RagSearchResult = {
     title?: string;
     start?: string;
     end?: string;
+    platform?: string;
+    senderId?: string;
+    groupId: string;
+    sourceHash: string;
   };
   chunk?: {
     index: number;
@@ -103,6 +108,30 @@ export type RagSearchResponse = {
     lagSeconds: number | null;
     paused: boolean;
   };
+  revalidation: {
+    state: "verified" | "degraded";
+    checkedSources: number;
+    droppedCandidates: number;
+    staleCandidates: number;
+    filterRefinedCandidates: number;
+  };
+  selection: {
+    candidateCount: number;
+    verifiedCandidates: number;
+    returnedCount: number;
+    distinctSources: number;
+    distinctGroups: number;
+    maxPerSource: number;
+  };
+};
+
+export type RagExactSource = {
+  collection:
+    | "transcriptions"
+    | "messages"
+    | "objects"
+    | "media_visual_descriptions";
+  id: string;
 };
 
 export type RagSearchRequest = {
@@ -113,6 +142,10 @@ export type RagSearchRequest = {
   end?: string;
   limit: number;
   minScore?: number;
+  platforms?: string[];
+  senderIds?: string[];
+  sources?: RagExactSource[];
+  maxPerSource?: number;
 };
 
 export type RagProgress = {
@@ -277,6 +310,10 @@ export type RagChunk = {
     title?: string;
     start?: string;
     end?: string;
+    platform?: string;
+    senderId?: string;
+    groupId?: string;
+    sourceHash?: string;
   };
   chunk?: {
     index: number;
@@ -367,6 +404,10 @@ export const ragApi = {
       ...(request.end ? { end: request.end } : {}),
       limit: request.limit,
       ...(request.minScore != null ? { minScore: request.minScore } : {}),
+      ...(request.platforms?.length ? { platforms: request.platforms } : {}),
+      ...(request.senderIds?.length ? { senderIds: request.senderIds } : {}),
+      ...(request.sources?.length ? { sources: request.sources } : {}),
+      maxPerSource: request.maxPerSource ?? 2,
     }, signal),
 
   listChunks: (

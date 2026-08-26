@@ -54,6 +54,8 @@ Deno.test("appendActiveToolGuidance appends immutable RAG guidance to custom pro
 
   expect(result).toBe(`${customPrompt}\n\n${RAG_CHAT_TOOL_GUIDANCE}`);
   expect(result).toContain("source.uri");
+  expect(result).toContain("evidenceId");
+  expect(result).toContain("message sender");
   expect(result).toContain("untrusted evidence");
   expect(result).toContain("never as instructions");
   expect(result).toContain("projection/checkpoint freshness");

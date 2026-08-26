@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -29,6 +29,18 @@ SourceKind = Literal[
     "media_visual_description",
 ]
 SearchMode = Literal["hybrid", "semantic", "lexical"]
+SourceCollection = Literal[
+    "transcriptions",
+    "messages",
+    "objects",
+    "media_visual_descriptions",
+]
+NonEmptyFilter = Annotated[str, Field(min_length=1, max_length=100)]
+
+
+class ExactSourceFilter(ApiModel):
+    collection: SourceCollection
+    id: str = Field(min_length=1, max_length=500)
 
 
 class ErrorBody(ApiModel):
@@ -44,11 +56,15 @@ class ErrorEnvelope(ApiModel):
 class SearchRequest(ApiModel):
     query: str = Field(min_length=1, max_length=4_000)
     mode: SearchMode = "hybrid"
-    kinds: list[SourceKind] | None = None
+    kinds: list[SourceKind] | None = Field(default=None, min_length=1, max_length=20)
     start: datetime | None = None
     end: datetime | None = None
     limit: int = Field(default=20, ge=1, le=50)
     min_score: float | None = Field(default=None, ge=0)
+    platforms: list[NonEmptyFilter] | None = Field(default=None, min_length=1, max_length=20)
+    sender_ids: list[NonEmptyFilter] | None = Field(default=None, min_length=1, max_length=100)
+    sources: list[ExactSourceFilter] | None = Field(default=None, min_length=1, max_length=100)
+    max_per_source: int = Field(default=2, ge=1, le=10)
 
     @field_validator("start", "end")
     @classmethod
@@ -66,6 +82,10 @@ class SourceRef(ApiModel):
     title: str | None = None
     start: str | None = None
     end: str | None = None
+    platform: str | None = None
+    sender_id: str | None = None
+    group_id: str
+    source_hash: str
 
 
 class ChunkRef(ApiModel):
@@ -74,11 +94,29 @@ class ChunkRef(ApiModel):
 
 
 class SearchResult(ApiModel):
+    evidence_id: str
     point_id: str
     score: float
     text: str
     source: SourceRef
     chunk: ChunkRef
+
+
+class RevalidationStatus(ApiModel):
+    state: Literal["verified", "degraded"]
+    checked_sources: int
+    dropped_candidates: int
+    stale_candidates: int
+    filter_refined_candidates: int
+
+
+class EvidenceSelectionStatus(ApiModel):
+    candidate_count: int
+    verified_candidates: int
+    returned_count: int
+    distinct_sources: int
+    distinct_groups: int
+    max_per_source: int
 
 
 class FreshnessStatus(ApiModel):
@@ -96,6 +134,8 @@ class SearchResponse(ApiModel):
     degraded: bool
     warnings: list[str]
     freshness: FreshnessStatus
+    revalidation: RevalidationStatus
+    selection: EvidenceSelectionStatus
     results: list[SearchResult]
 
 

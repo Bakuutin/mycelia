@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from typing import Any, ClassVar, Protocol
 
+from bson import ObjectId
 from pymongo import MongoClient
 from pymongo.database import Database
 
@@ -21,6 +22,10 @@ class MongoSource(Protocol):
     ) -> Iterator[list[dict[str, Any]]]: ...
 
     def get_document(self, adapter: SourceAdapter, source_id: Any) -> dict[str, Any] | None: ...
+
+    def get_documents(
+        self, adapter: SourceAdapter, source_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]: ...
 
     def capture_database_resume_token(
         self, collections: Sequence[str], max_await_time_ms: int = 2_000
@@ -88,6 +93,24 @@ class PyMongoSource:
     def get_document(self, adapter: SourceAdapter, source_id: Any) -> dict[str, Any] | None:
         query = {"$and": [{"_id": source_id}, adapter.mongo_filter]}
         return self.db[adapter.collection].find_one(query, adapter.projection)
+
+    def get_documents(
+        self, adapter: SourceAdapter, source_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]:
+        if not source_ids:
+            return {}
+        candidates: list[Any] = list(dict.fromkeys(source_ids))
+        candidates.extend(ObjectId(value) for value in source_ids if ObjectId.is_valid(value))
+        query = {
+            "$and": [
+                {"_id": {"$in": candidates}},
+                adapter.mongo_filter,
+            ]
+        }
+        return {
+            str(document["_id"]): document
+            for document in self.db[adapter.collection].find(query, adapter.projection)
+        }
 
     def poll_database_change(
         self,

@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol
 SearchMode = Literal["hybrid", "semantic", "lexical"]
 ProjectionState = Literal["building", "catching_up", "ready", "superseded", "error"]
 OperationType = Literal["rebuild", "reconcile"]
+ExactSource = tuple[str, str]
 
 SOURCE_KINDS = (
     "transcription",
@@ -19,6 +20,7 @@ SOURCE_KINDS = (
     "object",
     "media_visual_description",
 )
+MAX_FILTER_TIMESTAMP = 253_402_300_799.0
 
 
 def utc_now() -> datetime:
@@ -70,6 +72,13 @@ class CanonicalSource:
             }
         )
 
+    @property
+    def evidence_group(self) -> str:
+        value = self.metadata.get("evidenceGroup")
+        if isinstance(value, str) and value:
+            return value
+        return f"{self.collection}:{self.source_id}"
+
 
 @dataclass(frozen=True, slots=True)
 class Chunk:
@@ -93,6 +102,8 @@ class Chunk:
         # faithful to Mongo and keep the missing boundary as null.
         effective_start = self.source.start or self.source.end
         effective_end = self.source.end or self.source.start
+        platform = self.source.metadata.get("platform")
+        sender_id = self.source.metadata.get("senderId")
         return {
             "projection_id": projection_id,
             "text": self.text,
@@ -104,11 +115,20 @@ class Chunk:
                 "title": self.source.title,
                 "start": start,
                 "end": end,
+                "platform": platform if isinstance(platform, str) and platform else None,
+                "sender_id": sender_id if isinstance(sender_id, str) and sender_id else None,
+                "group_id": self.source.evidence_group,
+                "source_hash": self.source.source_hash,
             },
             "chunk": {"index": self.index, "content_hash": self.content_hash},
             "source_key": f"{self.source.collection}:{self.source.source_id}",
+            "evidence_group": self.source.evidence_group,
             "start_ts": _timestamp(effective_start),
-            "end_ts": _timestamp(effective_end),
+            "end_ts": (
+                MAX_FILTER_TIMESTAMP
+                if self.source.metadata.get("timeOpenEnded") is True
+                else _timestamp(effective_end)
+            ),
         }
 
 
@@ -226,6 +246,9 @@ class VectorStore(Protocol):
         end: datetime | None,
         limit: int,
         min_score: float | None,
+        platforms: Sequence[str] | None = None,
+        sender_ids: Sequence[str] | None = None,
+        sources: Sequence[ExactSource] | None = None,
     ) -> list[SearchHit]: ...
 
     def list_chunks(

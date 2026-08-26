@@ -16,6 +16,7 @@ from .domain import (
     Chunk,
     Chunker,
     EmbeddingProvider,
+    ExactSource,
     SearchMode,
     VectorPoint,
     VectorStore,
@@ -43,6 +44,10 @@ class ProjectionNotReady(RuntimeError):
     pass
 
 
+class CanonicalSourceUnavailable(RuntimeError):
+    pass
+
+
 class IndexManager:
     def __init__(
         self,
@@ -61,6 +66,7 @@ class IndexManager:
         self.vectors = vectors
         self.embeddings = embeddings
         self.adapters = tuple(adapters)
+        self.adapters_by_collection = {adapter.collection: adapter for adapter in self.adapters}
         self.chunker = chunker or Chunker(settings.chunk_size, settings.chunk_overlap)
         self._run_gate = asyncio.Event()
         self._run_gate.set()
@@ -857,6 +863,10 @@ class IndexManager:
         end: datetime | None,
         limit: int,
         min_score: float | None,
+        platforms: Sequence[str] | None = None,
+        sender_ids: Sequence[str] | None = None,
+        sources: Sequence[ExactSource] | None = None,
+        max_per_source: int = 2,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         projection = self.state.active_projection()
@@ -871,6 +881,10 @@ class IndexManager:
             dense = (await asyncio.to_thread(self.embeddings.embed_dense, [query]))[0]
         if mode in {"hybrid", "lexical"}:
             sparse = (await asyncio.to_thread(self.embeddings.embed_sparse, [query]))[0]
+        # Fetch enough candidates for per-context diversity to survive a
+        # high-scoring conversation that contains many individually relevant
+        # messages. The public result limit remains independently bounded.
+        candidate_limit = min(250, max(50, limit * 8))
         hits = await asyncio.to_thread(
             self.vectors.search,
             projection["collectionName"],
@@ -880,10 +894,47 @@ class IndexManager:
             kinds,
             start,
             end,
-            limit,
+            candidate_limit,
             min_score,
+            platforms,
+            sender_ids,
+            sources,
         )
+        try:
+            (
+                verified,
+                checked_sources,
+                stale_candidates,
+                filter_refined_candidates,
+            ) = await self._revalidate_hits(
+                hits,
+                kinds=kinds,
+                start=start,
+                end=end,
+                platforms=platforms,
+                sender_ids=sender_ids,
+                sources=sources,
+            )
+        except Exception as error:
+            raise CanonicalSourceUnavailable(
+                f"canonical MongoDB evidence revalidation failed: {error}"
+            ) from error
+        selected: list[tuple[Any, Any, Chunk]] = []
+        group_counts: dict[str, int] = {}
+        for hit, source, chunk in verified:
+            count = group_counts.get(source.evidence_group, 0)
+            if count >= max_per_source:
+                continue
+            group_counts[source.evidence_group] = count + 1
+            selected.append((hit, source, chunk))
+            if len(selected) >= limit:
+                break
         warnings = self._warnings()
+        if stale_candidates:
+            warnings.append(
+                f"canonical revalidation removed {stale_candidates} stale or mismatched "
+                "vector candidate(s)"
+            )
         lifecycle_state = self.state.get_meta("state", "empty")
         if lifecycle_state in {"degraded", "error"}:
             latest = self.state.latest_operation()
@@ -907,8 +958,192 @@ class IndexManager:
                 "lagSeconds": lag_seconds,
                 "paused": self.state.paused,
             },
-            "results": [self._search_result(hit, include_score=True) for hit in hits],
+            "revalidation": {
+                "state": "degraded" if stale_candidates else "verified",
+                "checkedSources": checked_sources,
+                "droppedCandidates": stale_candidates + filter_refined_candidates,
+                "staleCandidates": stale_candidates,
+                "filterRefinedCandidates": filter_refined_candidates,
+            },
+            "selection": {
+                "candidateCount": len(hits),
+                "verifiedCandidates": len(verified),
+                "returnedCount": len(selected),
+                "distinctSources": len(
+                    {(source.collection, source.source_id) for _, source, _chunk in selected}
+                ),
+                "distinctGroups": len({source.evidence_group for _, source, _chunk in selected}),
+                "maxPerSource": max_per_source,
+            },
+            "results": [
+                self._search_result(
+                    hit,
+                    include_score=True,
+                    projection_id=projection["id"],
+                    canonical_source=source,
+                    canonical_chunk=chunk,
+                )
+                for hit, source, chunk in selected
+            ],
         }
+
+    async def _revalidate_hits(
+        self,
+        hits: Sequence[Any],
+        *,
+        kinds: Sequence[str] | None,
+        start: datetime | None,
+        end: datetime | None,
+        platforms: Sequence[str] | None,
+        sender_ids: Sequence[str] | None,
+        sources: Sequence[ExactSource] | None,
+    ) -> tuple[list[tuple[Any, Any, Chunk]], int, int, int]:
+        ordered = sorted(
+            hits,
+            key=lambda hit: (
+                -float(hit.score),
+                str(hit.payload.get("source", {}).get("collection", "")),
+                str(hit.payload.get("source", {}).get("id", "")),
+                int(hit.payload.get("chunk", {}).get("index", 0)),
+                hit.point_id,
+            ),
+        )
+        ids_by_collection: dict[str, list[str]] = {}
+        for hit in ordered:
+            source = hit.payload.get("source", {})
+            collection = str(source.get("collection", ""))
+            source_id = str(source.get("id", ""))
+            if collection and source_id:
+                ids_by_collection.setdefault(collection, []).append(source_id)
+
+        async def load(collection: str, source_ids: list[str]):
+            adapter = self.adapters_by_collection.get(collection)
+            if not adapter:
+                return collection, adapter, {}
+            documents = await asyncio.to_thread(
+                self.mongo.get_documents,
+                adapter,
+                list(dict.fromkeys(source_ids)),
+            )
+            return collection, adapter, documents
+
+        loaded = await asyncio.gather(
+            *(load(collection, source_ids) for collection, source_ids in ids_by_collection.items())
+        )
+        canonical: dict[tuple[str, str], tuple[Any, dict[str, Any], dict[int, Chunk]]] = {}
+        for collection, adapter, documents in loaded:
+            if not adapter:
+                continue
+            for source_id, document in documents.items():
+                value = adapter.adapt(document)
+                if value:
+                    chunks = {chunk.index: chunk for chunk in self.chunker.split(value)}
+                    canonical[(collection, source_id)] = (value, document, chunks)
+
+        exact_sources = set(sources or [])
+        verified: list[tuple[Any, Any, Chunk]] = []
+        stale_candidates = 0
+        filter_refined_candidates = 0
+        for hit in ordered:
+            payload_source = hit.payload.get("source", {})
+            key = (
+                str(payload_source.get("collection", "")),
+                str(payload_source.get("id", "")),
+            )
+            current = canonical.get(key)
+            if current is None:
+                stale_candidates += 1
+                continue
+            source, document, chunks = current
+            if payload_source.get("source_hash") != source.source_hash:
+                stale_candidates += 1
+                continue
+            payload_chunk = hit.payload.get("chunk", {})
+            try:
+                chunk_index = int(payload_chunk.get("index"))
+            except (TypeError, ValueError):
+                stale_candidates += 1
+                continue
+            chunk = chunks.get(chunk_index)
+            if chunk is None or payload_chunk.get("content_hash") != chunk.content_hash:
+                stale_candidates += 1
+                continue
+            if kinds and source.kind not in kinds:
+                stale_candidates += 1
+                continue
+            if exact_sources and key not in exact_sources:
+                stale_candidates += 1
+                continue
+            platform = source.metadata.get("platform")
+            if platforms and platform not in platforms:
+                stale_candidates += 1
+                continue
+            sender_id = source.metadata.get("senderId")
+            if sender_ids and sender_id not in sender_ids:
+                stale_candidates += 1
+                continue
+            if not self._canonical_time_matches(
+                source,
+                document,
+                start=start,
+                end=end,
+            ):
+                if source.collection == "objects":
+                    filter_refined_candidates += 1
+                else:
+                    stale_candidates += 1
+                continue
+            verified.append((hit, source, chunk))
+        return verified, len(canonical), stale_candidates, filter_refined_candidates
+
+    @staticmethod
+    def _canonical_time_matches(
+        source: Any,
+        document: dict[str, Any],
+        *,
+        start: datetime | None,
+        end: datetime | None,
+    ) -> bool:
+        if not start and not end:
+            return True
+        intervals: list[tuple[datetime | None, datetime | None]] = []
+        if source.collection == "objects":
+            for value in document.get("timeRanges", []):
+                if not isinstance(value, dict):
+                    continue
+                range_start = IndexManager._canonical_datetime(value.get("start"))
+                range_end = IndexManager._canonical_datetime(value.get("end"))
+                if range_start or range_end:
+                    intervals.append((range_start, range_end))
+        if not intervals:
+            intervals.append((source.start, source.end))
+        for interval_start, interval_end in intervals:
+            effective_start = interval_start or interval_end
+            effective_end = (
+                datetime.max.replace(tzinfo=UTC)
+                if source.collection == "objects"
+                and interval_start is not None
+                and interval_end is None
+                else (interval_end or interval_start)
+            )
+            if start and (effective_end is None or effective_end < start):
+                continue
+            if end and (effective_start is None or effective_start > end):
+                continue
+            return True
+        return False
+
+    @staticmethod
+    def _canonical_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+            except ValueError:
+                return None
+        return None
 
     async def list_chunks(
         self, *, kind: str | None, source_id: str | None, limit: int, offset: int
@@ -916,6 +1151,9 @@ class IndexManager:
         projection = self.state.active_projection()
         if not projection:
             raise ProjectionNotReady("no active projection; run rebuild first")
+        compatibility_error = self._refresh_compatibility(projection)
+        if compatibility_error:
+            raise ProjectionNotReady(compatibility_error)
         total, hits = await asyncio.to_thread(
             self.vectors.list_chunks,
             projection["collectionName"],
@@ -933,19 +1171,55 @@ class IndexManager:
         }
 
     @staticmethod
-    def _search_result(hit: Any, *, include_score: bool) -> dict[str, Any]:
+    def _search_result(
+        hit: Any,
+        *,
+        include_score: bool,
+        projection_id: str | None = None,
+        canonical_source: Any | None = None,
+        canonical_chunk: Chunk | None = None,
+    ) -> dict[str, Any]:
         payload = hit.payload
+        source = payload.get("source", {})
+        if canonical_source is not None:
+            source = {
+                "kind": canonical_source.kind,
+                "collection": canonical_source.collection,
+                "id": canonical_source.source_id,
+                "uri": canonical_source.uri,
+                "title": canonical_source.title,
+                "start": isoformat(canonical_source.start),
+                "end": isoformat(canonical_source.end),
+                "platform": canonical_source.metadata.get("platform"),
+                "senderId": canonical_source.metadata.get("senderId"),
+                "groupId": canonical_source.evidence_group,
+                "sourceHash": canonical_source.source_hash,
+            }
         result = {
             "pointId": hit.point_id,
-            "text": payload.get("text", ""),
-            "source": payload.get("source", {}),
+            "text": canonical_chunk.text if canonical_chunk else payload.get("text", ""),
+            "source": source,
             "chunk": {
-                "index": payload.get("chunk", {}).get("index", 0),
-                "contentHash": payload.get("chunk", {}).get("content_hash", ""),
+                "index": (
+                    canonical_chunk.index
+                    if canonical_chunk
+                    else payload.get("chunk", {}).get("index", 0)
+                ),
+                "contentHash": (
+                    canonical_chunk.content_hash
+                    if canonical_chunk
+                    else payload.get("chunk", {}).get("content_hash", "")
+                ),
             },
         }
         if include_score:
             result["score"] = hit.score
+            content_hash = result["chunk"]["contentHash"]
+            result["evidenceId"] = (
+                f"{projection_id}:{hit.point_id}:{content_hash[:12]}"
+                if projection_id
+                else hit.point_id
+            )
         return result
 
     def _warnings(self) -> list[str]:

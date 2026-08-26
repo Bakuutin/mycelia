@@ -13,6 +13,18 @@ const ragSourceKindSchema = z.enum([
   "media_visual_description",
 ]);
 
+const ragSourceCollectionSchema = z.enum([
+  "transcriptions",
+  "messages",
+  "objects",
+  "media_visual_descriptions",
+]);
+
+const ragExactSourceSchema = z.object({
+  collection: ragSourceCollectionSchema,
+  id: z.string().trim().min(1).max(500),
+}).strict();
+
 const ragSearchRequestSchema = z.object({
   action: z.literal("search").describe(
     "Search current Mycelia facts with hybrid dense, sparse, and lexical retrieval.",
@@ -22,7 +34,7 @@ const ragSearchRequestSchema = z.object({
   ),
   mode: z.enum(["hybrid", "semantic", "lexical"]).default("hybrid")
     .describe("Retrieval mode. Hybrid is the recommended default."),
-  kinds: z.array(ragSourceKindSchema).max(20).optional().describe(
+  kinds: z.array(ragSourceKindSchema).min(1).max(20).optional().describe(
     "Optional source kinds to include.",
   ),
   start: z.string().datetime({ offset: true }).optional().describe(
@@ -33,6 +45,22 @@ const ragSearchRequestSchema = z.object({
   ),
   limit: z.number().int().min(1).max(50).default(10),
   minScore: z.number().finite().nonnegative().optional(),
+  platforms: z.array(z.string().trim().min(1).max(100)).min(1).max(20)
+    .optional()
+    .describe(
+      "Exact canonical platform identifiers. Sources without a platform do not match.",
+    ),
+  senderIds: z.array(z.string().trim().min(1).max(100)).min(1).max(100)
+    .optional()
+    .describe(
+      "Exact canonical messages.senderId values. Non-message sources do not match.",
+    ),
+  sources: z.array(ragExactSourceSchema).min(1).max(100).optional().describe(
+    "Optional exact canonical collection/source ID allow-list.",
+  ),
+  maxPerSource: z.number().int().min(1).max(10).default(2).describe(
+    "Deterministic cap per conversation, recording, or canonical source.",
+  ),
 }).strict();
 
 const ragStatusRequestSchema = z.object({
@@ -100,6 +128,10 @@ const ragSourceReferenceSchema = z.object({
   title: z.string().nullish(),
   start: z.string().nullish(),
   end: z.string().nullish(),
+  platform: z.string().nullish(),
+  senderId: z.string().nullish(),
+  groupId: z.string(),
+  sourceHash: z.string(),
   ownerScope: ownerScopeSchema.optional(),
 }).passthrough();
 
@@ -116,6 +148,7 @@ const ragChunkSchema = z.object({
 }).passthrough();
 
 const ragSearchResultSchema = ragChunkSchema.extend({
+  evidenceId: z.string(),
   score: z.number(),
 }).passthrough();
 
@@ -131,6 +164,21 @@ export const ragSearchResponseSchema = z.object({
     checkpointAt: z.string().nullish(),
     lagSeconds: z.number().nonnegative().nullish(),
     paused: z.boolean(),
+  }).passthrough(),
+  revalidation: z.object({
+    state: z.enum(["verified", "degraded"]),
+    checkedSources: z.number().int().nonnegative(),
+    droppedCandidates: z.number().int().nonnegative(),
+    staleCandidates: z.number().int().nonnegative(),
+    filterRefinedCandidates: z.number().int().nonnegative(),
+  }).passthrough(),
+  selection: z.object({
+    candidateCount: z.number().int().nonnegative(),
+    verifiedCandidates: z.number().int().nonnegative(),
+    returnedCount: z.number().int().nonnegative(),
+    distinctSources: z.number().int().nonnegative(),
+    distinctGroups: z.number().int().nonnegative(),
+    maxPerSource: z.number().int().min(1).max(10),
   }).passthrough(),
   results: z.array(ragSearchResultSchema),
 }).passthrough();

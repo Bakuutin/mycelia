@@ -26,7 +26,12 @@ from .api_models import (
 )
 from .config import Settings, get_settings
 from .embeddings import FastEmbedProvider
-from .indexer import IndexManager, OperationConflict, ProjectionNotReady
+from .indexer import (
+    CanonicalSourceUnavailable,
+    IndexManager,
+    OperationConflict,
+    ProjectionNotReady,
+)
 from .mongo_source import PyMongoSource
 from .state import StateStore
 from .vector_store import QdrantVectorStore
@@ -127,6 +132,12 @@ def create_app(settings: Settings | None = None, manager: IndexManager | None = 
     async def not_ready_handler(_request: Request, error: ProjectionNotReady) -> JSONResponse:
         return error_response(503, "projection_not_ready", str(error))
 
+    @application.exception_handler(CanonicalSourceUnavailable)
+    async def source_unavailable_handler(
+        _request: Request, error: CanonicalSourceUnavailable
+    ) -> JSONResponse:
+        return error_response(503, "canonical_source_unavailable", str(error))
+
     @application.exception_handler(RequestValidationError)
     async def validation_handler(_request: Request, error: RequestValidationError) -> JSONResponse:
         details = [
@@ -186,6 +197,10 @@ def create_app(settings: Settings | None = None, manager: IndexManager | None = 
             end=payload.end,
             limit=payload.limit,
             min_score=payload.min_score,
+            platforms=payload.platforms,
+            sender_ids=payload.sender_ids,
+            sources=[(source.collection, source.id) for source in payload.sources or []],
+            max_per_source=payload.max_per_source,
         )
 
     @application.get(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -7,6 +8,9 @@ from typing import Any
 from urllib.parse import urlencode
 
 from .domain import CanonicalSource, fingerprint
+
+PAYLOAD_SCHEMA_VERSION = "rag-evidence-v2"
+OBJECT_ID_PATTERN = re.compile(r"^[a-fA-F0-9]{24}$")
 
 
 def _id(value: Any) -> str:
@@ -84,7 +88,10 @@ def adapt_transcription(doc: dict[str, Any]) -> CanonicalSource | None:
         start=start,
         end=end,
         updated_at=_datetime(doc.get("updatedAt")) or _datetime(doc.get("end")),
-        metadata={"original": _id(original) if original is not None else None},
+        metadata={
+            "original": _id(original) if original is not None else None,
+            "evidenceGroup": (f"recording:{_id(original)}" if original is not None else None),
+        },
     )
 
 
@@ -95,20 +102,37 @@ def adapt_message(doc: dict[str, Any]) -> CanonicalSource | None:
         return None
     source_id = _id(doc["_id"])
     timestamp = _datetime(doc.get("timestamp"))
-    platform = _text(doc.get("platform")) or "unknown"
+    platform = _text(doc.get("platform")) or None
     chat_id = _id(doc.get("chatId")) if doc.get("chatId") is not None else None
+    sender_id = _id(doc.get("senderId")) if doc.get("senderId") is not None else None
     route = "chat" if platform == "mycelia" else "messaging"
+    route_path = f"/{route}/{chat_id}" if chat_id else f"/{route}"
+    exact_message_query = (
+        urlencode({"messageId": source_id})
+        if chat_id and OBJECT_ID_PATTERN.fullmatch(chat_id)
+        else None
+    )
     return CanonicalSource(
         kind="message",
         collection="messages",
         source_id=source_id,
-        uri=f"/{route}/{chat_id}" if chat_id else f"/{route}",
+        uri=f"{route_path}?{exact_message_query}" if exact_message_query else route_path,
         text=text,
-        title=f"{platform} · {chat_id}" if chat_id else platform,
+        title=(
+            f"{platform} · {chat_id}"
+            if platform and chat_id
+            else (platform or (f"Message · {chat_id}" if chat_id else "Message"))
+        ),
         start=timestamp,
         end=timestamp,
         updated_at=_datetime(doc.get("updatedAt")) or timestamp,
-        metadata={"platform": platform, "chatId": chat_id, "role": raw.get("role")},
+        metadata={
+            "platform": platform,
+            "chatId": chat_id,
+            "role": raw.get("role"),
+            "senderId": sender_id,
+            "evidenceGroup": (f"chat:{platform or 'messages'}:{chat_id}" if chat_id else None),
+        },
     )
 
 
@@ -139,8 +163,27 @@ def adapt_object(doc: dict[str, Any]) -> CanonicalSource | None:
     if not text:
         return None
     ranges = doc.get("timeRanges") if isinstance(doc.get("timeRanges"), list) else []
+    canonical_ranges: list[dict[str, str | None]] = []
+    for item in ranges:
+        if not isinstance(item, dict):
+            continue
+        range_start = _datetime(item.get("start"))
+        range_end = _datetime(item.get("end"))
+        if range_start or range_end:
+            canonical_ranges.append(
+                {
+                    "start": range_start.isoformat() if range_start else None,
+                    "end": range_end.isoformat() if range_end else None,
+                }
+            )
     starts = [_datetime(item.get("start")) for item in ranges if isinstance(item, dict)]
     ends = [_datetime(item.get("end")) for item in ranges if isinstance(item, dict)]
+    open_ended = any(
+        isinstance(item, dict)
+        and _datetime(item.get("start")) is not None
+        and _datetime(item.get("end")) is None
+        for item in ranges
+    )
     starts = [value for value in starts if value]
     ends = [value for value in ends if value]
     kind = next((label for label, flag in OBJECT_TYPE_FLAGS if doc.get(flag) is True), "object")
@@ -153,9 +196,16 @@ def adapt_object(doc: dict[str, Any]) -> CanonicalSource | None:
         text=text,
         title=name or None,
         start=min(starts) if starts else _datetime(doc.get("createdAt")),
-        end=max(ends) if ends else None,
+        end=None if open_ended else (max(ends) if ends else None),
         updated_at=_datetime(doc.get("updatedAt")) or _datetime(doc.get("createdAt")),
-        metadata={"objectType": kind, "aliases": aliases},
+        metadata={
+            "objectType": kind,
+            "aliases": aliases,
+            "timeOpenEnded": open_ended,
+            # The aggregate start/end below are only a candidate envelope.
+            # Include every canonical interval in the advertised revision.
+            "timeRanges": canonical_ranges,
+        },
     )
 
 
@@ -211,6 +261,7 @@ SOURCE_ADAPTERS = (
             "updatedAt": 1,
             "platform": 1,
             "chatId": 1,
+            "senderId": 1,
         },
         mongo_filter={},
         adapt=adapt_message,
@@ -257,14 +308,17 @@ ADAPTER_BY_COLLECTION = {adapter.collection: adapter for adapter in SOURCE_ADAPT
 
 def source_schema_fingerprint(adapters: Iterable[SourceAdapter] = SOURCE_ADAPTERS) -> str:
     return fingerprint(
-        [
-            {
-                "kind": adapter.kind,
-                "collection": adapter.collection,
-                "version": adapter.schema_version,
-                "projection": adapter.projection,
-                "filter": adapter.mongo_filter,
-            }
-            for adapter in adapters
-        ]
+        {
+            "payloadSchemaVersion": PAYLOAD_SCHEMA_VERSION,
+            "adapters": [
+                {
+                    "kind": adapter.kind,
+                    "collection": adapter.collection,
+                    "version": adapter.schema_version,
+                    "projection": adapter.projection,
+                    "filter": adapter.mongo_filter,
+                }
+                for adapter in adapters
+            ],
+        }
     )

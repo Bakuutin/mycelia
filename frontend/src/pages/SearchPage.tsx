@@ -85,7 +85,17 @@ function resultSource(result: RagSearchResult) {
     occurredAt: result.source?.start ?? result.occurredAt ?? source?.start,
     end: result.source?.end ?? source?.end,
     representation: result.representation ?? source?.representation,
+    platform: result.source?.platform ?? source?.platform,
+    senderId: result.source?.senderId,
+    groupId: result.source?.groupId,
+    sourceHash: result.source?.sourceHash,
   };
+}
+
+function exactValues(value: string): string[] {
+  return [
+    ...new Set(value.split(",").map((item) => item.trim()).filter(Boolean)),
+  ];
 }
 
 function CanonicalLink({
@@ -145,6 +155,11 @@ function ResultCard(
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary">#{rank}</Badge>
               <Badge variant="outline">{source.kind}</Badge>
+              {source.platform && (
+                <Badge variant="outline" className="font-normal">
+                  {source.platform}
+                </Badge>
+              )}
               {source.representation && (
                 <Badge variant="outline" className="font-normal">
                   {source.representation}
@@ -191,6 +206,20 @@ function ResultCard(
               </span>
             ))}
             {result.generation && <span>generation: {result.generation}</span>}
+            {result.evidenceId && (
+              <span className="font-mono" title={result.evidenceId}>
+                evidence: {result.evidenceId}
+              </span>
+            )}
+            {source.groupId && <span>context: {source.groupId}</span>}
+            {source.senderId && (
+              <span className="font-mono">sender: {source.senderId}</span>
+            )}
+            {source.sourceHash && (
+              <span className="font-mono" title={source.sourceHash}>
+                source revision: {source.sourceHash.slice(0, 12)}
+              </span>
+            )}
           </div>
           {source.uri && (
             <CanonicalLink
@@ -211,6 +240,11 @@ export default function SearchPage() {
   const [kinds, setKinds] = useState<string[]>([]);
   const [range, setRange] = useState<DateRangeValue | undefined>();
   const [limit, setLimit] = useState("10");
+  const [platforms, setPlatforms] = useState("");
+  const [senderIds, setSenderIds] = useState("");
+  const [sourceCollection, setSourceCollection] = useState("messages");
+  const [sourceId, setSourceId] = useState("");
+  const [maxPerSource, setMaxPerSource] = useState("2");
   const [response, setResponse] = useState<RagSearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -251,6 +285,19 @@ export default function SearchPage() {
         start: range?.start.toISOString(),
         end: range?.end?.toISOString(),
         limit: Number(limit),
+        platforms: exactValues(platforms),
+        senderIds: exactValues(senderIds),
+        sources: sourceId.trim()
+          ? [{
+            collection: sourceCollection as
+              | "transcriptions"
+              | "messages"
+              | "objects"
+              | "media_visual_descriptions",
+            id: sourceId.trim(),
+          }]
+          : undefined,
+        maxPerSource: Number(maxPerSource),
       }, controller.signal);
       setResponse(next);
     } catch (caught) {
@@ -395,6 +442,95 @@ export default function SearchPage() {
                   </Select>
                 </div>
               </div>
+              <div className="mt-5 grid gap-5 border-t pt-5 lg:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="rag-platforms">Exact platforms</Label>
+                  <Input
+                    id="rag-platforms"
+                    value={platforms}
+                    onChange={(event) => setPlatforms(event.target.value)}
+                    placeholder="mycelia, telegram"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Comma-separated canonical message platform IDs.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rag-sender-ids">
+                    Exact message sender IDs
+                  </Label>
+                  <Input
+                    id="rag-sender-ids"
+                    value={senderIds}
+                    onChange={(event) => setSenderIds(event.target.value)}
+                    placeholder="Canonical messages.senderId values"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Comma-separated IDs; this is not a voice-profile filter.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-5 grid gap-5 lg:grid-cols-[11rem_1fr_10rem]">
+                <div className="space-y-2">
+                  <Label htmlFor="rag-source-collection">
+                    Exact source type
+                  </Label>
+                  <Select
+                    value={sourceCollection}
+                    onValueChange={setSourceCollection}
+                  >
+                    <SelectTrigger
+                      id="rag-source-collection"
+                      aria-label="Exact source type"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="transcriptions">
+                        Transcription
+                      </SelectItem>
+                      <SelectItem value="messages">Message</SelectItem>
+                      <SelectItem value="objects">Object</SelectItem>
+                      <SelectItem value="media_visual_descriptions">
+                        Media description
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rag-source-id">Exact source ID</Label>
+                  <Input
+                    id="rag-source-id"
+                    value={sourceId}
+                    onChange={(event) => setSourceId(event.target.value)}
+                    placeholder="Optional MongoDB source ID"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rag-source-cap">Evidence per context</Label>
+                  <Select value={maxPerSource} onValueChange={setMaxPerSource}>
+                    <SelectTrigger
+                      id="rag-source-cap"
+                      aria-label="Evidence per context"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[1, 2, 3, 5, 10].map((value) => (
+                        <SelectItem key={value} value={String(value)}>
+                          {value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Caps neighboring chunks per chat, recording, or source.
+                  </p>
+                </div>
+              </div>
             </div>
           </form>
         </CardContent>
@@ -449,6 +585,8 @@ export default function SearchPage() {
                 >
                   {actualMode} retrieval
                   {response.tookMs != null ? ` · ${response.tookMs} ms` : ""}
+                  {` · ${response.selection.distinctSources} sources`}
+                  {` · ${response.selection.distinctGroups} contexts`}
                 </p>
               </div>
               {(response.projectionId || response.projectionFingerprint) && (
@@ -480,6 +618,20 @@ export default function SearchPage() {
                         : " · lag unknown"}
                     </Badge>
                   )}
+                  <Badge
+                    variant={response.revalidation.state === "verified"
+                      ? "outline"
+                      : "destructive"}
+                    title={`${response.revalidation.checkedSources} canonical sources checked`}
+                  >
+                    Mongo {response.revalidation.state}
+                    {response.revalidation.staleCandidates > 0
+                      ? ` · ${response.revalidation.staleCandidates} stale dropped`
+                      : ""}
+                    {response.revalidation.filterRefinedCandidates > 0
+                      ? ` · ${response.revalidation.filterRefinedCandidates} exact-filter refined`
+                      : ""}
+                  </Badge>
                 </div>
               )}
             </div>

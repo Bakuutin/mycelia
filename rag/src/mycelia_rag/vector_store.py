@@ -6,7 +6,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
-from .domain import SearchHit, SearchMode, SparseEmbedding, VectorPoint
+from .domain import ExactSource, SearchHit, SearchMode, SparseEmbedding, VectorPoint
 
 DENSE_VECTOR = "dense"
 SPARSE_VECTOR = "bm25"
@@ -46,7 +46,10 @@ class QdrantVectorStore:
             ("source.kind", models.PayloadSchemaType.KEYWORD),
             ("source.collection", models.PayloadSchemaType.KEYWORD),
             ("source.id", models.PayloadSchemaType.KEYWORD),
+            ("source.platform", models.PayloadSchemaType.KEYWORD),
+            ("source.sender_id", models.PayloadSchemaType.KEYWORD),
             ("source_key", models.PayloadSchemaType.KEYWORD),
+            ("evidence_group", models.PayloadSchemaType.KEYWORD),
             ("start_ts", models.PayloadSchemaType.FLOAT),
             ("end_ts", models.PayloadSchemaType.FLOAT),
         ):
@@ -148,6 +151,9 @@ class QdrantVectorStore:
         end: datetime | None,
         *,
         source_id: str | None = None,
+        platforms: Sequence[str] | None = None,
+        sender_ids: Sequence[str] | None = None,
+        sources: Sequence[ExactSource] | None = None,
     ) -> models.Filter | None:
         must: list[models.Condition] = []
         if kinds:
@@ -157,6 +163,27 @@ class QdrantVectorStore:
         if source_id:
             must.append(
                 models.FieldCondition(key="source.id", match=models.MatchValue(value=source_id))
+            )
+        if platforms:
+            must.append(
+                models.FieldCondition(
+                    key="source.platform", match=models.MatchAny(any=list(platforms))
+                )
+            )
+        if sender_ids:
+            must.append(
+                models.FieldCondition(
+                    key="source.sender_id", match=models.MatchAny(any=list(sender_ids))
+                )
+            )
+        if sources:
+            must.append(
+                models.FieldCondition(
+                    key="source_key",
+                    match=models.MatchAny(
+                        any=[f"{collection}:{source_id}" for collection, source_id in sources]
+                    ),
+                )
             )
         # Overlap semantics: source.end >= requested start, source.start <= requested end.
         if start:
@@ -182,8 +209,18 @@ class QdrantVectorStore:
         end: datetime | None,
         limit: int,
         min_score: float | None,
+        platforms: Sequence[str] | None = None,
+        sender_ids: Sequence[str] | None = None,
+        sources: Sequence[ExactSource] | None = None,
     ) -> list[SearchHit]:
-        query_filter = self._filter(kinds, start, end)
+        query_filter = self._filter(
+            kinds,
+            start,
+            end,
+            platforms=platforms,
+            sender_ids=sender_ids,
+            sources=sources,
+        )
         common = {
             "collection_name": collection_name,
             "query_filter": query_filter,

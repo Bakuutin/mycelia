@@ -14,7 +14,11 @@ end-user/database authorization are deliberately separate later integrations.
   `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384 dimensions);
 - sparse: local `Qdrant/bm25` with Qdrant IDF modifier;
 - hybrid: Qdrant prefetch for both named vectors plus reciprocal-rank fusion (RRF);
-- hard payload filters: source kind and overlapping start/end time range;
+- hard payload filters: source kind, overlapping start/end time range, exact
+  `(collection, source ID)`, message platform, and canonical message sender ID;
+- evidence verification: over-fetch from Qdrant, bulk re-read matching MongoDB
+  documents, re-chunk canonical text, verify source/content revisions and
+  filters, then cap results per chat, recording, or canonical source;
 - sources: `transcriptions`, `messages`, `objects`, and active
   `media_visual_descriptions`.
 
@@ -46,8 +50,10 @@ repairs missed updates and deletes. If MongoDB reports lost change-stream histor
 the service exposes a degraded state, clears the unusable token, and schedules a
 reconcile instead of silently skipping data.
 
-The source Mongo deployment must be a replica set for change streams. Search remains
-available from the active Qdrant projection if MongoDB is temporarily unavailable.
+The source Mongo deployment must be a replica set for change streams. Qdrant
+remains intact if MongoDB is temporarily unavailable, but `/v1/search` fails
+closed with `canonical_source_unavailable`: an unverified vector payload is not
+returned as canonical evidence.
 
 At startup, queued/running operations left by a stopped process are marked failed,
 non-active `building`/`catching_up` generations are marked error, and the Qdrant
@@ -138,9 +144,9 @@ this module.
 
 `/health` confirms only that the API process is serving. `/ready` confirms that the
 SQLite active pointer refers to an existing compatible Qdrant collection, repairs
-its alias, and enforces the optional read-only-principal gate. With that gate off,
-MongoDB/change-stream failures degrade freshness but do not make an already-built
-search projection unavailable.
+its alias, and enforces the optional read-only-principal gate. An active projection
+can remain ready while indexing is degraded, but evidence search still requires a
+canonical MongoDB re-read and fails closed if that verification is unavailable.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -174,13 +180,26 @@ curl -s -X POST http://127.0.0.1:48091/v1/search \
   -d '{
     "query":"где обсуждали срок проекта",
     "mode":"hybrid",
-    "kinds":["transcription","message"],
+    "kinds":["message"],
     "start":"2026-01-01T00:00:00Z",
+    "platforms":["mycelia","telegram"],
+    "senderIds":["<canonical messages.senderId>"],
+    "sources":[{"collection":"messages","id":"<message id>"}],
+    "maxPerSource":2,
     "limit":10
   }'
 ```
 
-Every search response includes `freshness` with lifecycle state, pause flag,
+Every result has an `evidenceId`, canonical source/group identity, source revision,
+content hash, exact time/link for messages/transcriptions, and message
+platform/sender when applicable. Message links carry the exact `messageId`; the
+Mycelia UI loads a bounded context and fails visibly if that raw message is no
+longer available. The top-level `revalidation` reports how many current MongoDB
+sources were checked, how many stale/deleted/mismatched vector candidates were
+removed, and how many fresh candidates were excluded by exact canonical interval
+refinement. `selection` reports candidate/verified/returned counts and distinct
+canonical sources and contexts, making the diversity cap inspectable. Every
+search response also includes `freshness` with lifecycle state, pause flag,
 `checkpointState`, last durable database checkpoint time, and observed
 change-stream lag. With `RAG_ENABLE_BACKGROUND=false`, checkpoint state is
 `disabled`, lag is null, and retrieval is explicitly degraded as a manual snapshot.
@@ -240,5 +259,9 @@ show which Mycelia projection is active and how current it is.
 - Quality acceptance against a representative 150–300 query multilingual dataset is
   a later deployment gate. Unit tests use deterministic fakes and never download
   models or require Docker.
+- Voice speaker filtering is not yet exposed. Canonical voice identity lives on
+  timed diarization segments plus manual annotations, so it requires a
+  speaker-aligned transcript evidence projection; attributing a whole transcription
+  to one profile would be incorrect.
 - Mem0, graph RAG, rerankers, ACL filtering, read-only database-user migration, and
   per-user authorization are separate follow-up integrations.

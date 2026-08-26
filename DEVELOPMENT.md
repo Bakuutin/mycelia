@@ -262,7 +262,9 @@ curl -fsS http://127.0.0.1:48091/v1/status
 projection/alias and enforces the optional read-only-principal gate;
 `/v1/status` is the authoritative view of build/catch-up/active and checkpoint
 freshness state. A failed blue/green rebuild must leave the previous active
-collection searchable. The complete lifecycle, connection modes, control
+collection intact. Evidence search separately bulk-revalidates candidate source
+revisions and filters against MongoDB and therefore fails closed if that
+canonical read is unavailable. The complete lifecycle, connection modes, control
 semantics, and deferred authorization/read-only-user migration are documented in
 [docs/RAG_QDRANT.md](docs/RAG_QDRANT.md).
 

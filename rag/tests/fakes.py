@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
-from mycelia_rag.domain import SearchHit, SearchMode, SparseEmbedding, VectorPoint
+from mycelia_rag.domain import ExactSource, SearchHit, SearchMode, SparseEmbedding, VectorPoint
 from mycelia_rag.sources import SourceAdapter
 
 
@@ -43,6 +43,16 @@ class FakeMongoSource:
             if value["_id"] == source_id or str(value["_id"]) == str(source_id):
                 return deepcopy(value)
         return None
+
+    def get_documents(
+        self, adapter: SourceAdapter, source_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]:
+        requested = set(source_ids)
+        return {
+            str(value["_id"]): deepcopy(value)
+            for value in self._matching(adapter)
+            if str(value["_id"]) in requested
+        }
 
     def poll_database_change(
         self,
@@ -159,9 +169,25 @@ class FakeVectorStore:
         kinds: Sequence[str] | None,
         start: datetime | None,
         end: datetime | None,
+        platforms: Sequence[str] | None = None,
+        sender_ids: Sequence[str] | None = None,
+        sources: Sequence[ExactSource] | None = None,
     ) -> bool:
         payload = point.payload
         if kinds and payload["source"]["kind"] not in kinds:
+            return False
+        if platforms and payload["source"].get("platform") not in platforms:
+            return False
+        if sender_ids and payload["source"].get("sender_id") not in sender_ids:
+            return False
+        if (
+            sources
+            and (
+                payload["source"]["collection"],
+                payload["source"]["id"],
+            )
+            not in sources
+        ):
             return False
         if start:
             start_value = start if start.tzinfo else start.replace(tzinfo=UTC)
@@ -184,11 +210,14 @@ class FakeVectorStore:
         end: datetime | None,
         limit: int,
         min_score: float | None,
+        platforms: Sequence[str] | None = None,
+        sender_ids: Sequence[str] | None = None,
+        sources: Sequence[ExactSource] | None = None,
     ) -> list[SearchHit]:
         points = [
             point
             for point in self.collections[collection_name].values()
-            if self._matches(point, kinds, start, end)
+            if self._matches(point, kinds, start, end, platforms, sender_ids, sources)
         ]
         dense_scores = {
             point.point_id: self._dot(dense, point.dense) if dense is not None else 0.0

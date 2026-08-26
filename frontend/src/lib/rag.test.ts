@@ -5,6 +5,9 @@ import { ragCanonicalRoute } from "./rag";
 describe("ragCanonicalRoute", () => {
   it("keeps native routes and safely maps legacy Mycelia provenance URIs", () => {
     expect(ragCanonicalRoute("/objects/o1")).toBe("/objects/o1");
+    expect(
+      ragCanonicalRoute("/messaging/c1?messageId=m1"),
+    ).toBe("/messaging/c1?messageId=m1");
     expect(ragCanonicalRoute("mycelia://objects/o1")).toBe("/objects/o1");
     expect(ragCanonicalRoute("mycelia://media/assets/a1")).toBe(
       "/media?assetId=a1",

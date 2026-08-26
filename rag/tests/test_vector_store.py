@@ -43,6 +43,8 @@ def test_real_qdrant_client_hybrid_and_filter_contract(tmp_path, monkeypatch) ->
                         "title": None,
                         "start": start.isoformat(),
                         "end": start.isoformat(),
+                        "platform": "telegram",
+                        "sender_id": "person-1",
                     },
                     "chunk": {"index": 0, "content_hash": "hash"},
                     "source_key": "messages:m1",
@@ -63,8 +65,27 @@ def test_real_qdrant_client_hybrid_and_filter_contract(tmp_path, monkeypatch) ->
         datetime(2026, 1, 2, tzinfo=UTC),
         10,
         None,
+        ["telegram"],
+        ["person-1"],
+        [("messages", "m1")],
     )
     assert [hit.payload["source"]["id"] for hit in hits] == ["m1"]
     total, chunks = store.list_chunks("contract", "message", "m1", 10, 0)
     assert total == 1
     assert chunks[0].payload["chunk"]["content_hash"] == "hash"
+
+    excluded = store.search(
+        "contract",
+        "lexical",
+        None,
+        SparseEmbedding([7], [1.0]),
+        ["message"],
+        None,
+        None,
+        10,
+        None,
+        ["mycelia"],
+        None,
+        None,
+    )
+    assert excluded == []

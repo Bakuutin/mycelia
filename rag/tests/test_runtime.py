@@ -9,7 +9,11 @@ import pytest
 
 from mycelia_rag.config import Settings
 from mycelia_rag.embeddings import DeterministicEmbeddingProvider
-from mycelia_rag.indexer import IndexManager, ProjectionNotReady
+from mycelia_rag.indexer import (
+    CanonicalSourceUnavailable,
+    IndexManager,
+    ProjectionNotReady,
+)
 from mycelia_rag.state import StateStore
 
 from .fakes import FakeMongoSource, FakeVectorStore
@@ -192,6 +196,184 @@ async def test_lexical_exact_term_and_hard_kind_date_filters(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_message_platform_sender_and_exact_source_are_canonical_filters(tmp_path) -> None:
+    docs = documents()
+    docs["messages"] = [
+        {
+            "_id": "m1",
+            "text": "shared launch evidence",
+            "platform": "mycelia",
+            "senderId": "person-me",
+            "chatId": "chat-1",
+            "timestamp": datetime(2026, 5, 10, tzinfo=UTC),
+        },
+        {
+            "_id": "m2",
+            "text": "shared launch evidence",
+            "platform": "telegram",
+            "senderId": "person-other",
+            "chatId": "chat-2",
+            "timestamp": datetime(2026, 5, 11, tzinfo=UTC),
+        },
+    ]
+    runtime, _mongo, _vectors = manager(tmp_path, docs)
+    await runtime.start()
+    await rebuild(runtime)
+
+    response = await runtime.search(
+        query="shared launch evidence",
+        mode="lexical",
+        kinds=["message"],
+        start=datetime(2026, 5, 1, tzinfo=UTC),
+        end=datetime(2026, 5, 31, tzinfo=UTC),
+        limit=10,
+        min_score=0.1,
+        platforms=["telegram"],
+        sender_ids=["person-other"],
+        sources=[("messages", "m2")],
+    )
+
+    assert [item["source"]["id"] for item in response["results"]] == ["m2"]
+    evidence = response["results"][0]
+    assert evidence["source"]["platform"] == "telegram"
+    assert evidence["source"]["senderId"] == "person-other"
+    assert evidence["source"]["groupId"] == "chat:telegram:chat-2"
+    assert evidence["source"]["sourceHash"]
+    assert evidence["evidenceId"].startswith(response["projectionId"])
+    assert response["revalidation"] == {
+        "state": "verified",
+        "checkedSources": 1,
+        "droppedCandidates": 0,
+        "staleCandidates": 0,
+        "filterRefinedCandidates": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_drops_stale_qdrant_payload_after_mongo_revalidation(tmp_path) -> None:
+    runtime, mongo, vectors = manager(tmp_path)
+    await runtime.start()
+    await rebuild(runtime)
+
+    collection = runtime.state.active_projection()["collectionName"]
+    message_point = next(
+        point
+        for point in vectors.collections[collection].values()
+        if point.payload["source"]["id"] == "m1"
+    )
+    message_point.payload["text"] = "forged vector payload"
+    verified = await runtime.search(
+        query="deadline moved Monday",
+        mode="lexical",
+        kinds=["message"],
+        start=None,
+        end=None,
+        limit=5,
+        min_score=0.1,
+    )
+    assert verified["results"][0]["text"] == "The launch deadline moved to Monday"
+
+    mongo.replace(
+        "messages",
+        "m1",
+        {
+            "_id": "m1",
+            "text": "The canonical message changed before the projection caught up",
+            "platform": "telegram",
+            "senderId": "person-new",
+            "chatId": "chat-9",
+            "timestamp": datetime(2026, 2, 10, tzinfo=UTC),
+        },
+    )
+    response = await runtime.search(
+        query="deadline moved Monday",
+        mode="lexical",
+        kinds=["message"],
+        start=None,
+        end=None,
+        limit=5,
+        min_score=0.1,
+    )
+
+    assert response["results"] == []
+    assert response["degraded"] is True
+    assert response["revalidation"]["state"] == "degraded"
+    assert response["revalidation"]["droppedCandidates"] == 1
+    assert response["revalidation"]["staleCandidates"] == 1
+    assert response["revalidation"]["filterRefinedCandidates"] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_diversifies_evidence_by_chat_or_recording(tmp_path) -> None:
+    docs = documents()
+    docs["messages"] = [
+        {
+            "_id": f"m{index}",
+            "text": "shared evidence",
+            "platform": "telegram",
+            "senderId": "person-1",
+            "chatId": chat_id,
+            "timestamp": datetime(2026, 5, 10 + index, tzinfo=UTC),
+        }
+        for index, chat_id in enumerate(
+            ["chat-a", "chat-a", "chat-a", "chat-a", "chat-b", "chat-c"],
+            start=1,
+        )
+    ]
+    runtime, _mongo, _vectors = manager(tmp_path, docs)
+    await runtime.start()
+    await rebuild(runtime)
+
+    response = await runtime.search(
+        query="shared evidence",
+        mode="lexical",
+        kinds=["message"],
+        start=None,
+        end=None,
+        limit=3,
+        min_score=0.1,
+        max_per_source=1,
+    )
+
+    groups = [item["source"]["groupId"] for item in response["results"]]
+    assert groups == [
+        "chat:telegram:chat-a",
+        "chat:telegram:chat-b",
+        "chat:telegram:chat-c",
+    ]
+    assert response["selection"] == {
+        "candidateCount": 6,
+        "verifiedCandidates": 6,
+        "returnedCount": 3,
+        "distinctSources": 3,
+        "distinctGroups": 3,
+        "maxPerSource": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_fails_closed_when_canonical_revalidation_is_unavailable(tmp_path) -> None:
+    runtime, mongo, _vectors = manager(tmp_path)
+    await runtime.start()
+    await rebuild(runtime)
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("MongoDB unavailable")
+
+    mongo.get_documents = unavailable  # type: ignore[method-assign]
+    with pytest.raises(CanonicalSourceUnavailable, match="MongoDB unavailable"):
+        await runtime.search(
+            query="deadline",
+            mode="lexical",
+            kinds=["message"],
+            start=None,
+            end=None,
+            limit=5,
+            min_score=0.1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_date_filter_treats_single_boundary_source_as_point_in_time(tmp_path) -> None:
     runtime, _mongo, _vectors = manager(tmp_path)
     await runtime.start()
@@ -218,6 +400,63 @@ async def test_date_filter_treats_single_boundary_source_as_point_in_time(tmp_pa
 
     assert [item["source"]["id"] for item in inside["results"]] == ["o1"]
     assert before["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_object_date_revalidation_does_not_fill_time_range_gaps(tmp_path) -> None:
+    docs = documents()
+    docs["objects"][0]["timeRanges"] = [
+        {
+            "start": datetime(2026, 1, 1, tzinfo=UTC),
+            "end": datetime(2026, 1, 2, tzinfo=UTC),
+        },
+        {
+            "start": datetime(2026, 3, 1, tzinfo=UTC),
+            "end": datetime(2026, 3, 2, tzinfo=UTC),
+        },
+    ]
+    runtime, _mongo, _vectors = manager(tmp_path, docs)
+    await runtime.start()
+    await rebuild(runtime)
+
+    response = await runtime.search(
+        query="Mycelia",
+        mode="lexical",
+        kinds=["object"],
+        start=datetime(2026, 2, 1, tzinfo=UTC),
+        end=datetime(2026, 2, 28, tzinfo=UTC),
+        limit=5,
+        min_score=0.1,
+    )
+
+    assert response["results"] == []
+    assert response["revalidation"]["droppedCandidates"] == 1
+    assert response["revalidation"]["staleCandidates"] == 0
+    assert response["revalidation"]["filterRefinedCandidates"] == 1
+    assert response["revalidation"]["state"] == "verified"
+    assert response["degraded"] is True  # background checkpoints are disabled in tests
+    assert not any("stale or mismatched" in value for value in response["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_object_open_ended_time_range_remains_searchable_later(tmp_path) -> None:
+    docs = documents()
+    docs["objects"][0]["timeRanges"] = [{"start": datetime(2026, 1, 1, tzinfo=UTC)}]
+    runtime, _mongo, _vectors = manager(tmp_path, docs)
+    await runtime.start()
+    await rebuild(runtime)
+
+    response = await runtime.search(
+        query="Mycelia",
+        mode="lexical",
+        kinds=["object"],
+        start=datetime(2026, 6, 1, tzinfo=UTC),
+        end=datetime(2026, 6, 30, tzinfo=UTC),
+        limit=5,
+        min_score=0.1,
+    )
+
+    assert [item["source"]["id"] for item in response["results"]] == ["o1"]
 
 
 @pytest.mark.asyncio

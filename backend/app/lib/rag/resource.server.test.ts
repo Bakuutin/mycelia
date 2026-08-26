@@ -56,7 +56,23 @@ Deno.test("RagResource proxies search with bearer auth and validates results", a
           lagSeconds: 0.4,
           paused: false,
         },
+        revalidation: {
+          state: "verified",
+          checkedSources: 1,
+          droppedCandidates: 0,
+          staleCandidates: 0,
+          filterRefinedCandidates: 0,
+        },
+        selection: {
+          candidateCount: 1,
+          verifiedCandidates: 1,
+          returnedCount: 1,
+          distinctSources: 1,
+          distinctGroups: 1,
+          maxPerSource: 3,
+        },
         results: [{
+          evidenceId: "projection-a:point-a:sha256-a",
           pointId: "point-a",
           score: 0.91,
           text: "The current fact",
@@ -68,6 +84,9 @@ Deno.test("RagResource proxies search with bearer auth and validates results", a
             title: null,
             start: null,
             end: null,
+            platform: null,
+            groupId: "objects:object-a",
+            sourceHash: "source-hash-a",
           },
           chunk: { index: 0, contentHash: "sha256:a" },
         }],
@@ -79,7 +98,11 @@ Deno.test("RagResource proxies search with bearer auth and validates results", a
     action: "search",
     query: "current fact",
     kinds: ["object"],
+    platforms: ["mycelia"],
+    senderIds: ["sender-a"],
+    sources: [{ collection: "objects", id: "object-a" }],
     limit: 7,
+    maxPerSource: 3,
   });
 
   expect(capturedUrl).toBe("http://rag.example:48091/v1/search");
@@ -91,7 +114,11 @@ Deno.test("RagResource proxies search with bearer auth and validates results", a
     query: "current fact",
     mode: "hybrid",
     kinds: ["object"],
+    platforms: ["mycelia"],
+    senderIds: ["sender-a"],
+    sources: [{ collection: "objects", id: "object-a" }],
     limit: 7,
+    maxPerSource: 3,
   });
   expect(result).toMatchObject({
     projectionId: "projection-a",
@@ -312,6 +339,10 @@ Deno.test("RagResource proxies status and chunk pagination contracts", async () 
             collection: "messages",
             id: "message-b",
             uri: "mycelia://messages/message-b",
+            platform: "telegram",
+            senderId: "sender-b",
+            groupId: "chat:telegram:chat-b",
+            sourceHash: "source-hash-b",
           },
           chunk: { index: 1, contentHash: "sha256:b" },
         }],
@@ -424,4 +455,17 @@ Deno.test("RagResource request schema rejects client-supplied ownerScope", () =>
       ownerScope: { ownerId: "spoofed" },
     }).success,
   ).toBe(false);
+});
+
+Deno.test("RagResource rejects empty exact-filter allow-lists", () => {
+  for (const field of ["kinds", "platforms", "senderIds", "sources"] as const) {
+    expect(
+      ragRequestSchema.safeParse({
+        action: "search",
+        query: "fact",
+        [field]: [],
+      })
+        .success,
+    ).toBe(false);
+  }
 });

@@ -68,6 +68,16 @@ def test_api_rebuild_search_status_and_chunks_contract(tmp_path) -> None:
         assert result.json()["freshness"]["checkpointAt"] is not None
         assert result.json()["freshness"]["checkpointState"] == "disabled"
         assert result.json()["freshness"]["lagSeconds"] is None
+        assert result.json()["revalidation"] == {
+            "state": "verified",
+            "checkedSources": 3,
+            "droppedCandidates": 0,
+            "staleCandidates": 0,
+            "filterRefinedCandidates": 0,
+        }
+        assert result.json()["results"][0]["evidenceId"]
+        assert result.json()["results"][0]["source"]["sourceHash"]
+        assert result.json()["selection"]["returnedCount"] == len(result.json()["results"])
         chunks = client.get("/v1/chunks", params={"kind": "message", "limit": 50})
         assert chunks.status_code == 200
         assert chunks.json()["items"][0]["chunk"]["contentHash"]
@@ -92,3 +102,11 @@ def test_validation_and_auth_use_stable_error_envelope(tmp_path) -> None:
         )
         assert invalid.status_code == 422
         assert invalid.json()["error"]["code"] == "validation_error"
+        for field in ("kinds", "platforms", "senderIds", "sources"):
+            empty_allow_list = client.post(
+                "/v1/search",
+                headers={"Authorization": "Bearer secret"},
+                json={"query": "fact", field: []},
+            )
+            assert empty_allow_list.status_code == 422
+            assert empty_allow_list.json()["error"]["code"] == "validation_error"

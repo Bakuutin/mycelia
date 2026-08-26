@@ -81,9 +81,13 @@ so runtime endpoints and internal credentials remain server-side.
 
 ## Knowledge search
 
-- `/search` provides hybrid (default), semantic, and lexical search with source,
-  date/time, and result-limit filters. Results link back to canonical Mycelia
-  records and distinguish degraded retrieval from an authoritative empty result.
+- `/search` provides hybrid (default), semantic, and lexical search with kind,
+  date/time, exact source, message platform/sender, result-limit, and evidence
+  diversity controls. It shows canonical MongoDB revalidation, evidence/source
+  revision IDs, links back to Mycelia records, and distinguishes degraded
+  retrieval from an authoritative empty result. Message evidence opens a bounded
+  window around the exact message and highlights it; a deleted, malformed, or
+  wrong-chat target fails visibly instead of opening unrelated recent content.
 - `/settings/knowledge` shows Qdrant and projection state, build progress,
   per-source coverage and lag, errors, and paginated chunk inspection. It also
   exposes pause, resume, reconcile, and confirmed blue/green rebuild controls.

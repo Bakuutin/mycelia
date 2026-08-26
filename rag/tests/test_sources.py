@@ -28,18 +28,58 @@ def test_transcription_falls_back_to_segments_and_links_time_range() -> None:
 
 
 def test_message_uses_raw_content_and_native_chat_route() -> None:
+    chat_id = "111111111111111111111111"
     source = adapt_message(
         {
             "_id": "m1",
             "raw": {"content": "fallback", "role": "user"},
             "platform": "mycelia",
-            "chatId": "c1",
+            "chatId": chat_id,
+            "senderId": "person-1",
             "timestamp": "2026-01-01T00:00:00Z",
         }
     )
     assert source is not None
     assert source.text == "fallback"
-    assert source.uri == "/chat/c1"
+    assert source.uri == f"/chat/{chat_id}?messageId=m1"
+    assert source.metadata["senderId"] == "person-1"
+    chunk = Chunker(size=100, overlap=0).split(source)[0]
+    payload = chunk.payload("projection-a")
+    assert payload["source"]["platform"] == "mycelia"
+    assert payload["source"]["sender_id"] == "person-1"
+    assert payload["source"]["group_id"] == f"chat:mycelia:{chat_id}"
+    assert payload["source"]["source_hash"] == source.source_hash
+
+
+def test_external_message_link_targets_the_exact_raw_message() -> None:
+    chat_id = "111111111111111111111111"
+    source = adapt_message(
+        {
+            "_id": "message/with spaces",
+            "text": "hello",
+            "platform": "telegram",
+            "chatId": chat_id,
+        }
+    )
+    assert source is not None
+    assert source.uri == f"/messaging/{chat_id}?messageId=message%2Fwith+spaces"
+
+
+def test_legacy_non_object_id_chat_link_does_not_claim_exact_focus() -> None:
+    source = adapt_message(
+        {"_id": "m1", "text": "hello", "platform": "telegram", "chatId": "legacy-chat"}
+    )
+    assert source is not None
+    assert source.uri == "/messaging/legacy-chat"
+
+
+def test_message_without_platform_does_not_invent_filterable_unknown_platform() -> None:
+    source = adapt_message({"_id": "m1", "text": "hello", "chatId": "c1"})
+    assert source is not None
+    assert source.metadata["platform"] is None
+    payload = Chunker(size=100, overlap=0).split(source)[0].payload("projection-a")
+    assert payload["source"]["platform"] is None
+    assert payload["source"]["group_id"] == "chat:messages:c1"
 
 
 def test_object_combines_name_alias_details_and_summaries() -> None:
@@ -57,6 +97,34 @@ def test_object_combines_name_alias_details_and_summaries() -> None:
     assert all(value in source.text for value in ("Mycelia", "Мицелий", "Personal graph"))
     assert source.metadata["objectType"] == "project"
     assert source.uri == "/objects/o1"
+
+
+def test_object_revision_tracks_each_canonical_time_range() -> None:
+    original = adapt_object(
+        {
+            "_id": "o1",
+            "name": "Project",
+            "timeRanges": [
+                {"start": "2026-01-01T00:00:00Z", "end": "2026-01-02T00:00:00Z"},
+                {"start": "2026-03-01T00:00:00Z", "end": "2026-03-02T00:00:00Z"},
+                {"start": "2026-05-01T00:00:00Z", "end": "2026-05-02T00:00:00Z"},
+            ],
+        }
+    )
+    changed = adapt_object(
+        {
+            "_id": "o1",
+            "name": "Project",
+            "timeRanges": [
+                {"start": "2026-01-01T00:00:00Z", "end": "2026-01-02T00:00:00Z"},
+                {"start": "2026-04-01T00:00:00Z", "end": "2026-04-02T00:00:00Z"},
+                {"start": "2026-05-01T00:00:00Z", "end": "2026-05-02T00:00:00Z"},
+            ],
+        }
+    )
+    assert original is not None and changed is not None
+    assert (original.start, original.end) == (changed.start, changed.end)
+    assert original.source_hash != changed.source_hash
 
 
 def test_inactive_media_projection_is_not_indexed() -> None:

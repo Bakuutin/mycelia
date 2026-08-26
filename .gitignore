@@ -19,7 +19,7 @@ python/conversations-to-reextract.jsonl
 **/.DS_Store
 .ruff_cache
 # onnxruntime may emit this telemetry session marker when FastEmbed is imported.
-/:memory:.ses
+**/:memory:.ses
 *.ipynb
 coverage
 .vscode

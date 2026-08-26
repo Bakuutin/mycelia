@@ -43,7 +43,23 @@ describe("SearchPage", () => {
         lagSeconds: 2,
         paused: false,
       },
+      revalidation: {
+        state: "verified",
+        checkedSources: 1,
+        droppedCandidates: 0,
+        staleCandidates: 0,
+        filterRefinedCandidates: 0,
+      },
+      selection: {
+        candidateCount: 1,
+        verifiedCandidates: 1,
+        returnedCount: 1,
+        distinctSources: 1,
+        distinctGroups: 1,
+        maxPerSource: 2,
+      },
       results: [{
+        evidenceId: "rag-v3:object:o1:0:sha256-one",
         pointId: "object:o1:0",
         score: 0.9123,
         text: "The migration stays read-only during the first rollout.",
@@ -54,6 +70,9 @@ describe("SearchPage", () => {
           uri: "/objects/o1",
           title: "Database migration",
           start: "2026-08-20T10:00:00.000Z",
+          platform: null,
+          groupId: "objects:o1",
+          sourceHash: "source-hash-one",
         },
         chunk: { index: 0, contentHash: "sha256:one" },
       }],
@@ -65,6 +84,11 @@ describe("SearchPage", () => {
       screen.getByLabelText("Question or phrase"),
       "migration decision",
     );
+    await user.type(screen.getByLabelText("Exact platforms"), "mycelia");
+    await user.type(
+      screen.getByLabelText("Exact message sender IDs"),
+      "person-me",
+    );
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText("Database migration")).toBeTruthy();
@@ -72,6 +96,11 @@ describe("SearchPage", () => {
     expect(
       screen.getByText(/ready · checkpoint watching · 2s lag/),
     ).toBeTruthy();
+    expect(screen.getByText("Mongo verified")).toBeTruthy();
+    expect(screen.getByTestId("rag-search-summary").textContent).toContain(
+      "1 sources · 1 contexts",
+    );
+    expect(screen.getByText(/evidence: rag-v3:object:o1/)).toBeTruthy();
     expect(
       screen.getByRole("link", { name: /Open source/ }).getAttribute("href"),
     ).toBe("/objects/o1");
@@ -84,7 +113,10 @@ describe("SearchPage", () => {
       action: "search",
       query: "migration decision",
       mode: "hybrid",
+      platforms: ["mycelia"],
+      senderIds: ["person-me"],
       limit: 10,
+      maxPerSource: 2,
     });
     expect(searchCall?.[2]?.signal).toBeInstanceOf(AbortSignal);
   });
@@ -96,6 +128,28 @@ describe("SearchPage", () => {
       tookMs: 12,
       degraded: true,
       warnings: ["Dense vectors are unavailable; lexical fallback was used."],
+      freshness: {
+        lifecycleState: "degraded",
+        checkpointState: "error",
+        checkpointAt: null,
+        lagSeconds: null,
+        paused: false,
+      },
+      revalidation: {
+        state: "degraded",
+        checkedSources: 0,
+        droppedCandidates: 1,
+        staleCandidates: 1,
+        filterRefinedCandidates: 0,
+      },
+      selection: {
+        candidateCount: 1,
+        verifiedCandidates: 0,
+        returnedCount: 0,
+        distinctSources: 0,
+        distinctGroups: 0,
+        maxPerSource: 2,
+      },
       results: [],
     });
     const user = userEvent.setup();
