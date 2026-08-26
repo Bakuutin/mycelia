@@ -46,16 +46,86 @@ discarding and rebuilding the complete vector projection is intentional.
 
 ## Retrieval model
 
-The default dense model is
+The Stage 1 profile is `fastembed-minilm-bm25-v1`. Its immutable dense model is
 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (384 dimensions)
 so English and Russian text share one lightweight local embedding space. The
 sparse leg uses `Qdrant/bm25`. Hybrid search asks Qdrant for dense and sparse
-candidates and combines their ranks with Reciprocal Rank Fusion (RRF).
+candidates and combines their ranks with Reciprocal Rank Fusion (RRF). Both run
+inside the RAG process through pinned FastEmbed `0.8.0`; no reranker is invoked.
 
-Model choice, dimensions, chunking parameters, and adapter schema versions are
-fingerprint inputs. Changing any of them makes the active generation
-incompatible: search and incremental mutation stop until a blue/green rebuild
-activates a matching generation, so embedding spaces are never mixed.
+The embedding-space fingerprint covers model and exact artifact revision,
+tokenizer identity/revision, document/query instruction fingerprints, dimensions,
+normalization, and sparse parameters. The projection fingerprint combines that
+space with the chunker fingerprint and adapter schema. Stage 1 rejects overrides
+to its inference tuple. Introducing a new versioned profile, chunker, or adapter
+contract makes the active generation incompatible: search and incremental
+mutation stop until a blue/green rebuild activates a matching generation, so
+embedding spaces are never mixed. This contract-v2 upgrade likewise requires an
+explicit rebuild of an older projection. Executor location and reranking are
+separate operational contracts and do not alter stored-vector compatibility.
+
+### Inference evolution
+
+| Stage | Dense retrieval | Sparse retrieval | Reranking | Runtime state |
+| --- | --- | --- | --- | --- |
+| 1 — fast baseline | MiniLM, 384d, local FastEmbed | `Qdrant/bm25`, local | Disabled | Implemented and default |
+| 2 — quality projection | `Qwen/Qwen3-Embedding-0.6B`, 768d | Same versioned BM25 leg unless evaluation changes it | Disabled | Contract reserved; not implemented or configured |
+| 3 — reranking | Active Stage 2 projection | Active sparse leg | Independent HTTP reranker over verified top-N | Planned; not implemented or configured |
+
+Qdrant remains CPU-only on the current host or Mac in all three stages. Stage 2
+adds only an authenticated embeddings HTTP service on the RTX 4090. The service
+contract must expose liveness, readiness, model load/device information, and a
+machine-readable embedding contract. Requests distinguish `document` and `query`
+roles; responses echo the expected fingerprint and output dimension. The RAG
+remote integration must fail closed when the service reports a different
+fingerprint.
+
+The future `qwen3-embedding-0.6b-768-v2` profile will be a new blue/green
+generation, not an in-place mutation of MiniLM points. Before implementation it
+must freeze all of the following:
+
+- full model and tokenizer commit revisions (never `main`);
+- model artifact/backend, pooling, precision, max input/truncation, and 768d
+  Matryoshka output procedure;
+- an English, versioned query instruction and the document instruction policy;
+- L2 normalization and the existing chunker fingerprint;
+- an equivalence test corpus whose vectors and rankings are checked on every
+  permitted executor.
+
+Small incremental batches may run on M1 only when its executor reports that same
+contract fingerprint. Otherwise the 4090 remains the sole dense executor for the
+Qwen generation. There is no fallback from Qwen to MiniLM within one projection;
+operators can instead reactivate/rebuild the separately versioned baseline.
+
+Stage 3 consumes only candidates already rehydrated and revalidated from MongoDB.
+Its contract (model/revision/instruction/top-N) is reported with each search but is
+excluded from the projection fingerprint, so reranker rollout or rollback does not
+re-embed the corpus. The future reranker path must return the fused baseline
+ordering with an explicit warning when it is unavailable, rather than inventing a
+different vector space.
+
+### Operations and future Jobs integration
+
+Stage 1 keeps rebuild/reconcile authority in the standalone RAG SQLite state and
+shows its progress in **Settings → Knowledge index**. Mirroring the same operation
+as a BullMQ job now would create two competing lifecycle records, so no Jobs worker
+is added in this stage.
+
+When common scheduling/history is needed, add backend `ragRebuild` and
+`ragReconcile` wrappers following the existing Python integration progress flow:
+
+1. add exact RAG operation lookup and cooperative cancel/attach contracts;
+2. start one RAG operation and persist its `operationId` in the BullMQ wrapper;
+3. publish `phase`, `processed/total`, indexed/deleted/failed counts, projection ID,
+   and the delegated executor label through `jobs.progressUpdate`/WebSocket;
+4. on restart, attach to the same operation instead of launching another rebuild;
+5. show process liveness, searchable projection readiness, and inference executor
+   as separate states. Never expose endpoint credentials in Jobs status.
+
+The Knowledge page remains the detailed control surface and now shows the active
+inference profile, dense/sparse revisions, tokenizer and instruction identities,
+normalization/dimensions, executor/load state, compatibility, and that the Stage 1
+reranker is disabled.
 
 The initial adapters cover:
 

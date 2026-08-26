@@ -89,8 +89,11 @@ so runtime endpoints and internal credentials remain server-side.
   window around the exact message and highlights it; a deleted, malformed, or
   wrong-chat target fails visibly instead of opening unrelated recent content.
 - `/settings/knowledge` shows Qdrant and projection state, build progress,
-  per-source coverage and lag, errors, and paginated chunk inspection. It also
-  exposes pause, resume, reconcile, and confirmed blue/green rebuild controls.
+  per-source coverage and lag, errors, paginated chunk inspection, and the active
+  inference contract (profile, pinned revisions, tokenizer/instructions,
+  dimensions/normalization, executor/load state, compatibility, and reranker
+  state). It also exposes pause, resume, reconcile, and confirmed blue/green
+  rebuild controls.
 - Qdrant is a rebuildable projection; MongoDB remains the canonical source. Mem0
   and other memory integrations are intentionally outside this interface.
 

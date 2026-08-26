@@ -172,18 +172,20 @@ class IndexManager:
         return projection_fingerprint(
             source_schema_fingerprint=source_schema_fingerprint(self.adapters),
             chunker_fingerprint=self.chunker.config_fingerprint,
-            dense_model=self.embeddings.dense_model,
-            sparse_model=self.embeddings.sparse_model,
-            dense_dimensions=self.embeddings.dense_dimensions,
+            inference_contract=self.embeddings.contract,
         )
 
     def _projection_compatibility_error(self, projection: dict[str, Any]) -> str | None:
-        desired_projection, _desired_model = self._desired_projection_fingerprints()
-        if projection["fingerprint"] == desired_projection:
+        desired_projection, desired_model = self._desired_projection_fingerprints()
+        if (
+            projection["fingerprint"] == desired_projection
+            and projection["modelFingerprint"] == desired_model
+            and projection.get("inferenceContract") == self.embeddings.contract.public()
+        ):
             return None
         return (
             "active projection contract does not match the configured "
-            "source schema, chunker, or embedding models; run rebuild"
+            "source schema, chunker, or immutable embedding space; run rebuild"
         )
 
     def _refresh_compatibility(self, projection: dict[str, Any]) -> str | None:
@@ -274,6 +276,9 @@ class IndexManager:
             )
             schema_fp = source_schema_fingerprint(self.adapters)
             projection_fp, model_fp = self._desired_projection_fingerprints()
+            dense_dimensions = self.embeddings.contract.dense.dimensions
+            if dense_dimensions is None:
+                raise ValueError("dense embedding contract must declare dimensions")
             generation = utc_now().strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
             projection_id = f"{projection_fp[:12]}-{generation}"
             collection_name = f"{self.settings.collection_prefix}_{projection_id}".lower()
@@ -290,9 +295,10 @@ class IndexManager:
                 "chunkerVersion": self.chunker.version,
                 "chunkerFingerprint": self.chunker.config_fingerprint,
                 "modelFingerprint": model_fp,
-                "denseModel": self.embeddings.dense_model,
-                "denseDimensions": self.embeddings.dense_dimensions,
-                "sparseModel": self.embeddings.sparse_model,
+                "denseModel": self.embeddings.contract.dense.model,
+                "denseDimensions": dense_dimensions,
+                "sparseModel": self.embeddings.contract.sparse.model,
+                "inferenceContract": self.embeddings.contract.public(),
             }
             self.state.create_projection(projection)
             self.state.update_operation(operation_id, state="running", projection_id=projection_id)
@@ -303,7 +309,7 @@ class IndexManager:
             await asyncio.to_thread(
                 self.vectors.create_projection,
                 collection_name,
-                self.embeddings.dense_dimensions,
+                dense_dimensions,
             )
             self.state.set_progress(phase="building", updatedAt=isoformat(utc_now()))
             for adapter, document_count in zip(self.adapters, totals, strict=True):
@@ -436,8 +442,8 @@ class IndexManager:
         if not chunks:
             return
         texts = [chunk.text for chunk in chunks]
-        dense_future = asyncio.to_thread(self.embeddings.embed_dense, texts)
-        sparse_future = asyncio.to_thread(self.embeddings.embed_sparse, texts)
+        dense_future = asyncio.to_thread(self.embeddings.embed_dense_documents, texts)
+        sparse_future = asyncio.to_thread(self.embeddings.embed_sparse_documents, texts)
         dense, sparse = await asyncio.gather(dense_future, sparse_future)
         points = [
             VectorPoint(
@@ -878,9 +884,9 @@ class IndexManager:
         dense: list[float] | None = None
         sparse = None
         if mode in {"hybrid", "semantic"}:
-            dense = (await asyncio.to_thread(self.embeddings.embed_dense, [query]))[0]
+            dense = await asyncio.to_thread(self.embeddings.embed_dense_query, query)
         if mode in {"hybrid", "lexical"}:
-            sparse = (await asyncio.to_thread(self.embeddings.embed_sparse, [query]))[0]
+            sparse = await asyncio.to_thread(self.embeddings.embed_sparse_query, query)
         # Fetch enough candidates for per-context diversity to survive a
         # high-scoring conversation that contains many individually relevant
         # messages. The public result limit remains independently bounded.
@@ -1253,8 +1259,9 @@ class IndexManager:
 
     async def status(self) -> dict[str, Any]:
         active = self.state.active_projection()
+        active_projection_compatible: bool | None = None
         if active:
-            self._refresh_compatibility(active)
+            active_projection_compatible = self._refresh_compatibility(active) is None
         latest = self.state.latest_projection()
         candidate = latest if latest and (not active or latest["id"] != active["id"]) else None
         displayed = active or latest
@@ -1312,6 +1319,8 @@ class IndexManager:
             sources.append(row)
         warnings = self._warnings()
         state = "paused" if self.state.paused else self.state.get_meta("state", "empty")
+        inference = self.embeddings.runtime_status()
+        inference["activeProjectionCompatible"] = active_projection_compatible
         return {
             "state": state,
             "paused": self.state.paused,
@@ -1324,5 +1333,6 @@ class IndexManager:
             "progress": self.state.progress(),
             "sources": sources,
             "qdrant": qdrant,
+            "inference": inference,
             "warnings": warnings,
         }

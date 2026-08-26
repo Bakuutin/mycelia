@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleDashed,
+  Cpu,
   Database,
   ExternalLink,
   Loader2,
@@ -56,6 +57,7 @@ import {
   type RagChunk,
   ragChunks,
   type RagChunksResponse,
+  type RagEncoderContract,
   ragErrorMessage,
   type RagSourceCount,
   type RagStatus,
@@ -230,6 +232,235 @@ function MetricCard({
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function shortFingerprint(value?: string | null): string {
+  return value ? value.slice(0, 12) : "—";
+}
+
+function loadedLabel(value?: boolean | null): string {
+  if (value === true) return "loaded";
+  if (value === false) return "not loaded";
+  return "not reported";
+}
+
+function EncoderContractDetails({
+  contract,
+  fallbackModel,
+  fallbackDimensions,
+}: {
+  contract?: RagEncoderContract;
+  fallbackModel?: string;
+  fallbackDimensions?: number;
+}) {
+  const model = contract?.model ?? fallbackModel;
+  const dimensions = contract?.dimensions ?? fallbackDimensions;
+
+  return (
+    <>
+      <p
+        className="mt-1 truncate font-mono text-xs text-muted-foreground"
+        title={model}
+      >
+        {model ?? "Model not reported"}
+      </p>
+      <p className="mt-1 truncate text-xs text-muted-foreground">
+        revision {contract?.modelRevision ?? "—"} · normalization{` `}
+        {contract?.normalization ?? "—"} · dimensions {dimensions ?? "—"}
+      </p>
+      <p
+        className="mt-1 truncate text-xs text-muted-foreground"
+        title={contract?.artifactRepo}
+      >
+        artifact {contract?.artifactRepo ?? "—"}
+      </p>
+      <p
+        className="mt-1 truncate text-xs text-muted-foreground"
+        title={contract?.tokenizer.id}
+      >
+        tokenizer {contract?.tokenizer.id ?? "—"}@
+        {contract?.tokenizer.revision ?? "—"}
+      </p>
+      <p className="mt-1 truncate text-xs text-muted-foreground">
+        instructions doc:{contract?.instructions.document.id ?? "—"}@
+        {shortFingerprint(contract?.instructions.document.fingerprint)} · query:
+        {contract?.instructions.query.id ?? "—"}@
+        {shortFingerprint(contract?.instructions.query.fingerprint)}
+      </p>
+    </>
+  );
+}
+
+function InferenceStatusCard({
+  status,
+  loading,
+}: {
+  status: RagStatus | null;
+  loading: boolean;
+}) {
+  const inference = status?.inference;
+  const projection = status?.projection;
+  const contract = inference?.contract;
+  const pending = loading && !status;
+  const executor = inference?.executor;
+  const executorKind = executor?.kind ?? "unknown";
+  const executorLabel = executor?.label ?? "Not reported";
+  const reranker = inference?.reranker;
+  const rerankerEnabled = reranker?.enabled;
+  const compatible = inference?.activeProjectionCompatible;
+  const compatibilityLabel = !inference
+    ? "Compatibility not reported"
+    : compatible === true
+    ? "Projection compatible"
+    : compatible === false
+    ? "Projection mismatch"
+    : "Compatibility not checked";
+
+  return (
+    <Card data-testid="rag-inference-status">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Cpu className="h-4 w-4" />
+              Inference pipeline
+            </CardTitle>
+            <CardDescription className="mt-1">
+              {inference
+                ? (
+                  <>
+                    Profile{" "}
+                    <span className="font-mono">{inference.profileId}</span>
+                    {` · contract v${inference.contractVersion} · fingerprint `}
+                    <span
+                      className="font-mono"
+                      title={inference.embeddingSpaceFingerprint}
+                    >
+                      {shortFingerprint(inference.embeddingSpaceFingerprint)}
+                    </span>
+                  </>
+                )
+                : "Current embedding path; detailed contract is not reported by this runtime."}
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">
+              {inference?.profileId === "fastembed-minilm-bm25-v1"
+                ? "Stage 1 baseline"
+                : inference
+                ? "Versioned profile"
+                : "Inference not reported"}
+            </Badge>
+            <Badge
+              variant={executorKind === "remote" ? "default" : "secondary"}
+            >
+              {executorKind === "remote"
+                ? "Remote execution"
+                : executorKind === "local"
+                ? "Local execution"
+                : "Execution unknown"}
+            </Badge>
+            <Badge variant={rerankerEnabled ? "default" : "secondary"}>
+              {rerankerEnabled === true
+                ? "Reranker enabled"
+                : rerankerEnabled === false
+                ? "Reranker disabled"
+                : "Reranker not reported"}
+            </Badge>
+            <Badge variant={compatible === false ? "destructive" : "secondary"}>
+              {compatibilityLabel}
+            </Badge>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+          <div className="min-w-0 rounded-md border bg-muted/20 p-3">
+            <dt className="text-xs text-muted-foreground">
+              Dense embeddings
+            </dt>
+            <dd className="mt-1 font-medium">
+              {pending
+                ? "Loading…"
+                : `${
+                  contract?.dense.provider ?? "Provider not reported"
+                } · ${executorKind}`}
+            </dd>
+            <EncoderContractDetails
+              contract={contract?.dense}
+              fallbackModel={projection?.denseModel ??
+                projection?.embeddingModel}
+              fallbackDimensions={projection?.denseDimensions ??
+                projection?.vectorSize}
+            />
+          </div>
+          <div className="min-w-0 rounded-md border bg-muted/20 p-3">
+            <dt className="text-xs text-muted-foreground">
+              Sparse retrieval
+            </dt>
+            <dd className="mt-1 font-medium">
+              {pending
+                ? "Loading…"
+                : `${
+                  contract?.sparse.provider ?? "Provider not reported"
+                } · ${executorKind}`}
+            </dd>
+            <EncoderContractDetails
+              contract={contract?.sparse}
+              fallbackModel={projection?.sparseModel}
+            />
+          </div>
+          <div className="min-w-0 rounded-md border bg-muted/20 p-3">
+            <dt className="text-xs text-muted-foreground">Reranker</dt>
+            <dd className="mt-1 font-medium">
+              {rerankerEnabled === true
+                ? "Enabled"
+                : rerankerEnabled === false
+                ? "Disabled"
+                : "Not reported"}
+            </dd>
+            <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+              {rerankerEnabled === true
+                ? [reranker?.provider, reranker?.model, reranker?.modelRevision]
+                  .filter(Boolean).join(" · ") || "Details not reported"
+                : rerankerEnabled === false
+                ? "No reranker is invoked for this profile"
+                : "Runtime did not report reranker status"}
+            </p>
+          </div>
+          <div className="min-w-0 rounded-md border bg-muted/20 p-3">
+            <dt className="text-xs text-muted-foreground">Executor</dt>
+            <dd className="mt-1 font-medium">
+              {pending ? "Loading…" : executorLabel}
+            </dd>
+            <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+              {executorKind} · {executor?.transport ?? "not reported"}{" "}
+              · dense{` `}
+              {loadedLabel(executor?.denseLoaded)} · sparse{` `}
+              {loadedLabel(executor?.sparseLoaded)}
+            </p>
+            {!executor
+              ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Remote executor: not reported
+                </p>
+              )
+              : executor.remoteExecutor
+              ? (
+                <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                  Remote executor: {executor.remoteExecutor.label}
+                </p>
+              )
+              : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Remote executor: not configured
+                </p>
+              )}
+          </div>
+        </dl>
       </CardContent>
     </Card>
   );
@@ -516,6 +747,8 @@ export default function KnowledgeSettingsPage() {
           </ul>
         </div>
       )}
+
+      <InferenceStatusCard status={status} loading={statusLoading} />
 
       <div
         className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"

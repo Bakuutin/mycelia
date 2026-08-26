@@ -234,6 +234,13 @@ Then set `RAG_URL` in the main ignored `.env` and recreate only the backend.
 The default standalone ports are `48091` (RAG API), `46333` (Qdrant
 REST/dashboard), and `46334` (Qdrant gRPC).
 
+The default is a local pinned MiniLM + BM25 FastEmbed baseline with no reranker.
+Its model/tokenizer/instruction/dimension/normalization/chunker contract is visible
+in **Settings → Knowledge index** and enforced by the projection fingerprint.
+Qwen3-Embedding-0.6B at 768 dimensions on an RTX 4090 is reserved as a later
+remote-executor projection; Qdrant itself stays on the current host and no GPU or
+remote inference service is started by this Compose file.
+
 #### CLI/Python Daemon Users
 
 If you need API tokens in `.env` (for Python daemon or CLI access):

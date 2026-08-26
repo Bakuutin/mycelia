@@ -552,6 +552,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "huggingface-hub" },
     { name = "pydantic-settings" },
     { name = "pymongo" },
     { name = "qdrant-client", extra = ["fastembed"] },
@@ -569,6 +570,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0,<1.0" },
+    { name = "huggingface-hub", specifier = ">=1.28.0,<2.0" },
     { name = "pydantic-settings", specifier = ">=2.6.0,<3.0" },
     { name = "pymongo", specifier = ">=4.10.0,<5.0" },
     { name = "qdrant-client", extras = ["fastembed"], specifier = ">=1.13.0,<2.0" },

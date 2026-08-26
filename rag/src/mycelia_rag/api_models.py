@@ -154,6 +154,75 @@ class ChunkListResponse(ApiModel):
     items: list[ChunkItem]
 
 
+class InstructionContractStatus(ApiModel):
+    id: str
+    fingerprint: str
+
+
+class TokenizerContractStatus(ApiModel):
+    id: str
+    revision: str
+
+
+class EncoderInstructionsStatus(ApiModel):
+    document: InstructionContractStatus
+    query: InstructionContractStatus
+
+
+class EncoderContractStatus(ApiModel):
+    provider: str
+    model: str
+    model_revision: str
+    artifact_repo: str
+    tokenizer: TokenizerContractStatus
+    instructions: EncoderInstructionsStatus
+    dimensions: int | None
+    normalization: Literal["l2", "none"]
+    options: dict[str, str | int | float | bool | None]
+
+
+class ProjectionInferenceContractStatus(ApiModel):
+    profile_id: str
+    contract_version: int
+    dense: EncoderContractStatus
+    sparse: EncoderContractStatus
+
+
+class RuntimeEncoderContractStatus(ApiModel):
+    dense: EncoderContractStatus
+    sparse: EncoderContractStatus
+
+
+class RemoteExecutorStatus(ApiModel):
+    label: str
+
+
+class InferenceExecutorStatus(ApiModel):
+    kind: Literal["local", "remote"]
+    label: str
+    transport: Literal["in_process", "http"]
+    dense_loaded: bool | None
+    sparse_loaded: bool | None
+    remote_executor: RemoteExecutorStatus | None
+
+
+class RerankerStatus(ApiModel):
+    enabled: bool
+    provider: str | None
+    model: str | None
+    model_revision: str | None
+
+
+class InferenceRuntimeStatus(ApiModel):
+    profile_id: str
+    contract_version: int
+    embedding_space_fingerprint: str
+    active_projection_compatible: bool | None
+    executor: InferenceExecutorStatus
+    contract: RuntimeEncoderContractStatus
+    reranker: RerankerStatus
+
+
 class ProjectionStatus(ApiModel):
     id: str
     fingerprint: str
@@ -171,6 +240,7 @@ class ProjectionStatus(ApiModel):
     dense_model: str
     dense_dimensions: int
     sparse_model: str
+    inference_contract: ProjectionInferenceContractStatus | None = None
     error: str | None = None
 
 
@@ -255,6 +325,7 @@ class StatusResponse(ApiModel):
     progress: ProgressStatus
     sources: list[SourceStatus]
     qdrant: QdrantStatus
+    inference: InferenceRuntimeStatus
     warnings: list[str]
 
 

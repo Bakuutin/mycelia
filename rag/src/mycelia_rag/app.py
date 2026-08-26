@@ -74,12 +74,7 @@ def build_manager(settings: Settings) -> IndexManager:
             api_key=token,
             timeout=settings.qdrant_timeout_seconds,
         ),
-        embeddings=FastEmbedProvider(
-            dense_model=settings.dense_model,
-            sparse_model=settings.sparse_model,
-            dense_dimensions=settings.dense_dimensions,
-            cache_dir=settings.model_cache,
-        ),
+        embeddings=FastEmbedProvider(settings=settings),
     )
 
 

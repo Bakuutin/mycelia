@@ -19,6 +19,28 @@ from mycelia_rag.state import StateStore
 from .fakes import FakeMongoSource, FakeVectorStore
 
 
+class RecordingEmbeddingProvider(DeterministicEmbeddingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def embed_dense_documents(self, texts):
+        self.calls.append("dense_documents")
+        return super().embed_dense_documents(texts)
+
+    def embed_sparse_documents(self, texts):
+        self.calls.append("sparse_documents")
+        return super().embed_sparse_documents(texts)
+
+    def embed_dense_query(self, text):
+        self.calls.append("dense_query")
+        return super().embed_dense_query(text)
+
+    def embed_sparse_query(self, text):
+        self.calls.append("sparse_query")
+        return super().embed_sparse_query(text)
+
+
 def documents() -> dict[str, list[dict[str, object]]]:
     return {
         "transcriptions": [
@@ -88,8 +110,42 @@ async def test_rebuild_activates_generation_and_exposes_status(tmp_path) -> None
     assert status["state"] == "ready"
     assert status["projection"]["state"] == "ready"
     assert status["projection"]["chunkerVersion"] == "char-boundary-v1"
+    assert status["projection"]["inferenceContract"]["dense"]["modelRevision"]
+    assert (
+        status["inference"]["embeddingSpaceFingerprint"] == status["projection"]["modelFingerprint"]
+    )
+    assert status["inference"]["activeProjectionCompatible"] is True
+    assert status["inference"]["reranker"]["enabled"] is False
+    assert status["inference"]["executor"]["remoteExecutor"] is None
     assert status["qdrant"]["pointsCount"] == 3
     assert vectors.aliases["mycelia_rag_active"] == status["projection"]["collectionName"]
+
+
+@pytest.mark.asyncio
+async def test_build_and_search_use_role_specific_embedding_methods(tmp_path) -> None:
+    runtime, _mongo, _vectors = manager(tmp_path)
+    embeddings = RecordingEmbeddingProvider()
+    runtime.embeddings = embeddings
+    await runtime.start()
+    await rebuild(runtime)
+
+    assert "dense_documents" in embeddings.calls
+    assert "sparse_documents" in embeddings.calls
+    assert "dense_query" not in embeddings.calls
+    assert "sparse_query" not in embeddings.calls
+
+    embeddings.calls.clear()
+    await runtime.search(
+        query="launch",
+        mode="hybrid",
+        kinds=None,
+        start=None,
+        end=None,
+        limit=5,
+        min_score=None,
+    )
+
+    assert embeddings.calls == ["dense_query", "sparse_query"]
 
 
 @pytest.mark.asyncio
@@ -827,14 +883,23 @@ async def test_readonly_requirement_stays_not_ready_after_successful_rebuild(tmp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("drift", ["model", "dimension"])
+@pytest.mark.parametrize("drift", ["model", "dimension", "legacy-contract"])
 async def test_incompatible_active_projection_blocks_search_and_mutation(tmp_path, drift) -> None:
     runtime, mongo, vectors = manager(tmp_path)
     await runtime.start()
     await rebuild(runtime)
-    embeddings = DeterministicEmbeddingProvider(dimensions=64 if drift == "dimension" else 32)
-    if drift == "model":
-        embeddings.dense_model = "different-deterministic-model"
+    if drift == "legacy-contract":
+        with runtime.state._connect() as connection:
+            connection.execute(
+                "UPDATE projections SET inference_contract_json=NULL WHERE id=?",
+                (runtime.state.active_projection()["id"],),
+            )
+    embeddings = DeterministicEmbeddingProvider(
+        dimensions=64 if drift == "dimension" else 32,
+        dense_model=(
+            "different-deterministic-model" if drift == "model" else "deterministic-test-dense"
+        ),
+    )
     restarted = IndexManager(
         settings=runtime.settings,
         state=StateStore(runtime.settings.state_path),

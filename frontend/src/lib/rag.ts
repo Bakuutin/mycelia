@@ -214,11 +214,72 @@ export type RagProjectionStatus = {
   sparseModel?: string;
   sourceSchemaFingerprint?: string;
   modelFingerprint?: string;
+  inferenceContract?: RagProjectionInferenceContract | null;
   createdAt?: string;
   buildStartedAt?: string;
   activatedAt?: string | null;
   supersededAt?: string | null;
   error?: string | null;
+};
+
+export type RagEncoderContract = {
+  provider: string;
+  model: string;
+  modelRevision: string;
+  artifactRepo: string;
+  tokenizer: {
+    id: string;
+    revision: string;
+  };
+  instructions: {
+    document: {
+      id: string;
+      fingerprint: string;
+    };
+    query: {
+      id: string;
+      fingerprint: string;
+    };
+  };
+  dimensions: number | null;
+  normalization: "l2" | "none";
+  options: Record<string, string | number | boolean | null>;
+};
+
+export type RagEmbeddingContract = {
+  dense: RagEncoderContract;
+  sparse: RagEncoderContract;
+};
+
+export type RagProjectionInferenceContract = RagEmbeddingContract & {
+  profileId: string;
+  contractVersion: 1;
+};
+
+export type RagRerankerStatus = {
+  enabled: boolean;
+  provider: string | null;
+  model: string | null;
+  modelRevision: string | null;
+};
+
+export type RagInferenceStatus = {
+  profileId: string;
+  contractVersion: 1;
+  embeddingSpaceFingerprint: string;
+  activeProjectionCompatible: boolean | null;
+  executor: {
+    kind: "local" | "remote";
+    label: string;
+    transport: "in_process" | "http";
+    denseLoaded: boolean | null;
+    sparseLoaded: boolean | null;
+    remoteExecutor: {
+      label: string;
+    } | null;
+  };
+  contract: RagEmbeddingContract;
+  reranker: RagRerankerStatus;
 };
 
 export type RagStatus = {
@@ -233,6 +294,7 @@ export type RagStatus = {
   activeProjectionId?: string | null;
   projection?: RagProjectionStatus | null;
   candidateProjection?: RagProjectionStatus | null;
+  inference?: RagInferenceStatus;
   progress?: RagProgress;
   counts?: {
     sources?: number;

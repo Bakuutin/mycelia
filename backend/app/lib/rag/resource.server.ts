@@ -191,6 +191,72 @@ export const ragChunksResponseSchema = z.object({
   items: z.array(ragChunkSchema),
 }).passthrough();
 
+const sha256FingerprintSchema = z.string().regex(/^[a-f\d]{64}$/i);
+
+const ragInstructionContractSchema = z.object({
+  id: z.string().trim().min(1),
+  fingerprint: sha256FingerprintSchema,
+}).strict();
+
+const ragEncoderContractSchema = z.object({
+  provider: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  modelRevision: z.string().trim().min(1),
+  artifactRepo: z.string().trim().min(1),
+  tokenizer: z.object({
+    id: z.string().trim().min(1),
+    revision: z.string().trim().min(1),
+  }).strict(),
+  instructions: z.object({
+    document: ragInstructionContractSchema,
+    query: ragInstructionContractSchema,
+  }).strict(),
+  dimensions: z.number().int().positive().nullable(),
+  normalization: z.enum(["l2", "none"]),
+  options: z.record(
+    z.string(),
+    z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  ),
+}).strict();
+
+const ragRerankerContractSchema = z.object({
+  enabled: z.boolean(),
+  provider: z.string().trim().min(1).nullable(),
+  model: z.string().trim().min(1).nullable(),
+  modelRevision: z.string().trim().min(1).nullable(),
+}).strict();
+
+const ragEmbeddingContractSchema = z.object({
+  dense: ragEncoderContractSchema,
+  sparse: ragEncoderContractSchema,
+}).strict();
+
+const ragProjectionInferenceContractSchema = ragEmbeddingContractSchema.extend({
+  profileId: z.string().trim().min(1),
+  contractVersion: z.literal(1),
+}).strict();
+
+const ragInferenceExecutorSchema = z.object({
+  kind: z.enum(["local", "remote"]),
+  label: z.string().trim().min(1),
+  transport: z.enum(["in_process", "http"]),
+  denseLoaded: z.boolean().nullable(),
+  sparseLoaded: z.boolean().nullable(),
+  remoteExecutor: z.object({
+    label: z.string().trim().min(1),
+  }).strict().nullable(),
+}).strict();
+
+const ragInferenceStatusSchema = z.object({
+  profileId: z.string().trim().min(1),
+  contractVersion: z.literal(1),
+  embeddingSpaceFingerprint: sha256FingerprintSchema,
+  activeProjectionCompatible: z.boolean().nullable(),
+  executor: ragInferenceExecutorSchema,
+  contract: ragEmbeddingContractSchema,
+  reranker: ragRerankerContractSchema,
+}).strict();
+
 const ragProjectionSchema = z.object({
   id: z.string(),
   state: z.enum([
@@ -214,6 +280,7 @@ const ragProjectionSchema = z.object({
   chunkerVersion: z.string(),
   chunkerFingerprint: z.string(),
   modelFingerprint: z.string(),
+  inferenceContract: ragProjectionInferenceContractSchema.nullish(),
   error: z.string().nullish(),
   ownerScope: ownerScopeSchema.optional(),
 }).passthrough();
@@ -295,6 +362,10 @@ export const ragStatusResponseSchema = z.object({
   progress: ragProgressSchema,
   sources: z.array(ragStatusSourceSchema),
   qdrant: ragQdrantStatusSchema,
+  // Optional only for rolling upgrades from runtimes that predate component
+  // provenance. It stays response-only: remote executors are observable here,
+  // never configurable through this proxy.
+  inference: ragInferenceStatusSchema.optional(),
   authMode: z.string(),
   warnings: z.array(z.string()),
 }).passthrough();

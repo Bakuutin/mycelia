@@ -15,6 +15,56 @@ import KnowledgeSettingsPage from "./KnowledgeSettingsPage";
 
 const userEvent = (userEventLib as any).default || userEventLib;
 
+const embeddingSpaceFingerprint = "a".repeat(64);
+const instructionFingerprint =
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const embeddingContract = {
+  dense: {
+    provider: "fastembed",
+    model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    modelRevision: "faf4aa4225822f3bc6376869cb1164e8e3feedd0",
+    artifactRepo: "qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q",
+    tokenizer: {
+      id: "qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q",
+      revision: "faf4aa4225822f3bc6376869cb1164e8e3feedd0",
+    },
+    instructions: {
+      document: {
+        id: "none",
+        fingerprint: instructionFingerprint,
+      },
+      query: { id: "none", fingerprint: instructionFingerprint },
+    },
+    dimensions: 384,
+    normalization: "l2",
+    options: {
+      artifactFile: "model_optimized.onnx",
+      fastembedVersion: "0.8.0",
+      pooling: "model-defined",
+    },
+  },
+  sparse: {
+    provider: "fastembed",
+    model: "Qdrant/bm25",
+    modelRevision: "22b8d2af71a76161e18dd432d2cee0eefa66e412",
+    artifactRepo: "Qdrant/bm25",
+    tokenizer: {
+      id: "fastembed-bm25-tokenization",
+      revision: "fastembed-0.8.0",
+    },
+    instructions: {
+      document: {
+        id: "none",
+        fingerprint: instructionFingerprint,
+      },
+      query: { id: "none", fingerprint: instructionFingerprint },
+    },
+    dimensions: null,
+    normalization: "none",
+    options: { k: 1.2, b: 0.75 },
+  },
+};
+
 const readyStatus = {
   state: "ready",
   paused: false,
@@ -28,10 +78,37 @@ const readyStatus = {
     collectionName: "mycelia_rag_v3",
     createdAt: "2026-08-26T10:00:00.000Z",
     activatedAt: "2026-08-26T11:00:00.000Z",
-    denseModel: "Qwen3-Embedding-0.6B",
-    denseDimensions: 1024,
-    sparseModel: "bm25",
+    denseModel: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    denseDimensions: 384,
+    sparseModel: "Qdrant/bm25",
+    modelFingerprint: embeddingSpaceFingerprint,
+    inferenceContract: {
+      profileId: "fastembed-minilm-bm25-v1",
+      contractVersion: 1,
+      ...embeddingContract,
+    },
     chunkerVersion: "bounded-v1",
+  },
+  inference: {
+    profileId: "fastembed-minilm-bm25-v1",
+    contractVersion: 1,
+    embeddingSpaceFingerprint,
+    activeProjectionCompatible: true,
+    executor: {
+      kind: "local",
+      label: "FastEmbed 0.8.0 (local)",
+      transport: "in_process",
+      denseLoaded: true,
+      sparseLoaded: true,
+      remoteExecutor: null,
+    },
+    contract: embeddingContract,
+    reranker: {
+      enabled: false,
+      provider: null,
+      model: null,
+      modelRevision: null,
+    },
   },
   candidateProjection: null,
   operation: null,
@@ -188,7 +265,32 @@ describe("KnowledgeSettingsPage", () => {
     renderPage();
 
     expect(await screen.findByText("projection:abc123")).toBeTruthy();
-    expect(screen.getByText("Qwen3-Embedding-0.6B")).toBeTruthy();
+    const inferenceCard = screen.getByTestId("rag-inference-status");
+    expect(inferenceCard.textContent).toContain("Stage 1 baseline");
+    expect(inferenceCard.textContent).toContain("fastembed-minilm-bm25-v1");
+    expect(inferenceCard.textContent).toContain("aaaaaaaaaaaa");
+    expect(inferenceCard.textContent).toContain("FastEmbed 0.8.0 (local)");
+    expect(inferenceCard.textContent).toContain("local · in_process");
+    expect(inferenceCard.textContent).toContain(
+      "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    );
+    expect(inferenceCard.textContent).toContain(
+      "revision faf4aa4225822f3bc6376869cb1164e8e3feedd0",
+    );
+    expect(inferenceCard.textContent).toContain("normalization l2");
+    expect(inferenceCard.textContent).toContain(
+      "artifact qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q",
+    );
+    expect(inferenceCard.textContent).toContain(
+      "instructions doc:none@e3b0c44298fc · query:none@e3b0c44298fc",
+    );
+    expect(inferenceCard.textContent).toContain("Qdrant/bm25");
+    expect(inferenceCard.textContent).toContain("Reranker disabled");
+    expect(inferenceCard.textContent).toContain(
+      "Remote executor: not configured",
+    );
+    expect(inferenceCard.textContent).toContain("Projection compatible");
+    expect(inferenceCard.textContent).not.toContain("Qwen");
     expect(screen.getByText("watching")).toBeTruthy();
     expect(
       await screen.findByText(/Canonical evidence stored/),
@@ -209,6 +311,72 @@ describe("KnowledgeSettingsPage", () => {
       "rag",
       { action: "listChunks", limit: 25, offset: 0 },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("does not infer executor or reranker state from a legacy projection", async () => {
+    callResourceMock.mockImplementation((_resource, body) => {
+      if (body.action === "status") {
+        return Promise.resolve({
+          ...readyStatus,
+          inference: undefined,
+          projection: {
+            ...readyStatus.projection,
+            inferenceContract: undefined,
+          },
+        });
+      }
+      if (body.action === "listChunks") return Promise.resolve(chunksResponse);
+      return Promise.reject(new Error(`Unexpected action ${body.action}`));
+    });
+
+    renderPage();
+
+    const inferenceCard = await screen.findByTestId("rag-inference-status");
+    expect(inferenceCard.textContent).toContain("Inference not reported");
+    expect(inferenceCard.textContent).toContain("Execution unknown");
+    expect(inferenceCard.textContent).toContain("Provider not reported");
+    expect(inferenceCard.textContent).toContain("Reranker not reported");
+    expect(inferenceCard.textContent).toContain(
+      "Remote executor: not reported",
+    );
+    expect(inferenceCard.textContent).toContain(
+      "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    );
+  });
+
+  it("renders future remote executor identity only when runtime reports it", async () => {
+    callResourceMock.mockImplementation((_resource, body) => {
+      if (body.action === "status") {
+        return Promise.resolve({
+          ...readyStatus,
+          inference: {
+            ...readyStatus.inference,
+            profileId: "qwen3-embedding-0.6b-768-v2",
+            executor: {
+              kind: "remote",
+              label: "Remote embedding executor",
+              transport: "http",
+              denseLoaded: null,
+              sparseLoaded: null,
+              remoteExecutor: { label: "GPU pool eu-1" },
+            },
+          },
+        });
+      }
+      if (body.action === "listChunks") return Promise.resolve(chunksResponse);
+      return Promise.reject(new Error(`Unexpected action ${body.action}`));
+    });
+
+    renderPage();
+
+    const inferenceCard = await screen.findByTestId("rag-inference-status");
+    expect(inferenceCard.textContent).toContain("Versioned profile");
+    expect(inferenceCard.textContent).not.toContain("Stage 1 baseline");
+    expect(inferenceCard.textContent).toContain("Remote execution");
+    expect(inferenceCard.textContent).toContain("Remote embedding executor");
+    expect(inferenceCard.textContent).toContain(
+      "Remote executor: GPU pool eu-1",
     );
   });
 

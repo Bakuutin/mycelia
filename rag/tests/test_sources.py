@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
-from mycelia_rag.domain import Chunker, projection_fingerprint
+from mycelia_rag.domain import (
+    Chunker,
+    InstructionContract,
+    TokenizerContract,
+    projection_fingerprint,
+)
+from mycelia_rag.embeddings import DeterministicEmbeddingProvider
 from mycelia_rag.sources import (
     adapt_media_visual_description,
     adapt_message,
@@ -161,21 +168,64 @@ def test_chunk_ids_are_stable_within_projection_and_generation_specific() -> Non
     assert chunk.point_id("projection-a") != chunk.point_id("projection-b")
 
 
-def test_projection_fingerprint_tracks_schema_chunker_and_models() -> None:
+def test_projection_fingerprint_tracks_complete_embedding_space_and_chunker() -> None:
     schema = source_schema_fingerprint()
+    contract = DeterministicEmbeddingProvider().contract
     first, model = projection_fingerprint(
         source_schema_fingerprint=schema,
         chunker_fingerprint="chunk-a",
-        dense_model="dense",
-        sparse_model="bm25",
-        dense_dimensions=384,
+        inference_contract=contract,
     )
-    second, _ = projection_fingerprint(
+    dense = contract.dense
+    drifts = [
+        replace(contract, dense=replace(dense, model="other-model")),
+        replace(contract, dense=replace(dense, model_revision="other-revision")),
+        replace(
+            contract,
+            dense=replace(dense, tokenizer=TokenizerContract("other-tokenizer", "v1")),
+        ),
+        replace(
+            contract,
+            dense=replace(dense, tokenizer=TokenizerContract(dense.tokenizer.id, "v2")),
+        ),
+        replace(
+            contract,
+            dense=replace(
+                dense,
+                document_instruction=InstructionContract.from_text("document-v2", "document"),
+            ),
+        ),
+        replace(
+            contract,
+            dense=replace(
+                dense,
+                query_instruction=InstructionContract.from_text("query-v2", "query"),
+            ),
+        ),
+        replace(contract, dense=replace(dense, dimensions=64)),
+        replace(contract, dense=replace(dense, normalization="none")),
+        replace(
+            contract,
+            sparse=replace(contract.sparse, model_revision="other-sparse-revision"),
+        ),
+        replace(
+            contract,
+            sparse=replace(contract.sparse, options=(("language", "russian"),)),
+        ),
+    ]
+    fingerprints = {
+        projection_fingerprint(
+            source_schema_fingerprint=schema,
+            chunker_fingerprint="chunk-a",
+            inference_contract=drift,
+        )[0]
+        for drift in drifts
+    }
+    chunker_drift, _ = projection_fingerprint(
         source_schema_fingerprint=schema,
         chunker_fingerprint="chunk-b",
-        dense_model="dense",
-        sparse_model="bm25",
-        dense_dimensions=384,
+        inference_contract=contract,
     )
-    assert first != second
+    assert first not in fingerprints
+    assert first != chunker_drift
     assert len(first) == len(model) == 64

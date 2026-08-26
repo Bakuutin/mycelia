@@ -268,6 +268,17 @@ canonical read is unavailable. The complete lifecycle, connection modes, control
 semantics, and deferred authorization/read-only-user migration are documented in
 [docs/RAG_QDRANT.md](docs/RAG_QDRANT.md).
 
+The default inference profile is the local
+`fastembed-minilm-bm25-v1` baseline with pinned MiniLM/BM25 artifact revisions and
+no reranker. `/v1/status` and **Settings → Knowledge index** show the full
+embedding-space fingerprint and executor state. A future Qwen3/4090 service is a
+separate HTTP executor and new blue/green projection; it is not enabled by any
+Stage 1 environment variable. The Stage 1 model, revision, tokenizer,
+instructions, dimensions, and normalization values are immutable and invalid
+overrides stop configuration loading. Future local/remote executors must report
+the same embedding fingerprint and chunker contract before they can write or
+query one generation.
+
 #### Objects browse and Timeline density rollout
 
 The Objects page does not run MongoDB aggregation pipelines in the browser. Each

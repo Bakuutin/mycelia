@@ -19,6 +19,12 @@ def projection(projection_id: str, state: str = "catching_up") -> dict[str, obje
         "denseModel": "dense",
         "denseDimensions": 8,
         "sparseModel": "bm25",
+        "inferenceContract": {
+            "profileId": "test-v1",
+            "contractVersion": 1,
+            "dense": {"model": "dense", "modelRevision": "dense-v1"},
+            "sparse": {"model": "bm25", "modelRevision": "sparse-v1"},
+        },
     }
 
 
@@ -46,3 +52,15 @@ def test_building_projection_cannot_be_activated(tmp_path) -> None:
         assert "catching_up" in str(error)
     else:
         raise AssertionError("activation should fail")
+
+
+def test_inference_contract_round_trips_and_legacy_projection_stays_readable(tmp_path) -> None:
+    state = StateStore(tmp_path / "state.sqlite3")
+    current = projection("current")
+    state.create_projection(current)
+    assert state.projection("current")["inferenceContract"] == current["inferenceContract"]
+
+    legacy = projection("legacy")
+    legacy.pop("inferenceContract")
+    state.create_projection(legacy)
+    assert state.projection("legacy")["inferenceContract"] is None

@@ -13,6 +13,7 @@ SearchMode = Literal["hybrid", "semantic", "lexical"]
 ProjectionState = Literal["building", "catching_up", "ready", "superseded", "error"]
 OperationType = Literal["rebuild", "reconcile"]
 ExactSource = tuple[str, str]
+ContractScalar = str | int | float | bool | None
 
 SOURCE_KINDS = (
     "transcription",
@@ -41,6 +42,97 @@ def canonical_json(value: Any) -> str:
 
 def fingerprint(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class InstructionContract:
+    id: str
+    fingerprint: str
+
+    @classmethod
+    def from_text(cls, instruction_id: str, text: str) -> InstructionContract:
+        return cls(
+            id=instruction_id,
+            fingerprint=hashlib.sha256(text.encode()).hexdigest(),
+        )
+
+    def public(self) -> dict[str, Any]:
+        return {"id": self.id, "fingerprint": self.fingerprint}
+
+
+@dataclass(frozen=True, slots=True)
+class TokenizerContract:
+    id: str
+    revision: str
+
+    def public(self) -> dict[str, Any]:
+        return {"id": self.id, "revision": self.revision}
+
+
+@dataclass(frozen=True, slots=True)
+class EncoderContract:
+    provider: str
+    model: str
+    model_revision: str
+    artifact_repo: str
+    tokenizer: TokenizerContract
+    document_instruction: InstructionContract
+    query_instruction: InstructionContract
+    dimensions: int | None
+    normalization: Literal["l2", "none"]
+    options: tuple[tuple[str, ContractScalar], ...] = ()
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "modelRevision": self.model_revision,
+            "artifactRepo": self.artifact_repo,
+            "tokenizer": self.tokenizer.public(),
+            "instructions": {
+                "document": self.document_instruction.public(),
+                "query": self.query_instruction.public(),
+            },
+            "dimensions": self.dimensions,
+            "normalization": self.normalization,
+            "options": dict(self.options),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RerankerContract:
+    enabled: bool = False
+    provider: str | None = None
+    model: str | None = None
+    model_revision: str | None = None
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "provider": self.provider,
+            "model": self.model,
+            "modelRevision": self.model_revision,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceContract:
+    profile_id: str
+    dense: EncoderContract
+    sparse: EncoderContract
+    contract_version: int = 1
+
+    @property
+    def contract_fingerprint(self) -> str:
+        return fingerprint(self.public())
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "profileId": self.profile_id,
+            "contractVersion": self.contract_version,
+            "dense": self.dense.public(),
+            "sparse": self.sparse.public(),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,13 +286,17 @@ class SparseEmbedding:
 
 
 class EmbeddingProvider(Protocol):
-    dense_model: str
-    sparse_model: str
-    dense_dimensions: int
+    contract: InferenceContract
 
-    def embed_dense(self, texts: Sequence[str]) -> list[list[float]]: ...
+    def embed_dense_documents(self, texts: Sequence[str]) -> list[list[float]]: ...
 
-    def embed_sparse(self, texts: Sequence[str]) -> list[SparseEmbedding]: ...
+    def embed_sparse_documents(self, texts: Sequence[str]) -> list[SparseEmbedding]: ...
+
+    def embed_dense_query(self, text: str) -> list[float]: ...
+
+    def embed_sparse_query(self, text: str) -> SparseEmbedding: ...
+
+    def runtime_status(self) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,23 +361,16 @@ def projection_fingerprint(
     *,
     source_schema_fingerprint: str,
     chunker_fingerprint: str,
-    dense_model: str,
-    sparse_model: str,
-    dense_dimensions: int,
+    inference_contract: InferenceContract,
 ) -> tuple[str, str]:
-    model_fp = fingerprint(
-        {
-            "dense": dense_model,
-            "sparse": sparse_model,
-            "dimensions": dense_dimensions,
-        }
-    )
+    model_fp = inference_contract.contract_fingerprint
     projection_fp = fingerprint(
         {
-            "contract": 1,
+            "contract": 2,
             "sources": source_schema_fingerprint,
             "chunker": chunker_fingerprint,
-            "models": model_fp,
+            "inference": inference_contract.public(),
+            "inferenceFingerprint": model_fp,
         }
     )
     return projection_fp, model_fp

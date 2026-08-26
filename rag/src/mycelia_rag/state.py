@@ -51,6 +51,7 @@ class StateStore:
           dense_model TEXT NOT NULL,
           dense_dimensions INTEGER NOT NULL,
           sparse_model TEXT NOT NULL,
+          inference_contract_json TEXT,
           error TEXT
         );
         CREATE TABLE IF NOT EXISTS operations (
@@ -142,6 +143,10 @@ class StateStore:
                     "ALTER TABLE projections ADD COLUMN chunker_version TEXT NOT NULL "
                     "DEFAULT 'char-boundary-v1'"
                 )
+            if "inference_contract_json" not in projection_columns:
+                connection.execute(
+                    "ALTER TABLE projections ADD COLUMN inference_contract_json TEXT"
+                )
 
     def set_meta(self, key: str, value: str) -> None:
         with self._lock, self._connect() as connection:
@@ -178,8 +183,8 @@ class StateStore:
                   id, fingerprint, generation, collection_name, state,
                   created_at, build_started_at, source_schema_fingerprint,
                   chunker_version, chunker_fingerprint, model_fingerprint, dense_model,
-                  dense_dimensions, sparse_model
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  dense_dimensions, sparse_model, inference_contract_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     projection["id"],
@@ -196,6 +201,11 @@ class StateStore:
                     projection["denseModel"],
                     projection["denseDimensions"],
                     projection["sparseModel"],
+                    (
+                        canonical_json(projection["inferenceContract"])
+                        if projection.get("inferenceContract") is not None
+                        else None
+                    ),
                 ),
             )
 
@@ -349,6 +359,7 @@ class StateStore:
 
     @staticmethod
     def _projection_dict(row: sqlite3.Row) -> dict[str, Any]:
+        inference_contract_json = row["inference_contract_json"]
         return {
             "id": row["id"],
             "fingerprint": row["fingerprint"],
@@ -366,6 +377,9 @@ class StateStore:
             "denseModel": row["dense_model"],
             "denseDimensions": row["dense_dimensions"],
             "sparseModel": row["sparse_model"],
+            "inferenceContract": (
+                json.loads(inference_contract_json) if inference_contract_json else None
+            ),
             "error": row["error"],
         }
 

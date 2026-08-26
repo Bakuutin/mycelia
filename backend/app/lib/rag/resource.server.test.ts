@@ -11,6 +11,63 @@ const auth = new Auth({
   policies: [{ resource: "rag/**", action: "*", effect: "allow" }],
 });
 
+const testInferenceFingerprint = "a".repeat(64);
+const testInstructionFingerprint = "b".repeat(64);
+const testEmbeddingContract = {
+  dense: {
+    provider: "fastembed",
+    model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    modelRevision: "faf4aa4225822f3bc6376869cb1164e8e3feedd0",
+    artifactRepo: "qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q",
+    tokenizer: {
+      id: "qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q",
+      revision: "faf4aa4225822f3bc6376869cb1164e8e3feedd0",
+    },
+    instructions: {
+      document: {
+        id: "identity-document-v1",
+        fingerprint: testInstructionFingerprint,
+      },
+      query: {
+        id: "identity-query-v1",
+        fingerprint: testInstructionFingerprint,
+      },
+    },
+    dimensions: 384,
+    normalization: "l2",
+    options: {},
+  },
+  sparse: {
+    provider: "fastembed",
+    model: "Qdrant/bm25",
+    modelRevision: "22b8d2af71a76161e18dd432d2cee0eefa66e412",
+    artifactRepo: "Qdrant/bm25",
+    tokenizer: {
+      id: "fastembed-bm25-tokenization",
+      revision: "fastembed-0.8.0",
+    },
+    instructions: {
+      document: {
+        id: "identity-document-v1",
+        fingerprint: testInstructionFingerprint,
+      },
+      query: {
+        id: "identity-query-v1",
+        fingerprint: testInstructionFingerprint,
+      },
+    },
+    dimensions: null,
+    normalization: "none",
+    options: { k: 1.2, b: 0.75 },
+  },
+};
+const testRerankerStatus = {
+  enabled: false,
+  provider: null,
+  model: null,
+  modelRevision: null,
+};
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -298,7 +355,12 @@ Deno.test("RagResource proxies status and chunk pagination contracts", async () 
             sparseModel: "sparse-model",
             chunkerVersion: "v1",
             chunkerFingerprint: "chunker-b",
-            modelFingerprint: "model-b",
+            modelFingerprint: testInferenceFingerprint,
+            inferenceContract: {
+              profileId: "fastembed-minilm-bm25-v1",
+              contractVersion: 1,
+              ...testEmbeddingContract,
+            },
             error: null,
           },
           candidateProjection: null,
@@ -321,6 +383,22 @@ Deno.test("RagResource proxies status and chunk pagination contracts", async () 
               hybridRrf: true,
               filters: true,
             },
+          },
+          inference: {
+            profileId: "fastembed-minilm-bm25-v1",
+            contractVersion: 1,
+            embeddingSpaceFingerprint: testInferenceFingerprint,
+            activeProjectionCompatible: true,
+            executor: {
+              kind: "local",
+              label: "FastEmbed 0.8.0 (local)",
+              transport: "in_process",
+              denseLoaded: true,
+              sparseLoaded: false,
+              remoteExecutor: null,
+            },
+            contract: testEmbeddingContract,
+            reranker: testRerankerStatus,
           },
           authMode: "internal_token",
           warnings: [],
@@ -361,7 +439,33 @@ Deno.test("RagResource proxies status and chunk pagination contracts", async () 
 
   expect(status).toMatchObject({
     state: "catching_up",
-    projection: { state: "catching_up" },
+    projection: {
+      state: "catching_up",
+      inferenceContract: {
+        profileId: "fastembed-minilm-bm25-v1",
+        contractVersion: 1,
+        dense: { dimensions: 384, normalization: "l2" },
+      },
+    },
+    inference: {
+      profileId: "fastembed-minilm-bm25-v1",
+      contractVersion: 1,
+      embeddingSpaceFingerprint: testInferenceFingerprint,
+      activeProjectionCompatible: true,
+      executor: {
+        kind: "local",
+        transport: "in_process",
+        remoteExecutor: null,
+      },
+      contract: {
+        dense: {
+          model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+          modelRevision: "faf4aa4225822f3bc6376869cb1164e8e3feedd0",
+        },
+        sparse: { model: "Qdrant/bm25" },
+      },
+      reranker: { enabled: false },
+    },
   });
   expect(chunks).toMatchObject({ total: 1, limit: 25, offset: 50 });
   expect(urls[1]).toBe(
