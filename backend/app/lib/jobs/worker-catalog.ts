@@ -231,6 +231,13 @@ export const WORKER_CATALOG: readonly CatalogDefinition[] = [
     { section: "maintenance", progressKind: "location-processing" },
   ),
   pipeline(
+    "locationMapProjection",
+    "Location map index",
+    "Builds fast conversation clusters and source-aware route fragments.",
+    245,
+    { section: "maintenance", progressKind: "location-processing" },
+  ),
+  pipeline(
     "testPythonIntegration",
     "Python integration test",
     "Verifies execution through the Python worker.",

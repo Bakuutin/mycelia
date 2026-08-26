@@ -10,6 +10,7 @@ import {
   CalendarPlus,
   CircleOff,
   MapPin,
+  MapPinned,
   Maximize2,
   Play,
   UserRoundPlus,
@@ -45,6 +46,24 @@ export function TimelineSelectionActions({
 
   return (
     <div className="flex items-start gap-3 mr-auto">
+      <div className="flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button asChild variant="outline" size="icon">
+              <Link
+                to={`/map?start=${startDate.getTime()}&end=${endDate.getTime()}`}
+              >
+                <MapPinned className="h-4 w-4" />
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Show the selected range on the map</p>
+          </TooltipContent>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">Show on map</span>
+      </div>
+
       <div className="flex flex-col items-center gap-1">
         <Tooltip>
           <TooltipTrigger asChild>

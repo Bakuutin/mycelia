@@ -3,13 +3,21 @@ import { callResource } from "@/lib/api";
 import { useWebSocketSubscription } from "@/hooks/useWebSocket";
 import type {
   ConversationMapGroup,
+  ConversationMapGroupSummary,
+  ConversationMapItem,
   GeonamesCity,
   LocationImport,
   LocationMetadataConflict,
   LocationPointConflict,
+  LocationRouteConflict,
   LocationSegment,
   LocationStatus,
   LocationTrackGeometryChunk,
+  MapBounds,
+  MapCell,
+  MapDensityResponse,
+  MapRouteDetailResponse,
+  MapTimelineSummary,
   RecordedLocationTrack,
   SavedPlace,
 } from "@/types/location";
@@ -32,6 +40,8 @@ export const locationKeys = {
     [...locationKeys.all, "conflicts", status ?? "all"] as const,
   metadataConflicts: (status?: string) =>
     [...locationKeys.all, "metadataConflicts", status ?? "all"] as const,
+  routeConflicts: (status?: string) =>
+    [...locationKeys.all, "routeConflicts", status ?? "all"] as const,
   geotags: (filters: Record<string, unknown>) =>
     [...locationKeys.all, "geotags", filters] as const,
   conversationsOnMap: (start?: number, end?: number) =>
@@ -41,7 +51,254 @@ export const locationKeys = {
       start ?? "all",
       end ?? "all",
     ] as const,
+  mapDensity: (
+    start: number,
+    end: number,
+    bounds: MapBounds | undefined,
+    zoom: number,
+    layers: string[],
+  ) =>
+    [
+      ...locationKeys.all,
+      "mapDensity",
+      start,
+      end,
+      bounds,
+      Math.round(zoom * 10) / 10,
+      [...layers].sort(),
+    ] as const,
+  mapRoutes: (
+    start: number,
+    end: number,
+    bounds: MapBounds | undefined,
+    zoom: number,
+    connectors: boolean,
+  ) =>
+    [
+      ...locationKeys.all,
+      "mapRoutes",
+      start,
+      end,
+      bounds,
+      Math.round(zoom * 10) / 10,
+      connectors,
+    ] as const,
+  mapTimeline: () => [...locationKeys.all, "mapTimeline"] as const,
+  mapClusterGroups: (
+    start: number,
+    end: number,
+    cell?: MapCell,
+    revision?: number,
+    cursor?: string,
+  ) =>
+    [
+      ...locationKeys.all,
+      "mapClusterGroups",
+      start,
+      end,
+      cell,
+      revision,
+      cursor,
+    ] as const,
+  mapGroupItems: (
+    start: number,
+    end: number,
+    groupKey?: string,
+    revision?: number,
+    cursor?: string,
+  ) =>
+    [
+      ...locationKeys.all,
+      "mapGroupItems",
+      start,
+      end,
+      groupKey,
+      revision,
+      cursor,
+    ] as const,
 };
+
+export function useLocationRouteConflicts(
+  status: "pending" | "resolved" | "superseded" | undefined = "pending",
+  enabled = true,
+) {
+  return useQuery<{ conflicts: LocationRouteConflict[]; total: number }>({
+    queryKey: locationKeys.routeConflicts(status),
+    queryFn: () =>
+      callResource("location", {
+        action: "list-route-conflicts",
+        status,
+        limit: 100,
+        skip: 0,
+      }),
+    enabled,
+    staleTime: 15 * 1000,
+  });
+}
+
+export function useResolveLocationRouteConflict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      id: string;
+      resolution: "use_first" | "use_second" | "keep_both";
+    }) =>
+      callResource("location", {
+        action: "resolve-route-conflict",
+        ...input,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: locationKeys.all });
+    },
+  });
+}
+
+export function useMapDensity(
+  start: Date,
+  end: Date,
+  bounds: MapBounds | undefined,
+  zoom: number,
+  layers: Array<"presence" | "conversations">,
+) {
+  return useQuery<MapDensityResponse>({
+    queryKey: locationKeys.mapDensity(
+      start.getTime(),
+      end.getTime(),
+      bounds,
+      zoom,
+      layers,
+    ),
+    queryFn: ({ signal }) =>
+      callResource("location", {
+        action: "map-density",
+        start,
+        end,
+        bounds,
+        zoom,
+        layers,
+        maxClusters: 1200,
+      }, { signal }),
+    enabled: !!bounds && layers.length > 0,
+    staleTime: 60 * 1000,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useMapRouteDetail(
+  start: Date,
+  end: Date,
+  bounds: MapBounds | undefined,
+  zoom: number,
+  enabled: boolean,
+  includeConnectors: boolean,
+) {
+  return useQuery<MapRouteDetailResponse>({
+    queryKey: locationKeys.mapRoutes(
+      start.getTime(),
+      end.getTime(),
+      bounds,
+      zoom,
+      includeConnectors,
+    ),
+    queryFn: ({ signal }) =>
+      callResource("location", {
+        action: "map-route-detail",
+        start,
+        end,
+        bounds,
+        zoom,
+        includeConnectors,
+      }, { signal }),
+    enabled: enabled && !!bounds,
+    staleTime: 30 * 1000,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useMapTimelineSummary(enabled = true) {
+  return useQuery<MapTimelineSummary>({
+    queryKey: locationKeys.mapTimeline(),
+    queryFn: ({ signal }) =>
+      callResource("location", {
+        action: "map-timeline-summary",
+        maxBuckets: 256,
+      }, { signal }),
+    enabled,
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useConversationMapClusterGroups(
+  start: Date,
+  end: Date,
+  cell: MapCell | undefined,
+  revision: number | undefined,
+  cursor?: string,
+) {
+  return useQuery<{
+    projection: { revision: number };
+    total: number;
+    items: ConversationMapGroupSummary[];
+    nextCursor: string | null;
+    error?: string;
+  }>({
+    queryKey: locationKeys.mapClusterGroups(
+      start.getTime(),
+      end.getTime(),
+      cell,
+      revision,
+      cursor,
+    ),
+    queryFn: ({ signal }) =>
+      callResource("location", {
+        action: "conversation-map-cluster-groups",
+        start,
+        end,
+        cell,
+        revision,
+        cursor,
+        limit: 20,
+      }, { signal }),
+    enabled: !!cell,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useConversationMapGroupItems(
+  start: Date,
+  end: Date,
+  groupKey: string | undefined,
+  revision: number | undefined,
+  cursor?: string,
+) {
+  return useQuery<{
+    projection: { revision: number };
+    total: number;
+    items: ConversationMapItem[];
+    nextCursor: string | null;
+    error?: string;
+  }>({
+    queryKey: locationKeys.mapGroupItems(
+      start.getTime(),
+      end.getTime(),
+      groupKey,
+      revision,
+      cursor,
+    ),
+    queryFn: ({ signal }) =>
+      callResource("location", {
+        action: "conversation-map-group-items",
+        start,
+        end,
+        groupKey,
+        revision,
+        cursor,
+        limit: 20,
+      }, { signal }),
+    enabled: !!groupKey,
+    placeholderData: (previous) => previous,
+  });
+}
 
 export function useLocationStatus(enabled = true) {
   return useQuery<LocationStatus>({
@@ -398,7 +655,50 @@ export function useLocationLiveUpdates(enabled = true) {
   useWebSocketSubscription(
     "mongo:location_segments",
     () => {
-      queryClient.invalidateQueries({ queryKey: locationKeys.all });
+      for (
+        const key of [
+          "status",
+          "segments",
+          "at",
+          "forRange",
+          "geotags",
+          "mapTimeline",
+        ]
+      ) {
+        queryClient.invalidateQueries({
+          queryKey: [...locationKeys.all, key],
+        });
+      }
+    },
+    enabled,
+  );
+  useWebSocketSubscription(
+    "mongo:location_conversation_projection_state",
+    () => {
+      for (
+        const key of [
+          "mapDensity",
+          "mapClusterGroups",
+          "mapGroupItems",
+          "mapTimeline",
+        ]
+      ) {
+        queryClient.invalidateQueries({
+          queryKey: [...locationKeys.all, key],
+        });
+      }
+    },
+    enabled,
+  );
+  useWebSocketSubscription(
+    "mongo:location_route_projection_state",
+    () => {
+      queryClient.invalidateQueries({
+        queryKey: [...locationKeys.all, "mapRoutes"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [...locationKeys.all, "routeConflicts"],
+      });
     },
     enabled,
   );

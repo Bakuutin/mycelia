@@ -102,6 +102,7 @@ export interface LocationImport {
   fileSize?: number;
   sourceEntryName?: string;
   geometryCompleteness?: "full" | "render-only";
+  routeBoundaryCompleteness?: "full" | "unknown" | "incomplete";
 }
 
 export interface LocationImportFileFacts {
@@ -280,6 +281,7 @@ export interface RecordedLocationTrack {
   path: [number, number][];
   renderPath?: [number, number][];
   geometryCompleteness?: "full" | "render-only";
+  routeBoundaryCompleteness?: "full" | "unknown" | "incomplete";
   geometryPointCount?: number;
   geometryChunkCount?: number;
   timedPointCount?: number;
@@ -362,6 +364,140 @@ export interface ConversationMapGroup {
     stayId: ObjectId | string;
     stayLoc: { type: "Point"; coordinates: [number, number] };
   }>;
+}
+
+export interface MapBounds {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+}
+
+export interface MapCell {
+  z: 4 | 7 | 10 | 13 | 16 | 19;
+  x: number;
+  y: number;
+}
+
+export interface LocationMapProjectionState {
+  status: "building" | "ready" | "stale" | "failed" | "not-built";
+  revision: number;
+  stale: boolean;
+  progress?: { processed: number; total?: number };
+  error?: string;
+}
+
+export interface PresenceMapCluster {
+  id: string;
+  cell: MapCell;
+  center: [number, number];
+  dwellMs: number;
+  visitCount: number;
+}
+
+export interface ConversationMapCluster {
+  id: string;
+  cell: MapCell;
+  center: [number, number];
+  bounds: MapBounds;
+  conversationCount: number;
+  singleGroupKey?: string;
+}
+
+export interface MapDensityResponse {
+  projection: LocationMapProjectionState;
+  effectiveCellZoom: MapCell["z"];
+  coarsened: boolean;
+  presenceClusters: PresenceMapCluster[];
+  conversationClusters: ConversationMapCluster[];
+  totals: {
+    matchedConversations: number;
+    unmatchedConversations: number;
+    stays: number;
+  };
+}
+
+export interface MapRouteFragment {
+  id: string;
+  trackId: ObjectId | string;
+  fragmentIndex: number;
+  path: [number, number][];
+  pointCount: number;
+  displayName?: string;
+  sourceRefs?: RecordedLocationTrack["sourceRefs"];
+  timeStart?: Date | string;
+  timeEnd?: Date | string;
+}
+
+export interface MapRouteConnector {
+  _id: ObjectId | string;
+  reason:
+    | "source_boundary"
+    | "non_increasing_time"
+    | "silence"
+    | "teleport"
+    | "sparse_jump";
+  distanceM: number;
+  durationMs?: number;
+  from: { coordinates: [number, number]; ts?: Date | string };
+  to: { coordinates: [number, number]; ts?: Date | string };
+}
+
+export interface LocationRouteConflict {
+  _id: ObjectId | string;
+  pairKey: string;
+  trackIds: Array<ObjectId | string>;
+  trackNames: Array<string | null>;
+  overlapStart: Date | string;
+  overlapEnd: Date | string;
+  medianSeparationM: number;
+  status: "pending" | "resolved" | "superseded";
+  resolution?: "use_first" | "use_second" | "keep_both";
+}
+
+export interface MapRouteDetailResponse {
+  projection: {
+    status: string;
+    revision: number;
+    projectionVersion?: number;
+    ready: boolean;
+  };
+  fragments: MapRouteFragment[];
+  connectors: MapRouteConnector[];
+  conflicts: LocationRouteConflict[];
+  lod: "overview" | "detail";
+  detailLimited: boolean;
+}
+
+export interface MapTimelineSummary {
+  dataRange: { start: Date | string; end: Date | string };
+  range: { start: Date | string; end: Date | string };
+  bucketMs: number;
+  buckets: Array<{
+    start: Date | string;
+    end: Date | string;
+    dwellMs: number;
+    stayCount: number;
+    conversationCount: number;
+  }>;
+  projection: LocationMapProjectionState;
+}
+
+export interface ConversationMapGroupSummary {
+  groupKey: string;
+  conversationCount: number;
+  loc: { type: "Point"; coordinates: [number, number] };
+  place: LocationPlace | null;
+}
+
+export interface ConversationMapItem {
+  conversationId: ObjectId | string;
+  name?: string;
+  icon?: string | { text?: string; base64?: string };
+  start: Date | string;
+  end: Date | string;
+  loc: { type: "Point"; coordinates: [number, number] };
+  matchKind: "manual" | "stay" | "move";
 }
 
 /** Deterministic color per place so the same city always matches. */

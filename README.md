@@ -39,9 +39,10 @@ your own words.
   differences for review.
 - Opt-in Locations row on the timeline: stays with city labels, movements, and
   grey "assumed" gaps; click a band to see where it was on a mini-map.
-- Dedicated Map page: movements over any period with automatic simplification,
-  dwell-time-sized stay circles, saved places/source tracks, coordinate review,
-  and conversation clusters you can browse.
+- Dedicated Map page: shareable time/viewport/layer URLs, an interactive compact
+  timeline, zoom-aware full route geometry with reviewable source conflicts,
+  dwell/visit density, saved places/source tracks, and persistent paginated
+  conversation clusters that do not scan raw objects.
 - Fully offline reverse geocoding (GeoNames) and automatic timezone periods
   derived from your movements; manual location assignment for ranges without
   data. See [LOCATIONS.md](docs/LOCATIONS.md) for the full manual.

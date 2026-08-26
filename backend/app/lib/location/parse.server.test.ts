@@ -28,6 +28,12 @@ const GPX = `<?xml version="1.0" encoding="UTF-8"?>
   </wpt>
 </gpx>`;
 
+const GPX_MULTISEG = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1"><trk><name>split</name>
+  <trkseg><trkpt lat="41" lon="44"><time>2026-08-01T07:00:00Z</time></trkpt></trkseg>
+  <trkseg><trkpt lat="42" lon="45"><time>2026-08-01T08:00:00Z</time></trkpt></trkseg>
+</trk></gpx>`;
+
 const KML_GX_TRACK = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
   <Document>
@@ -40,6 +46,14 @@ const KML_GX_TRACK = `<?xml version="1.0" encoding="UTF-8"?>
       </gx:Track>
     </Placemark>
   </Document>
+</kml>`;
+
+const KML_GX_MULTI_TRACK = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+  <Document><Placemark><gx:MultiTrack>
+    <gx:Track><when>2026-08-02T10:00:00Z</when><gx:coord>44 41 0</gx:coord></gx:Track>
+    <gx:Track><when>2026-08-02T11:00:00Z</when><gx:coord>45 42 0</gx:coord></gx:Track>
+  </gx:MultiTrack></Placemark></Document>
 </kml>`;
 
 const KML_MIXED_TRACK = `<?xml version="1.0" encoding="UTF-8"?>
@@ -117,6 +131,14 @@ Deno.test("parseGpx rejects non-GPX documents", () => {
   expect(() => parseGpx("<html></html>")).toThrow("missing <gpx> root");
 });
 
+Deno.test("parseGpx retains trkseg and source point boundaries", () => {
+  const result = parseGpx(GPX_MULTISEG);
+  expect(result.tracks).toHaveLength(1);
+  expect(result.tracks[0].coordinates.map((point) => point.sourceFragmentIndex))
+    .toEqual([0, 1]);
+  expect(result.points.map((point) => point.sourcePointIndex)).toEqual([0, 0]);
+});
+
 Deno.test("parseKml reads gx:Track when/coord pairs", () => {
   const { points, skipped } = parseKml(KML_GX_TRACK);
   expect(points.length).toBe(2);
@@ -125,6 +147,14 @@ Deno.test("parseKml reads gx:Track when/coord pairs", () => {
   expect(points[0].lng).toBeCloseTo(44.8271);
   expect(points[0].ele).toBeCloseTo(450);
   expect(points[1].ts.toISOString()).toBe("2026-08-02T10:05:00.000Z");
+});
+
+Deno.test("parseKml supports gx:MultiTrack and retains child boundaries", () => {
+  const result = parseKml(KML_GX_MULTI_TRACK);
+  expect(result.unsupportedGeometries).toBe(0);
+  expect(result.tracks).toHaveLength(1);
+  expect(result.tracks[0].coordinates.map((point) => point.sourceFragmentIndex))
+    .toEqual([0, 1]);
 });
 
 Deno.test("parseKml retains every valid LineString coordinate", () => {
