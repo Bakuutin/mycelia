@@ -8,6 +8,7 @@ import { getMongoResource } from "@/lib/mongo/core.server.ts";
 import { assertJobServicesHealthy } from "./service-health.ts";
 import { getJobTimeoutMinutes, getJobTimeoutMs } from "./job-timeouts.ts";
 import { isCancelledJobRecord } from "./job-state.ts";
+import { deferInProgressMediaEventJob } from "./media-event-in-progress-delay.ts";
 
 const activeChildren = new Map<string, Deno.ChildProcess>();
 
@@ -317,6 +318,7 @@ export async function processJob(job: Job<JobData>): Promise<JobResult> {
         }, jobTimeoutMs);
       }),
     ]);
+    await deferInProgressMediaEventJob(job, result, mongo);
 
     // Persist completion here as well as in QueueEvents. An active BullMQ job
     // cannot be force-removed safely: its worker may still finish and commit

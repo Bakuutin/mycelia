@@ -21,8 +21,8 @@ import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import {
   Select,
   SelectContent,
@@ -49,6 +49,9 @@ import {
   normalizeModelArtifactResult,
 } from "@/lib/modelArtifacts";
 import { useActionDialog } from "@/components/ActionDialogProvider";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { resolveDefaultTimeZone } from "@/lib/timeZones";
+import { zonedDateKey, zonedDateKeyToDate } from "@/lib/datePicker";
 
 type HistoryView = "summaries" | "tasks" | "models";
 type DatePreset = "all" | "7d" | "30d" | "custom";
@@ -501,6 +504,8 @@ function ModelArtifactCard({ entry }: { entry: ModelArtifactEntry }) {
 
 export default function SummaryHistoryPage() {
   const { confirmAction } = useActionDialog();
+  const defaultTimeZone = useSettingsStore((state) => state.defaultTimeZone);
+  const pickerTimeZone = resolveDefaultTimeZone(defaultTimeZone);
   const [view, setView] = useState<HistoryView>("summaries");
   const [taskStatus, setTaskStatus] = useState<SummaryTaskStatus>("all");
   const [artifactType, setArtifactType] = useState<ModelArtifactType | "all">(
@@ -603,7 +608,14 @@ export default function SummaryHistoryPage() {
       setTo("");
       return;
     }
-    if (preset === "custom") return;
+    if (preset === "custom") {
+      if (!from || !to) {
+        const today = new Date();
+        setFrom(zonedDateKey(subDays(today, 6), pickerTimeZone));
+        setTo(zonedDateKey(today, pickerTimeZone));
+      }
+      return;
+    }
 
     const today = new Date();
     const days = preset === "7d" ? 7 : 30;
@@ -857,32 +869,21 @@ export default function SummaryHistoryPage() {
           </div>
         </div>
         {datePreset === "custom" && (
-          <div className="mt-4 grid gap-4 rounded-lg border bg-muted/20 p-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="summary-from">
-                {view === "tasks" ? "Created from" : "Generated from"}{" "}
-                (optional)
-              </Label>
-              <Input
-                id="summary-from"
-                type="date"
-                value={from}
-                max={to || undefined}
-                onChange={(event) => setFrom(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="summary-to">
-                {view === "tasks" ? "Created to" : "Generated to"} (optional)
-              </Label>
-              <Input
-                id="summary-to"
-                type="date"
-                value={to}
-                min={from || undefined}
-                onChange={(event) => setTo(event.target.value)}
-              />
-            </div>
+          <div className="mt-4 rounded-lg border bg-muted/20 p-4">
+            <DateRangePicker
+              label={view === "tasks" ? "Created range" : "Generated range"}
+              value={{
+                start: zonedDateKeyToDate(from, pickerTimeZone) ??
+                  subDays(new Date(), 6),
+                end: zonedDateKeyToDate(to, pickerTimeZone) ?? new Date(),
+              }}
+              onChange={(value) => {
+                setFrom(zonedDateKey(value.start, pickerTimeZone));
+                if (value.end) setTo(zonedDateKey(value.end, pickerTimeZone));
+              }}
+              precision="date"
+              timeZone={pickerTimeZone}
+            />
           </div>
         )}
         <div className="mt-4 flex justify-end">

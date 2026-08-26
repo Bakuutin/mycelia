@@ -57,6 +57,32 @@ Deno.test("cursor-based workers advance their continuation cursor", () => {
   });
 });
 
+Deno.test("speakerIdentity continuation advances partitions without retaining an old cursor", () => {
+  const data = {
+    type: "speakerIdentity",
+    runId: "legacy-v0",
+    partitionIndex: 0,
+    cursor: "68abcdefabcdefabcdefabcd",
+    campaignId: "identity-1",
+  };
+  const result = {
+    hasMore: true,
+    processed: 0,
+    advancePartition: true,
+    nextRunId: "generation-9",
+    nextPartitionIndex: 1,
+    campaignId: "identity-1",
+    cursor: null,
+  };
+  expect(shouldContinueJobChain(result)).toBe(true);
+  expect(getContinuationJobData(data, result)).toEqual({
+    type: "speakerIdentity",
+    runId: "generation-9",
+    partitionIndex: 1,
+    campaignId: "identity-1",
+  });
+});
+
 Deno.test("timeline rebuild continuation advances the bounded range", () => {
   const data = {
     type: "histRecalculation",

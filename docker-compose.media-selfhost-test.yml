@@ -1,0 +1,15 @@
+services:
+  media-provider:
+    image: denoland/deno:2.9.5
+    working_dir: /workspace
+    command:
+      - deno
+      - run
+      - --allow-net
+      - --allow-env=PORT
+      - /workspace/scripts/media-provider-mock.ts
+    environment:
+      PORT: "8090"
+    volumes:
+      - .:/workspace:ro
+    restart: unless-stopped

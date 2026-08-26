@@ -1,0 +1,95 @@
+name: ${RAG_COMPOSE_PROJECT_NAME:-mycelia-rag}
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    restart: unless-stopped
+    ports:
+      - "${RAG_QDRANT_BIND:-127.0.0.1}:${RAG_QDRANT_HTTP_PORT:-46333}:6333"
+      - "${RAG_QDRANT_BIND:-127.0.0.1}:${RAG_QDRANT_GRPC_PORT:-46334}:6334"
+    volumes:
+      - rag_qdrant_data:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
+
+  rag:
+    build:
+      context: ./rag
+      dockerfile: Dockerfile
+    image: mycelia-rag:${RAG_IMAGE_TAG:-dev}
+    init: true
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${RAG_API_BIND:-127.0.0.1}:${RAG_API_PORT:-48091}:8091"
+    environment:
+      RAG_MONGO_URL: ${RAG_MONGO_URL:-mongodb://host.docker.internal:27017/?directConnection=true}
+      RAG_MONGO_DATABASE: ${RAG_MONGO_DATABASE:-mycelia}
+      RAG_QDRANT_URL: http://qdrant:6333
+      RAG_STATE_PATH: /data/rag-state.sqlite3
+      RAG_MODEL_CACHE: /models
+      RAG_INFERENCE_PROFILE: ${RAG_INFERENCE_PROFILE:-fastembed-minilm-bm25-v1}
+      RAG_FASTEMBED_VERSION: ${RAG_FASTEMBED_VERSION:-0.8.0}
+      RAG_DENSE_MODEL: ${RAG_DENSE_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+      RAG_DENSE_ARTIFACT_REPO: ${RAG_DENSE_ARTIFACT_REPO:-qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q}
+      RAG_DENSE_REVISION: ${RAG_DENSE_REVISION:-faf4aa4225822f3bc6376869cb1164e8e3feedd0}
+      RAG_DENSE_TOKENIZER: ${RAG_DENSE_TOKENIZER:-qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q}
+      RAG_DENSE_TOKENIZER_REVISION: ${RAG_DENSE_TOKENIZER_REVISION:-faf4aa4225822f3bc6376869cb1164e8e3feedd0}
+      RAG_DENSE_DOCUMENT_INSTRUCTION_ID: ${RAG_DENSE_DOCUMENT_INSTRUCTION_ID:-none}
+      RAG_DENSE_QUERY_INSTRUCTION_ID: ${RAG_DENSE_QUERY_INSTRUCTION_ID:-none}
+      RAG_DENSE_DIMENSIONS: ${RAG_DENSE_DIMENSIONS:-384}
+      RAG_DENSE_NORMALIZATION: ${RAG_DENSE_NORMALIZATION:-l2}
+      RAG_SPARSE_MODEL: ${RAG_SPARSE_MODEL:-Qdrant/bm25}
+      RAG_SPARSE_ARTIFACT_REPO: ${RAG_SPARSE_ARTIFACT_REPO:-Qdrant/bm25}
+      RAG_SPARSE_REVISION: ${RAG_SPARSE_REVISION:-22b8d2af71a76161e18dd432d2cee0eefa66e412}
+      RAG_SPARSE_TOKENIZER: ${RAG_SPARSE_TOKENIZER:-fastembed-bm25-tokenization}
+      RAG_SPARSE_TOKENIZER_REVISION: ${RAG_SPARSE_TOKENIZER_REVISION:-fastembed-0.8.0}
+      RAG_SPARSE_DOCUMENT_INSTRUCTION_ID: ${RAG_SPARSE_DOCUMENT_INSTRUCTION_ID:-none}
+      RAG_SPARSE_QUERY_INSTRUCTION_ID: ${RAG_SPARSE_QUERY_INSTRUCTION_ID:-none}
+      RAG_SPARSE_NORMALIZATION: ${RAG_SPARSE_NORMALIZATION:-none}
+      RAG_RERANKER_ENABLED: ${RAG_RERANKER_ENABLED:-false}
+      RAG_COLLECTION_PREFIX: ${RAG_COLLECTION_PREFIX:-mycelia_rag}
+      RAG_INTERNAL_TOKEN: ${RAG_INTERNAL_TOKEN:-}
+      RAG_AUTH_MODE: ${RAG_AUTH_MODE:-none}
+      RAG_REQUIRE_READONLY_MONGO: ${RAG_REQUIRE_READONLY_MONGO:-false}
+      RAG_ENABLE_BACKGROUND: ${RAG_ENABLE_BACKGROUND:-true}
+      RAG_RECONCILE_INTERVAL_SECONDS: ${RAG_RECONCILE_INTERVAL_SECONDS:-900}
+      RAG_CHANGE_STREAM_RETRY_SECONDS: ${RAG_CHANGE_STREAM_RETRY_SECONDS:-5}
+      RAG_BATCH_SIZE: ${RAG_BATCH_SIZE:-64}
+      RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-1200}
+      RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-160}
+    volumes:
+      - rag_state:/data
+      - rag_model_cache:/models
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      start_period: 90s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 5G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+volumes:
+  rag_qdrant_data:
+  rag_state:
+  rag_model_cache:

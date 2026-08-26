@@ -1,18 +1,23 @@
-import { Resource } from "@/lib/auth/resources.ts";
+import { Resource, ResourceManager } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import { z } from "zod";
-import { tool, Tool, jsonSchema } from "ai";
+import { jsonSchema, Tool, tool } from "ai";
 import { EJSON } from "bson";
 
 const MAX_RESULT_LENGTH = 25000;
 
-function serializeResult(result: unknown): { type: "json" | "text"; value: unknown } {
+function serializeResult(
+  result: unknown,
+): { type: "json" | "text"; value: unknown } {
   const serialized = EJSON.stringify(result);
   if (serialized.length <= MAX_RESULT_LENGTH) {
     return { type: "json", value: JSON.parse(serialized) };
   }
   const trimmed = serialized.slice(0, MAX_RESULT_LENGTH);
-  return { type: "text", value: `${trimmed}... [trimmed, total ${serialized.length} characters]` };
+  return {
+    type: "text",
+    value: `${trimmed}... [trimmed, total ${serialized.length} characters]`,
+  };
 }
 
 export interface ToolAdapterOptions {
@@ -20,6 +25,21 @@ export interface ToolAdapterOptions {
   toolsRequiringApproval?: string[];
   /** When provided, only tools for which this returns true are exposed */
   toolFilter?: (toolName: string) => boolean;
+  /** Execute through policy extraction, matching, modifiers, and auditing. */
+  resourceManager?: ResourceManager;
+}
+
+async function executeResource<Input, Output>(
+  resource: Resource<Input, Output>,
+  input: Input,
+  auth: Auth,
+  resourceManager?: ResourceManager,
+): Promise<Output | Response> {
+  if (resourceManager) {
+    const run = resourceManager.getResource<Input, Output>(resource.code, auth);
+    return await run(input);
+  }
+  return await resource.use(input, auth);
 }
 
 /**
@@ -28,14 +48,19 @@ export interface ToolAdapterOptions {
  * clone the instance (losing _zod.toJSONSchema) but keep the same def.
  * The instance description (added via .describe()) wins over the stashed one.
  */
-function customJsonSchemaOf(zodSchema: any): Record<string, unknown> | undefined {
-  const custom = zodSchema?._zod?.toJSONSchema?.() ?? zodSchema?._zod?.def?.myceliaJsonSchema;
+function customJsonSchemaOf(
+  zodSchema: any,
+): Record<string, unknown> | undefined {
+  const custom = zodSchema?._zod?.toJSONSchema?.() ??
+    zodSchema?._zod?.def?.myceliaJsonSchema;
   if (!custom) return undefined;
   const description = zodSchema?.description;
   return { ...custom, ...(description ? { description } : {}) };
 }
 
-export function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown> {
+export function zodSchemaToJsonSchema(
+  schema: z.ZodType,
+): Record<string, unknown> {
   // If the top-level schema has a custom JSON schema, use it directly
   const topLevel = customJsonSchemaOf(schema);
   if (topLevel) {
@@ -58,14 +83,19 @@ export function zodSchemaToJsonSchema(schema: z.ZodType): Record<string, unknown
   }) as Record<string, unknown>;
 }
 
-function extractActionDescription(schema: any, actionValue: string): string | undefined {
+function extractActionDescription(
+  schema: any,
+  actionValue: string,
+): string | undefined {
   const def = schema._def || schema.def;
   if (def?.type === "object") {
     const shape = def.shape;
     const actionField = shape?.action;
     if (actionField) {
       const actionDef = actionField._def || actionField.def;
-      if (actionDef?.type === "literal" && actionDef.values?.[0] === actionValue) {
+      if (
+        actionDef?.type === "literal" && actionDef.values?.[0] === actionValue
+      ) {
         return actionDef.description || actionField.description;
       }
     }
@@ -76,17 +106,35 @@ function extractActionDescription(schema: any, actionValue: string): string | un
 export function resourceToTools<Input, Output>(
   resource: Resource<Input, Output>,
   auth: Auth,
-  options?: ToolAdapterOptions
-): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> {
+  options?: ToolAdapterOptions,
+): Record<
+  string,
+  {
+    description?: string;
+    inputSchema: any;
+    execute: (args: any) => Promise<any>;
+    needsApproval?: boolean;
+  }
+> {
   const toolsRequiringApproval = new Set(options?.toolsRequiringApproval ?? []);
   const toolFilter = options?.toolFilter;
   const schema = resource.schemas.request;
   const def = schema.def as any;
-  const tools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> = {};
+  const tools: Record<
+    string,
+    {
+      description?: string;
+      inputSchema: any;
+      execute: (args: any) => Promise<any>;
+      needsApproval?: boolean;
+    }
+  > = {};
 
   if ((def?.type === "union")) {
     const discriminator = def.discriminator;
-    const options = def.optionsMap ? Array.from(def.optionsMap.values()) : def.options;
+    const options = def.optionsMap
+      ? Array.from(def.optionsMap.values())
+      : def.options;
     // Distinguish "no union actions recognized" (→ fallback below) from
     // "actions recognized but excluded by toolFilter" (→ return what's left).
     let recognizedAnyAction = false;
@@ -99,29 +147,41 @@ export function resourceToTools<Input, Output>(
         const actionDef = discriminatorField.def;
 
         if (actionDef?.values?.length !== 1) {
-          throw new Error(`Expected 1 value for discriminator ${discriminator}, got ${JSON.stringify(actionDef)}`);
-        } 
+          throw new Error(
+            `Expected 1 value for discriminator ${discriminator}, got ${
+              JSON.stringify(actionDef)
+            }`,
+          );
+        }
         const actionValue = actionDef?.values?.[0];
 
         if (actionValue) {
           recognizedAnyAction = true;
-          const toolName = `${resource.code.replace(/\./g, "_")}_${actionValue}`;
+          const toolName = `${
+            resource.code.replace(/\./g, "_")
+          }_${actionValue}`;
           if (toolFilter && !toolFilter(toolName)) {
             continue;
           }
-          const actionDescription = extractActionDescription(optionSchema, actionValue);
-          
+          const actionDescription = extractActionDescription(
+            optionSchema,
+            actionValue,
+          );
+
           let inputSchema = optionSchema;
           if (inputSchema instanceof z.ZodObject) {
-             inputSchema = inputSchema.omit({ [discriminator]: true });
+            inputSchema = inputSchema.omit({ [discriminator]: true });
           } else {
-             if ((inputSchema as any).omit) {
-                inputSchema = (inputSchema as any).omit({ [discriminator]: true });
-             }
+            if ((inputSchema as any).omit) {
+              inputSchema = (inputSchema as any).omit({
+                [discriminator]: true,
+              });
+            }
           }
 
           tools[toolName] = {
-            description: actionDescription || resource.description || actionValue,
+            description: actionDescription || resource.description ||
+              actionValue,
             inputSchema: inputSchema,
             needsApproval: toolsRequiringApproval.has(toolName),
             execute: async (args: any) => {
@@ -131,7 +191,12 @@ export function resourceToTools<Input, Output>(
               };
               // Parse through schema to apply Zod transforms (e.g., string → Date)
               const input = resource.schemas.request.parse(rawInput);
-              const result = await resource.use(input as any, auth);
+              const result = await executeResource(
+                resource,
+                input as Input,
+                auth,
+                options?.resourceManager,
+              );
               // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
               return serializeResult(result);
             },
@@ -156,7 +221,12 @@ export function resourceToTools<Input, Output>(
     execute: async (args: any) => {
       // Parse through schema to apply Zod transforms (e.g., string → Date)
       const input = resource.schemas.request.parse(args);
-      const result = await resource.use(input, auth);
+      const result = await executeResource(
+        resource,
+        input,
+        auth,
+        options?.resourceManager,
+      );
       // Return in AI SDK outputSchema format with EJSON serialization for ObjectIds
       return serializeResult(result);
     },
@@ -167,9 +237,25 @@ export function resourceToTools<Input, Output>(
 export function createMCPToolsFromResources(
   resources: Resource<any, any>[],
   auth: Auth,
-  options?: ToolAdapterOptions
-): Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> {
-  let allTools: Record<string, { description?: string, inputSchema: any, execute: (args: any) => Promise<any>, needsApproval?: boolean }> = {};
+  options?: ToolAdapterOptions,
+): Record<
+  string,
+  {
+    description?: string;
+    inputSchema: any;
+    execute: (args: any) => Promise<any>;
+    needsApproval?: boolean;
+  }
+> {
+  let allTools: Record<
+    string,
+    {
+      description?: string;
+      inputSchema: any;
+      execute: (args: any) => Promise<any>;
+      needsApproval?: boolean;
+    }
+  > = {};
   for (const resource of resources) {
     const resourceTools = resourceToTools(resource, auth, options);
     allTools = { ...allTools, ...resourceTools };
@@ -180,7 +266,7 @@ export function createMCPToolsFromResources(
 export function createAiSdkToolsFromResources(
   resources: Resource<any, any>[],
   auth: Auth,
-  options?: ToolAdapterOptions
+  options?: ToolAdapterOptions,
 ): Record<string, Tool> {
   const tools = createMCPToolsFromResources(resources, auth, options);
   const aiSdkTools: Record<string, Tool> = {};
@@ -194,7 +280,10 @@ export function createAiSdkToolsFromResources(
         execute: params.execute,
       });
     } catch (err) {
-      console.warn(`[ai-sdk-adapter] Failed to create tool ${name}:`, (err as Error).message);
+      console.warn(
+        `[ai-sdk-adapter] Failed to create tool ${name}:`,
+        (err as Error).message,
+      );
     }
   }
   return aiSdkTools;
@@ -203,7 +292,7 @@ export function createAiSdkToolsFromResources(
 export function resourceToAiSdkTools<Input, Output>(
   resource: Resource<Input, Output>,
   auth: Auth,
-  options?: ToolAdapterOptions
+  options?: ToolAdapterOptions,
 ): Record<string, Tool> {
   const tools = resourceToTools(resource, auth, options);
   const aiSdkTools: Record<string, Tool> = {};
@@ -217,9 +306,11 @@ export function resourceToAiSdkTools<Input, Output>(
         execute: params.execute,
       });
     } catch (err) {
-      console.warn(`[ai-sdk-adapter] Failed to create tool ${name}:`, (err as Error).message);
+      console.warn(
+        `[ai-sdk-adapter] Failed to create tool ${name}:`,
+        (err as Error).message,
+      );
     }
   }
   return aiSdkTools;
 }
-

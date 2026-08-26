@@ -69,8 +69,8 @@ statistics, missing required keys, optional keys, undocumented keys, duplicate
 definitions, blank values, malformed assignments, and formatting issues. The
 command exits non-zero when the files need attention, so `--json` can be used in
 CI or other automation. `--all` treats the root contract as required and the
-standalone diarizator/GPU deployments as optional; missing optional `.env` files
-are reported without failing the audit.
+standalone diarizator, GPU, and RAG deployments as optional; missing optional
+`.env` files are reported without failing the audit.
 
 Apply only safe automatic repairs with:
 
@@ -95,9 +95,9 @@ specific template with an explicit, single-contract command:
   --fix --prune-undocumented
 ```
 
-The three contracts remain separate because they are loaded by different
-deployments. Compose services pass explicit diarizator variables instead of
-injecting an entire application `.env` containing unrelated secrets.
+The deployment contracts remain separate because they are loaded by different
+services. Compose services pass explicit diarizator and RAG variables instead
+of injecting an entire application `.env` containing unrelated secrets.
 
 #### Readiness and reload diagnostics
 
@@ -127,6 +127,16 @@ An ordinary frontend `src/` edit uses HMR without a full restart. Editing
 frontend `[READY]` record. A backend source edit restarts the Deno process and
 may keep `/readiness` unavailable while worker startup checks run.
 
+The Media page uses the same development backend. A `502 Bad Gateway` during a
+source edit means nginx temporarily had no ready upstream; wait for the next
+backend `[READY]` line and retry the local proposal. Clustering validation and
+per-item cost guards return structured application errors instead of 502. The
+Media inventory queues selected photos as separate jobs so one rejected item
+does not fail the rest of the selected batch. Large mounted-folder sync and
+Google recognition batches are durable coordinators: requests return
+immediately, work resumes in 25-file chunks or a bounded photo-job window, and
+the 30-second watchdog resumes a broken continuation after restart.
+
 The dependency watchdog uses its own one-connection MongoDB pool. Long-running
 imports and worker rebuilds may make ordinary queries slower, but they must not
 starve the watchdog or cause `[SELF-HEAL]` restarts from an application-pool
@@ -152,6 +162,122 @@ When a change is not visible:
 5. After recreating frontend or backend, restart nginx because the container IP
    may have changed: `docker compose restart nginx`.
 6. Do not restart MongoDB or Redis for an application-code reload.
+
+#### Isolated Photo/PDF Knowledge development
+
+Use the media overlays when the feature must run without sharing the main
+checkout's Docker state. The overlay fixes the Compose project name to
+`mycelia-media-89da`, publishes `3211`/`4443`, removes the Mongo host port, uses
+distinct app image tags, and creates separate Mongo/Redis volumes.
+
+```bash
+cp .env.media.example .env.media.local
+# Set absolute MEDIA_SOURCE_HOST_PATH and replace development secrets.
+
+docker compose \
+  --env-file .env.media.local \
+  -f docker-compose.yml \
+  -f docker-compose.media-dev.yml \
+  up -d --build mongo redis backend frontend nginx
+```
+
+Verify the actual checkout and runtime before testing:
+
+```bash
+docker inspect mycelia-media-89da-backend-1 \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination .RW}}{{end}}'
+docker inspect mycelia-media-89da-frontend-1 \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination .RW}}{{end}}'
+
+docker compose \
+  --env-file .env.media.local \
+  -f docker-compose.yml \
+  -f docker-compose.media-dev.yml \
+  ps
+
+curl -fsS http://127.0.0.1:3211/readiness
+```
+
+The source folder must appear at `/media-source` with `RW=false`; backend must
+report `mode=dev`, frontend `mode=development`, and both must emit `[READY]`.
+Run `bash scripts/smoke-media-local.sh` to verify analyze → confirm → protected
+WebP retrieval without queueing recognition. Add `docker-compose.media-gcp.yml`
+when testing ADC/GCP; keep it on every backend recreate so the credential mount
+is not dropped. Untouched upload previews expire after one hour, while an
+interrupted confirmation has a bounded seven-day idempotent recovery lease.
+Full setup and the provider-neutral
+visual-understanding/embedding contract, configurable gross-cost guards
+(24-hour Free Trial confirmation or persistent project-bound paid mode), and
+visible committed/reserved cost ledger, multipart managed uploads, EXIF/GPS
+extraction, and preview-confirm deletion of managed originals are in
+[docs/MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
+The same guide covers the separate local photo-event proposal → group consent →
+provider analysis → Event Object publication flow; event analysis is never
+triggered automatically by import. Reanalysis also uses its own exact-thumbnail
+preview and confirmation; cancelling a worker after the provider-start fence is
+not proof that the remote request was cancelled or unbilled.
+
+For the 900-photo campaign, place originals under
+`MEDIA_SOURCE_HOST_PATH/900-photos/` and select `900-photos` in the mounted
+folder browser on `/media`; `.` remains the default recursive root. Local folder
+sync does not call Google. Its single normal `mediaFolderImport` job loops over
+durable 25-file commits and publishes checked/total progress, speed and ETA to
+Media and Jobs. The separate **Process all with Google Cloud EU Photo
+Knowledge** preview selects every eligible asset server-side, not only the
+visible inventory page, fixes visual-understanding + OCR, and shows the
+authoritative batch ceiling before consent. Photos with local time/GPS are
+queryable through indexed Timeline/Map projections in every recognition state;
+missing values are kept in Unplaced and can be edited without a provider call.
+
+#### Isolated Qdrant RAG development
+
+The vector projection has its own Compose project, ports, state database, model
+cache, and Qdrant volume. Do not add it to the main `docker compose up` command
+or restart MongoDB/Redis while iterating on RAG code.
+
+```bash
+cp .env.rag.example .env.rag.local
+
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  up -d --build
+```
+
+Default host ports are RAG API `48091`, Qdrant REST/dashboard `46333`, and
+Qdrant gRPC `46334`. They do not overlap the main application. Verify process,
+dependency readiness, and projection readiness separately:
+
+```bash
+docker compose \
+  --env-file .env.rag.local \
+  -f docker-compose.rag.yml \
+  ps
+curl -fsS http://127.0.0.1:48091/health
+curl -fsS http://127.0.0.1:48091/ready
+curl -fsS http://127.0.0.1:48091/v1/status
+```
+
+`/health` is only liveness. `/ready` checks for a compatible active Qdrant
+projection/alias and enforces the optional read-only-principal gate;
+`/v1/status` is the authoritative view of build/catch-up/active and checkpoint
+freshness state. A failed blue/green rebuild must leave the previous active
+collection intact. Evidence search separately bulk-revalidates candidate source
+revisions and filters against MongoDB and therefore fails closed if that
+canonical read is unavailable. The complete lifecycle, connection modes, control
+semantics, and deferred authorization/read-only-user migration are documented in
+[docs/RAG_QDRANT.md](docs/RAG_QDRANT.md).
+
+The default inference profile is the local
+`fastembed-minilm-bm25-v1` baseline with pinned MiniLM/BM25 artifact revisions and
+no reranker. `/v1/status` and **Settings → Knowledge index** show the full
+embedding-space fingerprint and executor state. A future Qwen3/4090 service is a
+separate HTTP executor and new blue/green projection; it is not enabled by any
+Stage 1 environment variable. The Stage 1 model, revision, tokenizer,
+instructions, dimensions, and normalization values are immutable and invalid
+overrides stop configuration loading. Future local/remote executors must report
+the same embedding fingerprint and chunker contract before they can write or
+query one generation.
 
 #### Objects browse and Timeline density rollout
 
@@ -231,8 +357,8 @@ with neither field has no range rendered rather than an inferred one.
 
 The Job Detail page keeps a batch's recorded diarization errors as historical
 evidence, but resolves each affected range against current `audio_chunks` so it
-can distinguish recovered retries, pending retries, and exhausted failures.
-Raw job payloads, worker logs, and access-audit rows remain available in closed
+can distinguish recovered retries, pending retries, and exhausted failures. Raw
+job payloads, worker logs, and access-audit rows remain available in closed
 technical sections instead of expanding the page by default.
 
 Deploy changes to this path by pausing only the diarization worker, draining its
@@ -602,6 +728,7 @@ port)
 ### Tech Stack
 
 - **Deno** runtime with npm compatibility
+- **FFmpeg/ffprobe and ExifTool** for local media previews and metadata
 - **React 18** + TypeScript
 - **Vite** for build tooling
 - **Zustand** for state management
@@ -618,6 +745,23 @@ import { Component } from "@/components/Component";
 import { useTimeline } from "@/hooks/useTimeline";
 import type { TimelineItem } from "@/types/timeline";
 ```
+
+### Date and time selection
+
+Use `DateRangePicker` from `frontend/src/components/DateRangePicker.tsx` for
+start/end ranges throughout the app. It keeps the date range in one calendar,
+provides month and year dropdowns, defaults to minute precision, and can add the
+audio-density timeline with `showAudioTimeline`. The picker opens in a
+viewport-contained, internally scrolling dialog; users explicitly select the
+Start or End boundary before editing its date or time. Use `precision="date"`
+for date-only filters and opt into `precision="second"` only when the workflow
+requires exact seconds.
+
+Use `DateTimePicker` from `frontend/src/components/ui/datetime-picker.tsx` only
+for a single instant. Do not assemble new range controls from separate native
+`date`, `time`, or `datetime-local` inputs. Both shared controls use the
+configured app timezone unless the caller explicitly supplies a contextual
+Timeline timezone or UTC for a maintenance boundary.
 
 ## Backend Development
 
@@ -656,16 +800,28 @@ For diarization, voice enrollment, speaker recognition, and historical backfill:
 2. Run diarization locally on CPU or remotely on an NVIDIA GPU.
 3. Configure and verify the route in Settings → Diarization.
 4. Complete missing diarization coverage.
-5. In Settings → Voice Identity, enroll Sky under **Profiles & samples**, label
-   scoped validation audio under **Review & calibration**, preview the selected
-   recordings/Timeline range, and save the current revision-bound calibration.
-6. In **Jobs**, press play on `speakerIdentity`; the launcher resolves Sky,
-   calibration, and the compatible active generation. Run a bounded 24-hour
-   pilot before historical backfill.
+5. In Settings → Voice Identity, build Sky from clean, single-speaker profile
+   samples. Use ordinary review labels for Timeline/calibration; add a clip to
+   the profile only when it represents a missing recording condition.
+6. Press **Start recommended review** and label enough independent recordings
+   for Learn and Check. Timeline-derived profile samples are excluded from both
+   sets; legacy Timeline samples without recording provenance must be re-added.
+7. Save a calibration only after Check has at least 20 Sky labels, 20 not-Sky
+   labels, and 20 safe automatic Sky matches at the selected precision. If
+   held-out not-Sky decisions are not proven, the server keeps them uncertain.
+8. Use the embedded **Classify all compatible history** action. The server
+   freezes a cutoff, partitions real active segments by run and embedding space,
+   and resumes batches with deterministic job ownership. Raw technical IDs
+   remain in Advanced/Jobs for diagnostics only.
+9. If Voice Identity reports empty active coverage, open **Operations &
+   generations**, inspect the non-destructive repair preview, and confirm repair
+   separately before classification. Never purge as part of repair.
+10. Open Timeline and use the Speaker identity track/filter after the campaign
+    reports zero real remaining segments.
 
-See
-[the complete diarization and voice identity runbook](docs/SPEAKER_IDENTIFICATION.md)
-for exact commands, UI workflow, safety gates, and troubleshooting.
+See [the architecture guide](docs/SPEAKER_IDENTIFICATION.md) and
+[operator runbook](docs/VOICE_IDENTITY_RUNBOOK.md) for exact commands, UI
+workflow, safety gates, and troubleshooting.
 
 ## Database Migrations
 
@@ -788,6 +944,11 @@ are retained and retried with bounded exponential backoff:
 - summarization content-filter failures: 15 minutes, increasing up to 24 hours;
 - completed summarization claims left by an interrupted run are released by
   maintenance once the summary exists.
+- photo-event analysis runs are reconciled at startup and every minute. A run
+  that has not crossed the provider fence releases its reservation; a stale
+  post-fence run becomes `provider_outcome_unknown` and is never replayed
+  automatically. An early duplicate worker is delayed until the saved lease can
+  be reconciled instead of being recorded as completed.
 - active Mongo job records whose BullMQ record disappeared after a process
   restart are cancelled with `queue_record_missing`; summarization claims are
   released and interrupted extraction chunks return to the retry backlog.

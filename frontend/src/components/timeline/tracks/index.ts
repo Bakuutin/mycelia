@@ -16,9 +16,11 @@ export {
   TranscriptionsTrack,
 } from "./HistogramTrack";
 export { LOCATIONS_CONFIG, LocationTrack } from "./LocationTrack";
+export { PHOTOS_CONFIG, PhotosTrack } from "./PhotosTrack";
 
 import type { Track } from "@/types/tracks";
 import { LOCATIONS_CONFIG, LocationTrack } from "./LocationTrack";
+import { PHOTOS_CONFIG, PhotosTrack } from "./PhotosTrack";
 import {
   VOICE_DETECTION_CONFIG,
   VoiceDetectionTrack,
@@ -47,4 +49,5 @@ export const TRACK_REGISTRY: Track[] = [
   },
   { config: DIARIZATIONS_CONFIG, component: DiarizationsTrack },
   { config: LOCATIONS_CONFIG, component: LocationTrack },
+  { config: PHOTOS_CONFIG, component: PhotosTrack },
 ];

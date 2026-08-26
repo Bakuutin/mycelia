@@ -136,11 +136,68 @@ Deno.test(
     const untouched = await mongo({
       action: "findOne",
       collection: "diarizations",
-      query: { runId: "legacy-v0", start: new Date("2024-01-15T10:00:00.000Z") },
+      query: {
+        runId: "legacy-v0",
+        start: new Date("2024-01-15T10:00:00.000Z"),
+      },
     }) as { lifecycleStatus: string };
 
     expect(legacyRun.status).toBe("active");
     expect(legacyRun.partialSupersessions).toHaveLength(1);
     expect(untouched.lifecycleStatus).toBe("active");
+  }),
+);
+
+Deno.test(
+  "overlapping run activations are serialized so only one target remains active",
+  withFixtures(["Admin", "Mongo"], async (auth: Auth) => {
+    const mongo = await getMongoResource(auth);
+    await mongo({
+      action: "insertMany",
+      collection: "diarization_runs",
+      docs: [
+        {
+          runId: "legacy-v0",
+          status: "active",
+          range: { start: MARCH_START, end: MARCH_END },
+        },
+        {
+          runId: "run-a",
+          status: "ready",
+          range: { start: MARCH_START, end: MARCH_END },
+        },
+        {
+          runId: "run-b",
+          status: "ready",
+          range: { start: MARCH_START, end: MARCH_END },
+        },
+      ],
+    });
+    await mongo({
+      action: "insertMany",
+      collection: "diarizations",
+      docs: ["legacy-v0", "run-a", "run-b"].map((runId) => ({
+        runId,
+        lifecycleStatus: runId === "legacy-v0" ? "active" : "ready",
+        start: new Date("2024-03-01T10:00:00.000Z"),
+        end: new Date("2024-03-01T10:00:30.000Z"),
+      })),
+    });
+
+    const resource = new SpeakerSegmentsResource();
+    await Promise.all([
+      resource.use({ action: "activate-run", runId: "run-a" }, auth),
+      resource.use({ action: "activate-run", runId: "run-b" }, auth),
+    ]);
+
+    const activeTargets = await mongo({
+      action: "find",
+      collection: "diarizations",
+      query: {
+        runId: { $in: ["run-a", "run-b"] },
+        lifecycleStatus: "active",
+      },
+    }) as unknown[];
+    expect(activeTargets).toHaveLength(1);
   }),
 );

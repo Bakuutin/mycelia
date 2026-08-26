@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { buildWorkerCatalog, WORKER_CATALOG } from "./worker-catalog.ts";
 
 Deno.test("worker catalog has unique entries and one-line descriptions", () => {
-  expect(new Set(WORKER_CATALOG.map((entry) => entry.type)).size).toBe(20);
+  expect(new Set(WORKER_CATALOG.map((entry) => entry.type)).size).toBe(21);
   for (const entry of WORKER_CATALOG) {
     expect(entry.label.trim().length).toBeGreaterThan(0);
     expect(entry.progressKind.trim().length).toBeGreaterThan(0);

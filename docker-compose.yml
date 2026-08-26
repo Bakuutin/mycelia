@@ -58,19 +58,6 @@ services:
       start_period: 60s
       retries: 4
 
-  # mongo-search:
-  #   image: mongodb/mongodb-community-search:latest
-  #   entrypoint: ["/mongot-entrypoint.sh"]
-  #   volumes:
-  #     - ${MONGO_SEARCH_HOST_PATH:-mongo_search_data}:/data/mongot
-  #     - ./misc/mongo/mongot.conf:/mongot-community/config.default.yml:ro
-  #     - ./misc/mongo/mongot-entrypoint.sh:/mongot-entrypoint.sh:ro
-  #   environment:
-  #     - MONGO_INITDB_ROOT_USERNAME
-  #     - MONGO_INITDB_ROOT_PASSWORD
-  #   depends_on:
-  #     - mongo
-
   pbm-agent:
     image: percona/percona-backup-mongodb:2.12.0
     profiles: ["backup"]
@@ -253,6 +240,5 @@ services:
 volumes:
   redis_data:
   mongo_data:
-  mongo_search_data:
   worker_data:
   pbm_backup_data:

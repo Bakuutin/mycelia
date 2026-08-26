@@ -69,4 +69,9 @@ export const env = {
     const raw = Number(Deno.env.get("TRANSCRIPTION_BATCH_SIZE") || "16");
     return Number.isInteger(raw) && raw > 0 ? Math.min(raw, 32) : 16;
   })(),
+
+  // Optional media import root. The dedicated media Compose overlay mounts a
+  // host folder read-only here; the base stack leaves the feature unavailable.
+  MEDIA_SOURCE_ROOT: Deno.env.get("MEDIA_SOURCE_ROOT") || "",
+  MEDIA_SELF_HOSTED_API_KEY: Deno.env.get("MEDIA_SELF_HOSTED_API_KEY") || "",
 };

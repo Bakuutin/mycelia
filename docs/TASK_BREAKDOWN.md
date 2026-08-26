@@ -59,7 +59,6 @@ This document provides a detailed task breakdown for implementing the Mycelia De
   - Configure networks (all on `mycelia-network`)
   - Configure volumes:
     - `mongo_data`
-    - `mongo_search_data`
     - `redis_data`
     - `audio_files` (shared between frontend/backend/pipeline)
   - Add depends_on with health checks

@@ -1,6 +1,7 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   AudioLines,
+  Cloud,
   Cog,
   Database,
   FileSearch,
@@ -77,6 +78,18 @@ const SettingsLayout = () => {
       path: "/settings/maps",
       icon: MapIcon,
       description: "Places database, GPS imports and map preferences",
+    },
+    {
+      name: "Google Cloud",
+      path: "/settings/google-cloud",
+      icon: Cloud,
+      description: "Photo understanding, providers and credit guard",
+    },
+    {
+      name: "Knowledge / RAG",
+      path: "/settings/knowledge",
+      icon: Database,
+      description: "Inspect, update and rebuild the Qdrant projection",
     },
   ];
 

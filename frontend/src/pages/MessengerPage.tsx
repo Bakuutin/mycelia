@@ -1,9 +1,9 @@
-import { useEffect, useState, useRef, useCallback } from "react";
-import { useSearchParams, useParams, useNavigate } from "react-router-dom";
-import { ObjectId } from "bson";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Info } from "lucide-react";
 import * as InfiniteScrollModule from "react-infinite-scroll-component";
-const InfiniteScroll = (InfiniteScrollModule as any).default || InfiniteScrollModule;
+const InfiniteScroll = (InfiniteScrollModule as any).default ||
+  InfiniteScrollModule;
 import { callResource } from "@/lib/api";
 import type { Chat, Message as IMessage } from "@myceliasdk/messengers.ts";
 import {
@@ -23,6 +23,14 @@ import {
 } from "@/components/ui/dialog";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { useFormattedTime } from "@/lib/formatTime";
+import { cn } from "@/lib/utils";
+import {
+  focusDeepLinkedMessage,
+  loadMessengerMessageWindow,
+  messageElementId,
+  mongoDeepLinkIdReference,
+  normalizeMessageDeepLinkId,
+} from "@/lib/messageDeepLink";
 
 // Messenger Module Imports
 import { registry } from "@/modules/messenger/core/registry.ts";
@@ -44,16 +52,27 @@ const MESSAGES_PER_PAGE = 50;
 
 export default function MessengerPage() {
   const { chatId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const requestedMessageId = searchParams.get("messageId");
+  const linkedMessageId = normalizeMessageDeepLinkId(
+    requestedMessageId,
+  );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const focusedDeepLinkRef = useRef<string | undefined>(undefined);
   const [chats, setChats] = useState<Chat[]>([]);
   const [messages, setMessages] = useState<IMessage[]>([]);
   const [loadingChats, setLoadingChats] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [linkedMessageUnavailable, setLinkedMessageUnavailable] = useState(
+    false,
+  );
   const [hasMore, setHasMore] = useState(false);
-  const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState<Date | null>(null);
+  const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState<
+    Date | null
+  >(null);
   const [scrollHeight, setScrollHeight] = useState<number>(500);
-  
+
   // Fetch Chats
   useEffect(() => {
     const fetchChats = async () => {
@@ -74,41 +93,78 @@ export default function MessengerPage() {
         setLoadingChats(false);
       }
     };
-    
+
     fetchChats();
   }, []);
 
   // Fetch initial messages for selected chat
   useEffect(() => {
+    let cancelled = false;
     if (!chatId) {
-        setMessages([]);
-        setHasMore(false);
-        setOldestMessageTimestamp(null);
-        return;
+      setMessages([]);
+      setHasMore(false);
+      setOldestMessageTimestamp(null);
+      setLinkedMessageUnavailable(false);
+      return;
     }
-    
+
     const loadInitialMessages = async () => {
       setMessages([]);
       setHasMore(true);
       setOldestMessageTimestamp(null);
       setLoadingMessages(true);
-      
+      setLinkedMessageUnavailable(false);
+
       try {
-        const query: any = { chatId: { $oid: chatId } };
-        
+        if (requestedMessageId !== null) {
+          if (!linkedMessageId) {
+            setHasMore(false);
+            setLinkedMessageUnavailable(true);
+            return;
+          }
+          const focusedWindow = await loadMessengerMessageWindow(
+            callResource,
+            {
+              chatId,
+              messageId: linkedMessageId,
+              pageSize: MESSAGES_PER_PAGE,
+            },
+          );
+          if (cancelled) return;
+          if (focusedWindow.state === "found") {
+            setMessages(focusedWindow.messages);
+            setOldestMessageTimestamp(focusedWindow.oldestTimestamp);
+            setHasMore(focusedWindow.hasMoreOlder);
+            return;
+          }
+          setHasMore(false);
+          setLinkedMessageUnavailable(true);
+          return;
+        }
+
+        const chatReference = mongoDeepLinkIdReference(chatId);
+        if (!chatReference) {
+          setHasMore(false);
+          return;
+        }
+        const query: any = { chatId: chatReference };
+
         const result = await callResource("mongo", {
           action: "find",
           collection: "messages",
           query,
           options: {
             sort: { timestamp: -1 },
-            limit: MESSAGES_PER_PAGE + 1
+            limit: MESSAGES_PER_PAGE + 1,
           },
         });
-        
+        if (cancelled) return;
+
         const hasMoreMessages = result.length > MESSAGES_PER_PAGE;
-        const messagesToShow = hasMoreMessages ? result.slice(0, MESSAGES_PER_PAGE) : result;
-        
+        const messagesToShow = hasMoreMessages
+          ? result.slice(0, MESSAGES_PER_PAGE)
+          : result;
+
         if (messagesToShow.length > 0) {
           const last = messagesToShow[messagesToShow.length - 1];
           setMessages(messagesToShow);
@@ -118,14 +174,41 @@ export default function MessengerPage() {
           setHasMore(false);
         }
       } catch (err) {
+        if (cancelled) return;
         console.error("Failed to load initial messages", err);
+        if (requestedMessageId !== null) {
+          setMessages([]);
+          setHasMore(false);
+          setLinkedMessageUnavailable(true);
+        }
       } finally {
-        setLoadingMessages(false);
+        if (!cancelled) setLoadingMessages(false);
       }
     };
-    
-    loadInitialMessages();
-  }, [chatId]);
+
+    void loadInitialMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId, linkedMessageId, requestedMessageId]);
+
+  useEffect(() => {
+    if (!chatId || !linkedMessageId || loadingMessages) return;
+    if (
+      !messages.some((message) => message._id.toString() === linkedMessageId)
+    ) {
+      return;
+    }
+    const focusKey = `${chatId}:${linkedMessageId}`;
+    if (focusedDeepLinkRef.current === focusKey) return;
+
+    const frame = requestAnimationFrame(() => {
+      if (focusDeepLinkedMessage("messenger", linkedMessageId)) {
+        focusedDeepLinkRef.current = focusKey;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chatId, linkedMessageId, loadingMessages, messages]);
 
   // Calculate scroll container height dynamically
   useEffect(() => {
@@ -138,8 +221,8 @@ export default function MessengerPage() {
 
     updateHeight();
 
-    globalThis.addEventListener('resize', updateHeight);
-    return () => globalThis.removeEventListener('resize', updateHeight);
+    globalThis.addEventListener("resize", updateHeight);
+    return () => globalThis.removeEventListener("resize", updateHeight);
   }, [chatId]);
 
   // Load more messages (older messages)
@@ -147,29 +230,36 @@ export default function MessengerPage() {
     if (!chatId) {
       return;
     }
-    
+
     try {
-      const query: any = { chatId: { $oid: chatId } };
+      const chatReference = mongoDeepLinkIdReference(chatId);
+      if (!chatReference) {
+        setHasMore(false);
+        return;
+      }
+      const query: any = { chatId: chatReference };
       if (oldestMessageTimestamp) {
         query.timestamp = { $lt: oldestMessageTimestamp };
       }
-      
+
       const result = await callResource("mongo", {
         action: "find",
         collection: "messages",
         query,
         options: {
           sort: { timestamp: -1 },
-          limit: MESSAGES_PER_PAGE + 1
+          limit: MESSAGES_PER_PAGE + 1,
         },
       });
-      
+
       const hasMoreMessages = result.length > MESSAGES_PER_PAGE;
-      const messagesToShow = hasMoreMessages ? result.slice(0, MESSAGES_PER_PAGE) : result;
-      
+      const messagesToShow = hasMoreMessages
+        ? result.slice(0, MESSAGES_PER_PAGE)
+        : result;
+
       if (messagesToShow.length > 0) {
         const last = messagesToShow[messagesToShow.length - 1];
-        setMessages(prev => [...prev, ...messagesToShow]);
+        setMessages((prev) => [...prev, ...messagesToShow]);
         setOldestMessageTimestamp(new Date(last.timestamp));
         setHasMore(hasMoreMessages);
       } else {
@@ -179,13 +269,19 @@ export default function MessengerPage() {
       console.error("Failed to load more messages", err);
     }
   }, [chatId, oldestMessageTimestamp]);
-  
-  const selectedChat = chats.find(c => c._id.toString() === chatId);
-  
-  const lastMessageDate = selectedChat?.lastMessageDate ? new Date(selectedChat.lastMessageDate) : new Date();
-  const createdAtDate = selectedChat ? new Date(selectedChat.createdAt) : new Date();
-  const updatedAtDate = selectedChat ? new Date(selectedChat.updatedAt) : new Date();
-  
+
+  const selectedChat = chats.find((c) => c._id.toString() === chatId);
+
+  const lastMessageDate = selectedChat?.lastMessageDate
+    ? new Date(selectedChat.lastMessageDate)
+    : new Date();
+  const createdAtDate = selectedChat
+    ? new Date(selectedChat.createdAt)
+    : new Date();
+  const updatedAtDate = selectedChat
+    ? new Date(selectedChat.updatedAt)
+    : new Date();
+
   const lastMessageFormatted = useFormattedTime(lastMessageDate);
   const createdAtFormatted = useFormattedTime(createdAtDate);
   const updatedAtFormatted = useFormattedTime(updatedAtDate);
@@ -200,140 +296,236 @@ export default function MessengerPage() {
               <h2 className="font-semibold">Chats</h2>
             </div>
             <ScrollArea className="flex-1">
-              {loadingChats ? (
-                 <div className="p-4 space-y-4">
-                    {[1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full" />)}
-                 </div>
-              ) : (
-                <div className="flex flex-col">
-                  {chats.map((chat) => (
-                    <ChatListItem 
-                        key={chat._id.toString()} 
-                        chat={chat} 
+              {loadingChats
+                ? (
+                  <div className="p-4 space-y-4">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-16 w-full" />
+                    ))}
+                  </div>
+                )
+                : (
+                  <div className="flex flex-col">
+                    {chats.map((chat) => (
+                      <ChatListItem
+                        key={chat._id.toString()}
+                        chat={chat}
                         isSelected={chatId === chat._id.toString()}
-                        onClick={() => navigate(`/messaging/${chat._id.toString()}`)}
-                    />
-                  ))}
-                  {chats.length === 0 && (
+                        onClick={() =>
+                          navigate(`/messaging/${chat._id.toString()}`)}
+                      />
+                    ))}
+                    {chats.length === 0 && (
                       <div className="p-8 text-center text-muted-foreground">
-                          No chats found
+                        No chats found
                       </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                )}
             </ScrollArea>
           </div>
         </ResizablePanel>
-        
+
         <ResizableHandle />
-        
+
         {/* Message Thread */}
         <ResizablePanel defaultSize={70}>
-            {chatId ? (
-                <div className="h-full flex flex-col">
-                    <div className="p-4 border-b flex items-center justify-between bg-muted/40">
-                        <div className="flex items-center gap-3">
-                             <div>
-                                 <h2 className="font-semibold text-sm">{selectedChat?.name}</h2>
-                                 <p className="text-xs text-muted-foreground capitalize">{selectedChat?.platform}</p>
-                             </div>
-                        </div>
-                        {selectedChat && (
-                          <Dialog>
-                            <DialogTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                                <Info className="h-4 w-4" />
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent className="max-w-2xl max-h-[80vh]">
-                              <DialogHeader>
-                                <DialogTitle>Chat Information</DialogTitle>
-                              </DialogHeader>
-                              <ScrollArea className="max-h-[60vh] pr-4">
-                                <div className="space-y-4">
-                                  <div className="space-y-2">
-                                    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                      <span className="text-sm font-medium text-muted-foreground">Name:</span>
-                                      <span className="text-sm">{selectedChat.name || "N/A"}</span>
-                                    </div>
-                                    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                      <span className="text-sm font-medium text-muted-foreground">Platform:</span>
-                                      <span className="text-sm capitalize">{selectedChat.platform}</span>
-                                    </div>
-                                    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                      <span className="text-sm font-medium text-muted-foreground">Type:</span>
-                                      <span className="text-sm capitalize">{selectedChat.type || "N/A"}</span>
-                                    </div>
-                                    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                      <span className="text-sm font-medium text-muted-foreground">External ID:</span>
-                                      <span className="text-sm font-mono text-xs">{String(selectedChat.externalId)}</span>
-                                    </div>
-                                    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                      <span className="text-sm font-medium text-muted-foreground">Chat ID:</span>
-                                      <span className="text-sm font-mono text-xs">{selectedChat._id.toString()}</span>
-                                    </div>
-                                    {selectedChat.lastMessageDate && (
-                                      <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                        <span className="text-sm font-medium text-muted-foreground">Last Message:</span>
-                                        <span className="text-sm">{lastMessageFormatted}</span>
-                                      </div>
-                                    )}
-                                    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                      <span className="text-sm font-medium text-muted-foreground">Created:</span>
-                                      <span className="text-sm">{createdAtFormatted}</span>
-                                    </div>
-                                    <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
-                                      <span className="text-sm font-medium text-muted-foreground">Updated:</span>
-                                      <span className="text-sm">{updatedAtFormatted}</span>
-                                    </div>
-                                  </div>
-                                  {selectedChat.raw && (
-                                    <div className="space-y-2">
-                                      <h3 className="text-sm font-medium">Raw Data</h3>
-                                      <CodeBlock
-                                        code={JSON.stringify(selectedChat.raw, null, 2)}
-                                        language="json"
-                                        className="text-xs"
-                                      />
-                                    </div>
-                                  )}
+          {chatId
+            ? (
+              <div className="h-full flex flex-col">
+                <div className="p-4 border-b flex items-center justify-between bg-muted/40">
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <h2 className="font-semibold text-sm">
+                        {selectedChat?.name}
+                      </h2>
+                      <p className="text-xs text-muted-foreground capitalize">
+                        {selectedChat?.platform}
+                      </p>
+                    </div>
+                  </div>
+                  {selectedChat && (
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                        >
+                          <Info className="h-4 w-4" />
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl max-h-[80vh]">
+                        <DialogHeader>
+                          <DialogTitle>Chat Information</DialogTitle>
+                        </DialogHeader>
+                        <ScrollArea className="max-h-[60vh] pr-4">
+                          <div className="space-y-4">
+                            <div className="space-y-2">
+                              <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                <span className="text-sm font-medium text-muted-foreground">
+                                  Name:
+                                </span>
+                                <span className="text-sm">
+                                  {selectedChat.name || "N/A"}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                <span className="text-sm font-medium text-muted-foreground">
+                                  Platform:
+                                </span>
+                                <span className="text-sm capitalize">
+                                  {selectedChat.platform}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                <span className="text-sm font-medium text-muted-foreground">
+                                  Type:
+                                </span>
+                                <span className="text-sm capitalize">
+                                  {selectedChat.type || "N/A"}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                <span className="text-sm font-medium text-muted-foreground">
+                                  External ID:
+                                </span>
+                                <span className="text-sm font-mono text-xs">
+                                  {String(selectedChat.externalId)}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                <span className="text-sm font-medium text-muted-foreground">
+                                  Chat ID:
+                                </span>
+                                <span className="text-sm font-mono text-xs">
+                                  {selectedChat._id.toString()}
+                                </span>
+                              </div>
+                              {selectedChat.lastMessageDate && (
+                                <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                  <span className="text-sm font-medium text-muted-foreground">
+                                    Last Message:
+                                  </span>
+                                  <span className="text-sm">
+                                    {lastMessageFormatted}
+                                  </span>
                                 </div>
-                              </ScrollArea>
-                            </DialogContent>
-                          </Dialog>
-                        )}
-                    </div>
-                    <div 
-                      ref={scrollContainerRef}
-                      className="flex-1 overflow-hidden"
-                    >
-                             <InfiniteScroll
-                               dataLength={messages.length}
-                               next={loadMoreMessages}
-                               hasMore={hasMore}
-                               loader={
-                                 <div className="flex justify-center py-2">
-                                   <div className="text-xs text-muted-foreground">Loading more messages...</div>
-                                 </div>
-                               }
-                               height={`${scrollHeight}px`}
-                               inverse
-                               style={{ display: 'flex', flexDirection: 'column-reverse' }}
-                               className="p-4 space-y-4"
-                             >
-                                 {messages.map((msg) => (
-                                     <MessageBubble key={msg._id.toString()} message={msg} />
-                                 ))}
-                             </InfiniteScroll>
-                         
-                    </div>
+                              )}
+                              <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                <span className="text-sm font-medium text-muted-foreground">
+                                  Created:
+                                </span>
+                                <span className="text-sm">
+                                  {createdAtFormatted}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                                <span className="text-sm font-medium text-muted-foreground">
+                                  Updated:
+                                </span>
+                                <span className="text-sm">
+                                  {updatedAtFormatted}
+                                </span>
+                              </div>
+                            </div>
+                            {selectedChat.raw && (
+                              <div className="space-y-2">
+                                <h3 className="text-sm font-medium">
+                                  Raw Data
+                                </h3>
+                                <CodeBlock
+                                  code={JSON.stringify(
+                                    selectedChat.raw,
+                                    null,
+                                    2,
+                                  )}
+                                  language="json"
+                                  className="text-xs"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </ScrollArea>
+                      </DialogContent>
+                    </Dialog>
+                  )}
                 </div>
-            ) : (
-                <div className="h-full flex items-center justify-center text-muted-foreground bg-muted/10">
-                    <div className="text-center">
-                        <p>Select a chat to view messages</p>
-                    </div>
+                <div
+                  ref={scrollContainerRef}
+                  className="flex-1 overflow-hidden"
+                >
+                  {linkedMessageUnavailable
+                    ? (
+                      <div className="flex h-full items-center justify-center text-center">
+                        <div role="alert">
+                          <Info className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+                          <h2 className="font-medium">
+                            Linked message unavailable
+                          </h2>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            It was removed or does not belong to this chat.
+                          </p>
+                          <Button
+                            className="mt-4"
+                            variant="outline"
+                            onClick={() => navigate(`/messaging/${chatId}`)}
+                          >
+                            Open latest messages
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                    : (
+                      <InfiniteScroll
+                        dataLength={messages.length}
+                        next={loadMoreMessages}
+                        hasMore={hasMore}
+                        loader={
+                          <div className="flex justify-center py-2">
+                            <div className="text-xs text-muted-foreground">
+                              Loading more messages...
+                            </div>
+                          </div>
+                        }
+                        height={`${scrollHeight}px`}
+                        inverse
+                        style={{
+                          display: "flex",
+                          flexDirection: "column-reverse",
+                        }}
+                        className="p-4 space-y-4"
+                      >
+                        {messages.map((msg) => {
+                          const messageId = msg._id.toString();
+                          const focused = messageId === linkedMessageId;
+                          return (
+                            <div
+                              key={messageId}
+                              id={messageElementId("messenger", messageId)}
+                              tabIndex={focused ? -1 : undefined}
+                              aria-current={focused ? "location" : undefined}
+                              className={cn(
+                                "scroll-mt-20 rounded-lg",
+                                focused &&
+                                  "bg-primary/5 ring-2 ring-primary/60 ring-offset-2 ring-offset-background",
+                              )}
+                            >
+                              <MessageBubble message={msg} />
+                            </div>
+                          );
+                        })}
+                      </InfiniteScroll>
+                    )}
                 </div>
+              </div>
+            )
+            : (
+              <div className="h-full flex items-center justify-center text-muted-foreground bg-muted/10">
+                <div className="text-center">
+                  <p>Select a chat to view messages</p>
+                </div>
+              </div>
             )}
         </ResizablePanel>
       </ResizablePanelGroup>

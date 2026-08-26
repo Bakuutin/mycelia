@@ -202,6 +202,8 @@ Deno.test("review hydration exposes assigned and deleted profile names", () => {
     profileName: "Belka",
     excludedProfileIds: [skyProfileId],
     excludedProfileNames: ["Sky"],
+    calibrationUse: "eligible",
+    skipReason: null,
     source: "manual",
     updatedAt,
   });
@@ -369,6 +371,7 @@ Deno.test("automatic-match review query is pinned to verified calibration proven
       calibrationId: "sky-r7",
       profileRevision: 7,
       embeddingSpaceId: "space-v2",
+      evidenceSnapshotHash: "evidence-r7",
       decisionValidity: "verified",
     },
   ) as any;
@@ -376,6 +379,10 @@ Deno.test("automatic-match review query is pinned to verified calibration proven
   assertEquals(identity["speakerIdentity.calibrationId"], "sky-r7");
   assertEquals(identity["speakerIdentity.profileRevision"], 7);
   assertEquals(identity["speakerIdentity.embeddingSpaceId"], "space-v2");
+  assertEquals(
+    identity["speakerIdentity.thresholds.evidenceSnapshotHash"],
+    "evidence-r7",
+  );
   assertEquals(identity["speakerIdentity.source"], "automatic");
   assertEquals(identity["speakerIdentity.validity"], "verified");
   const provisional = buildReviewCandidateQuery(
@@ -389,6 +396,7 @@ Deno.test("automatic-match review query is pinned to verified calibration proven
       calibrationId: "sky-pilot",
       profileRevision: 7,
       embeddingSpaceId: "space-v2",
+      evidenceSnapshotHash: "evidence-pilot",
       decisionValidity: "provisional",
     },
   ) as any;
@@ -403,6 +411,98 @@ Deno.test("automatic-match review query is pinned to verified calibration proven
       "auto_matched",
       skyProfileId,
     )
+  );
+});
+
+Deno.test("automatic-match review uses only fresh calibration evidence at the profile head", async () => {
+  const headCalibration = {
+    calibrationId: "sky-head",
+    profileId: skyProfileId,
+    profileRevision: 7,
+    embeddingSpaceId: "space-v2",
+    status: "validated",
+    lifecycleStatus: "active",
+    serverComputed: true,
+    contractVersion: "server-computed-v1",
+    computedBy: "speaker-segments",
+    classificationPolicy: "full",
+    evidenceSnapshotHash: "head-evidence",
+    evidenceRevision: 3,
+    positiveThreshold: 0.7,
+    negativeThreshold: 0.35,
+    targetPrecision: 0.98,
+    validationMetrics: {
+      positivePrecision: 0.99,
+      negativePrecision: 0.99,
+      identified: 20,
+      rejected: 20,
+      positives: 20,
+      negatives: 20,
+    },
+    calibrationRecordingIds: ["learn"],
+    validationRecordingIds: ["check"],
+  };
+  const profile = {
+    _id: skyProfileId,
+    name: "Sky",
+    revision: 7,
+    embeddingSpaceId: "space-v2",
+    activeCalibrationIds: { full: headCalibration.calibrationId },
+    calibrationHeadsInitialized: true,
+    calibrationEvidenceRevision: 3,
+  };
+  const mongo = async (request: any) => {
+    if (request.collection === "speaker_profiles") return profile;
+    if (request.collection === "speaker_calibrations") {
+      return [
+        {
+          ...headCalibration,
+          calibrationId: "newer-lifecycle-orphan",
+          evidenceSnapshotHash: "orphan-evidence",
+        },
+        headCalibration,
+      ];
+    }
+    throw new Error(`Unexpected Mongo request: ${request.collection}`);
+  };
+  const resolved = await resolveReviewCandidateContext(
+    mongo,
+    skyProfileId,
+    ["space-v2"],
+    {
+      sourceMode: "all_matching",
+      runIds: [],
+      candidateMode: "auto_matched",
+    },
+  );
+  assertEquals(resolved.automaticIdentity?.calibrationId, "sky-head");
+  assertEquals(
+    resolved.automaticIdentity?.evidenceSnapshotHash,
+    "head-evidence",
+  );
+
+  await assertRejects(
+    () =>
+      resolveReviewCandidateContext(
+        async (request: any) => {
+          if (request.collection === "speaker_profiles") {
+            return { ...profile, calibrationEvidenceRevision: 4 };
+          }
+          if (request.collection === "speaker_calibrations") {
+            return [headCalibration];
+          }
+          throw new Error(`Unexpected Mongo request: ${request.collection}`);
+        },
+        skyProfileId,
+        ["space-v2"],
+        {
+          sourceMode: "all_matching",
+          runIds: [],
+          candidateMode: "auto_matched",
+        },
+      ),
+    Error,
+    "current server-validated calibration",
   );
 });
 

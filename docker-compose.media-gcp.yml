@@ -1,0 +1,8 @@
+name: mycelia-media-89da
+
+services:
+  backend:
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-adc
+    volumes:
+      - ${GCP_ADC_HOST_PATH}:/run/secrets/gcp-adc:ro

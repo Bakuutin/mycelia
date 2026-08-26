@@ -1,8 +1,8 @@
 {
   "tasks": {
-    "dev": "deno run --watch --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg,ffprobe,deno --allow-sys server.ts serve",
-    "prod": "deno run --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg,ffprobe,deno --allow-sys server.ts serve",
-    "start": "deno run --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg,ffprobe,deno --allow-sys server.ts serve"
+    "dev": "deno run --watch --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg,ffprobe,exiftool,deno --allow-sys server.ts serve",
+    "prod": "deno run --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg,ffprobe,exiftool,deno --allow-sys server.ts serve",
+    "start": "deno run --allow-net --allow-read --allow-write=.,/tmp --allow-env --allow-run=ffmpeg,ffprobe,exiftool,deno --allow-sys server.ts serve"
   },
   "lint": {
     "rules": {
@@ -34,6 +34,8 @@
     "ms": "npm:ms",
     "bullmq": "npm:bullmq@^5.1.1",
     "formdata-node": "npm:formdata-node@^6.0.0",
+    "google-auth-library": "npm:google-auth-library@^10.5.0",
+    "pdf-lib": "npm:pdf-lib@^1.17.1",
     "yaml": "jsr:@std/yaml@^1.0.10",
     "bson": "npm:bson@^6.10.4",
     "zod": "npm:zod@^4.1.12"

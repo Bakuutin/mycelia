@@ -14,7 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
@@ -201,21 +201,16 @@ export function DiarizationLaunchDialog() {
           )}
 
           {custom && (
-            <div className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Start</Label>
-                <DateTimePicker
-                  value={customStart}
-                  onChange={(value) => value && setCustomStart(value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>End</Label>
-                <DateTimePicker
-                  value={customEnd}
-                  onChange={(value) => value && setCustomEnd(value)}
-                />
-              </div>
+            <div className="rounded-md border p-3">
+              <DateRangePicker
+                label="Custom audio range"
+                value={{ start: customStart, end: customEnd }}
+                onChange={(value) => {
+                  setCustomStart(value.start);
+                  if (value.end) setCustomEnd(value.end);
+                }}
+                showAudioTimeline
+              />
             </div>
           )}
 

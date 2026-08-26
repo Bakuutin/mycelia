@@ -98,6 +98,11 @@ export function AddTimelineVoiceSampleDialog({
     : durationSeconds > 120
     ? "Select no more than 2 minutes; 10–30 seconds of one clear speaker works best."
     : null;
+  const sourceOriginalId = originalId?.trim() ?? "";
+  const provenanceProblem = sourceOriginalId
+    ? null
+    : "This selection is not tied to one source recording. Save a sample from a specific speaker interval in Voice Identity review.";
+  const selectionProblem = rangeProblem ?? provenanceProblem;
 
   const { data: profiles = [], isLoading, error } = useQuery<ProfileDocument[]>(
     {
@@ -148,7 +153,7 @@ export function AddTimelineVoiceSampleDialog({
 
   const addSample = useMutation({
     mutationFn: async () => {
-      if (rangeProblem) throw new Error(rangeProblem);
+      if (selectionProblem) throw new Error(selectionProblem);
       let uploaded = savedSample;
       if (!uploaded) {
         let target = selectedProfile;
@@ -173,7 +178,7 @@ export function AddTimelineVoiceSampleDialog({
             start: startDate.toISOString(),
             end: endDate.toISOString(),
           });
-          if (originalId) query.set("original_id", originalId);
+          query.set("original_id", sourceOriginalId);
           const wav = await apiClient.getBlob(`/api/audio/wav?${query}`);
           const upload = await apiClient.post<{ file_id: string }>(
             "/api/files/upload",
@@ -186,6 +191,7 @@ export function AddTimelineVoiceSampleDialog({
                 target,
                 startDate,
                 endDate,
+                sourceOriginalId,
                 source,
               ),
             },
@@ -215,11 +221,8 @@ export function AddTimelineVoiceSampleDialog({
         return await callResource("jobs", {
           action: "enqueue",
           data: {
-            type: "enrollment",
-            name: uploaded.target.name,
-            profile_id: uploaded.target.id,
-            is_primary: uploaded.target.isPrimary,
-            sample_file_id: uploaded.fileId,
+            type: "profileReenrollment",
+            profileId: uploaded.target.id,
           },
           trigger: {
             type: "manual",
@@ -236,7 +239,7 @@ export function AddTimelineVoiceSampleDialog({
     },
     onSuccess: () => {
       toast.success("Voice sample saved; profile rebuild queued", {
-        description: "Track the enrollment job on the Jobs page.",
+        description: "Track the profile re-enrollment job on the Jobs page.",
       });
       void queryClient.invalidateQueries({ queryKey: ["voice_samples"] });
       void queryClient.invalidateQueries({
@@ -360,9 +363,9 @@ export function AddTimelineVoiceSampleDialog({
                 />
               )}
           </div>
-          {(rangeProblem || error) && (
+          {(selectionProblem || error) && (
             <p className="text-sm text-destructive">
-              {rangeProblem ?? "Voice profiles could not be loaded."}
+              {selectionProblem ?? "Voice profiles could not be loaded."}
             </p>
           )}
           {savedSample && queueError && (
@@ -390,7 +393,7 @@ export function AddTimelineVoiceSampleDialog({
           </Button>
           <Button
             onClick={() => addSample.mutate()}
-            disabled={addSample.isPending || Boolean(rangeProblem) ||
+            disabled={addSample.isPending || Boolean(selectionProblem) ||
               (!savedSample && (profileMode === "existing"
                 ? !selectedProfile
                 : !newProfileName.trim()))}

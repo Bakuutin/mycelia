@@ -86,6 +86,8 @@ import {
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { DateRangePicker } from "@/components/DateRangePicker";
+import { zonedDateKey, zonedDateKeyToDate } from "@/lib/datePicker";
 import type { JobInfo } from "@/types/jobs";
 import type { JobsDashboard, WorkerCatalogEntry } from "@/types/jobsDashboard";
 import type {
@@ -1401,6 +1403,82 @@ function JobProgressCell({ job }: { job: JobInfo }) {
         </div>
       );
     }
+  }
+
+  // --- Mounted photo folder campaign ---
+  if (job.type === "mediaFolderImport") {
+    const folderProgress = Object.keys(progress).length > 0
+      ? progress
+      : (result.progress ?? {});
+    const processed = Number(folderProgress.processed ?? 0);
+    const total = Number(folderProgress.total ?? 0);
+    const percent = Number.isFinite(Number(folderProgress.percent))
+      ? Number(folderProgress.percent)
+      : total > 0
+      ? processed / total * 100
+      : 0;
+    const etaSeconds = Number(folderProgress.etaSeconds);
+    const eta = Number.isFinite(etaSeconds) && etaSeconds >= 0
+      ? etaSeconds < 60
+        ? `${Math.ceil(etaSeconds)}s`
+        : etaSeconds < 3_600
+        ? `${Math.ceil(etaSeconds / 60)} min`
+        : `${Math.floor(etaSeconds / 3_600)}h ${
+          Math.ceil((etaSeconds % 3_600) / 60)
+        }m`
+      : undefined;
+    const stageLabels: Record<string, string> = {
+      inventory: "Building inventory",
+      metadata_scan: "Scanning metadata",
+      awaiting_confirmation: "Ready to review",
+      creating_previews: "Creating previews",
+      completed: "Finished",
+      failed: "Failed",
+      cancelled: "Cancelled",
+    };
+    return (
+      <div className="min-w-[240px] space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <Badge
+            variant="secondary"
+            className="bg-blue-500/10 text-blue-500 text-xs"
+          >
+            {folderProgress.waitingForRecovery
+              ? "Waiting for recovery"
+              : stageLabels[String(folderProgress.stage)] ??
+                (isCompleted ? "Finished" : "Working")}
+          </Badge>
+          <Link to="/media" className="text-xs text-primary hover:underline">
+            Open Media
+          </Link>
+        </div>
+        {total > 0 && <Progress value={percent} className="h-1.5" />}
+        <div className="flex justify-between gap-3 text-[11px] text-muted-foreground">
+          <span>{processed}/{total || "?"} files</span>
+          <span>{percent.toFixed(1)}%</span>
+        </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          {folderProgress.remaining != null && (
+            <span>{folderProgress.remaining} remaining</span>
+          )}
+          {folderProgress.filesPerSecond != null && (
+            <span>{Number(folderProgress.filesPerSecond).toFixed(2)}/sec</span>
+          )}
+          {eta && <span>ETA {eta}</span>}
+          {folderProgress.unsupported > 0 && (
+            <span>{folderProgress.unsupported} unsupported</span>
+          )}
+        </div>
+        {folderProgress.relativePath && (
+          <div
+            className="truncate text-[11px] text-muted-foreground"
+            title={String(folderProgress.relativePath)}
+          >
+            Folder: {String(folderProgress.relativePath)}
+          </div>
+        )}
+      </div>
+    );
   }
 
   // --- Enrollment ---
@@ -5230,40 +5308,34 @@ export default function JobsPage() {
                               </Button>
                             </div>
                           )}
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            <div>
-                              <Label
-                                htmlFor="timeline-period-start"
-                                className="text-xs"
-                              >
-                                Start date (UTC)
-                              </Label>
-                              <Input
-                                id="timeline-period-start"
-                                type="date"
-                                className="mt-1 h-8 text-xs"
-                                value={timelinePeriodStart}
-                                onChange={(event) =>
-                                  setTimelinePeriodStart(event.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <Label
-                                htmlFor="timeline-period-end"
-                                className="text-xs"
-                              >
-                                End date (UTC, inclusive)
-                              </Label>
-                              <Input
-                                id="timeline-period-end"
-                                type="date"
-                                className="mt-1 h-8 text-xs"
-                                value={timelinePeriodEnd}
-                                onChange={(event) =>
-                                  setTimelinePeriodEnd(event.target.value)}
-                              />
-                            </div>
-                          </div>
+                          <DateRangePicker
+                            label="UTC period"
+                            placeholder="Choose the period on the calendar"
+                            value={timelinePeriodStart && timelinePeriodEnd
+                              ? {
+                                start: zonedDateKeyToDate(
+                                  timelinePeriodStart,
+                                  "UTC",
+                                )!,
+                                end: zonedDateKeyToDate(
+                                  timelinePeriodEnd,
+                                  "UTC",
+                                )!,
+                              }
+                              : undefined}
+                            onChange={(value) => {
+                              setTimelinePeriodStart(
+                                zonedDateKey(value.start, "UTC"),
+                              );
+                              if (value.end) {
+                                setTimelinePeriodEnd(
+                                  zonedDateKey(value.end, "UTC"),
+                                );
+                              }
+                            }}
+                            precision="date"
+                            timeZone="UTC"
+                          />
                           <div className="flex flex-wrap gap-2">
                             <Button
                               size="sm"

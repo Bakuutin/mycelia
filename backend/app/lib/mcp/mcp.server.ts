@@ -2,15 +2,15 @@ import { ResourceManager } from "@/lib/auth/resources.ts";
 import { Auth } from "@/lib/auth/core.server.ts";
 import {
   CallToolResult,
+  GetPromptResult,
   JSONRPCError,
   JSONRPCNotification,
   JSONRPCRequest,
   JSONRPCResponse,
-  Resource as MCPResource,
   Prompt,
-  GetPromptResult,
+  Resource as MCPResource,
 } from "@modelcontextprotocol/sdk/types.js";
-import { createMCPToolsFromResources } from "./ai-sdk-adapter.ts"
+import { createMCPToolsFromResources } from "./ai-sdk-adapter.ts";
 import { EJSON } from "bson";
 import { z } from "zod";
 
@@ -85,7 +85,9 @@ export async function handleMCPRequest(
 
       case "tools/list": {
         const resources = resourceManager.listResources();
-        const toolsMap = createMCPToolsFromResources(resources, auth);
+        const toolsMap = createMCPToolsFromResources(resources, auth, {
+          resourceManager,
+        });
 
         const tools = Object.entries(toolsMap).map(([name, tool]) => ({
           name,
@@ -118,7 +120,9 @@ export async function handleMCPRequest(
         }
 
         const resources = resourceManager.listResources();
-        const toolsMap = createMCPToolsFromResources(resources, auth);
+        const toolsMap = createMCPToolsFromResources(resources, auth, {
+          resourceManager,
+        });
         const tool = toolsMap[params.name];
 
         if (!tool) {
@@ -138,8 +142,8 @@ export async function handleMCPRequest(
           // Format result for MCP
           // If result is simple string, wrap in text content
           // If result is object, stringify it
-          const content = typeof result === "string" 
-            ? result 
+          const content = typeof result === "string"
+            ? result
             : EJSON.stringify(result, { relaxed: true });
 
           return {

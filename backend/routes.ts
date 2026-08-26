@@ -17,6 +17,7 @@ import {
   apiLocationImportsAnalyzeHandler,
   apiLocationImportsConfirmHandler,
 } from "@/routes/api.location.imports.ts";
+import { apiMediaImportsAnalyzeHandler } from "@/routes/api.media.imports.ts";
 import { apiAudioWavHandler } from "@/routes/api.audio.wav.ts";
 import { mcpGetHandler, mcpPostHandler } from "@/routes/mcp.ts";
 import { llmChatCompletionsHandler } from "@/routes/llm.chat.completions.ts";
@@ -102,6 +103,13 @@ export function registerRoutes(app: Express): void {
     withRateLimit(
       { keyGenerator: uploadKeyGenerator, limit: 20, windowSeconds: 60 },
       apiLocationImportsConfirmHandler,
+    ),
+  );
+  app.post(
+    "/api/media/imports/analyze",
+    withRateLimit(
+      { keyGenerator: uploadKeyGenerator, limit: 10, windowSeconds: 60 },
+      apiMediaImportsAnalyzeHandler,
     ),
   );
   app.get("/mcp", mcpGetHandler);
