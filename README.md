@@ -97,8 +97,10 @@ your own words.
   folder-import or paid recognition campaigns; their lifecycle stays under the
   Media library and Photo analysis controls.
   Individual photos have a default Photos map layer and adaptive Photos Timeline
-  track; missing time/GPS stays visible as Unplaced and can be assigned locally
-  with audit history.
+  track. Nearby map markers and overlapping Timeline markers expand into a
+  captioned photo list with links to the library; wide Timeline density bars
+  open the same bounded capture-window view. Missing time/GPS stays visible as
+  Unplaced and can be assigned locally with audit history.
 - Google media billing supports a fail-closed 24-hour Free Trial confirmation
   or an explicit persistent paid-account acknowledgement bound to one project;
   both retain the application monthly, daily, per-asset, and per-event limits.

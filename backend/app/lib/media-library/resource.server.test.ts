@@ -15,6 +15,7 @@ import {
   mediaLibraryRequestSchema,
   MediaLibraryResource,
   mediaLibrarySummaryQueries,
+  mediaTimelineRangeQuery,
   normalizeRecognitionSelection,
   publicFolderCounts,
   RECOGNITION_WINDOW,
@@ -408,6 +409,21 @@ Deno.test("photo Timeline switches from hour to day and month density", () => {
   assertEquals(
     timelineResolution(start, new Date("2029-01-01T00:00:00Z")),
     "month",
+  );
+});
+
+Deno.test("photo Timeline range is owner-scoped and ignores missing times", () => {
+  assertEquals(mediaTimelineRangeQuery("alice"), {
+    owner: "alice",
+    kind: "image",
+    capturedAt: { $type: "date" },
+  });
+  const resource = new MediaLibraryResource();
+  assertEquals(
+    resource.extractActions(
+      mediaLibraryRequestSchema.parse({ action: "timeRange" }),
+    ),
+    [{ path: ["media-library", "timeRange"], actions: ["use"] }],
   );
 });
 

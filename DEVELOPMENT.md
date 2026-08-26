@@ -236,8 +236,11 @@ ceiling before consent. With a Google profile this means Vertex visual
 understanding/embedding plus strict-EU Vision OCR; a self-hosted profile sends
 the same feature request only to its configured endpoint. Photos with local
 time/GPS are queryable through indexed Timeline/Map projections in every
-recognition state; missing values are kept in Unplaced and can be edited without
-a provider call. Jobs presents the durable recognition campaign as one
+recognition state. At close map zoom, grouped markers expand into a thumbnail,
+caption, status, and capture-time list; the adaptive Photos Timeline track opens
+the same library links from overlapping markers or a selected density bucket.
+Missing values are kept in Unplaced and can be edited without a provider call.
+Jobs presents the durable recognition campaign as one
 `mediaRecognitionBatch` row with aggregate done/total and state counters;
 per-photo `mediaRecognition` jobs are hidden from the normal list and retained
 only for explicit diagnostics. Jobs launch/restart actions follow the worker

@@ -116,6 +116,7 @@ const timelineSchema = z.object({
   end: z.string().datetime(),
   detailLimit: z.number().int().min(100).max(2_000).default(1_000),
 });
+const timeRangeSchema = z.object({ action: z.literal("timeRange") });
 const mapSchema = z.object({
   action: z.literal("map"),
   bounds: z.object({
@@ -155,6 +156,7 @@ export const mediaLibraryRequestSchema = z.discriminatedUnion("action", [
   retryRecognitionBatchFailuresSchema,
   processRecognitionBatchSchema,
   timelineSchema,
+  timeRangeSchema,
   mapSchema,
   summarySchema,
   updatePlacementSchema,
@@ -2968,6 +2970,28 @@ export function timelineResolution(
   return days <= 14 ? "hour" : days <= 730 ? "day" : "month";
 }
 
+export function mediaTimelineRangeQuery(owner: string) {
+  return {
+    owner,
+    kind: "image",
+    capturedAt: { $type: "date" },
+  } as const;
+}
+
+async function mediaTimelineRange(db: Db, owner: string) {
+  const query = mediaTimelineRangeQuery(owner);
+  const collection = db.collection<any>("media_assets");
+  const [first, last] = await Promise.all([
+    collection.find(query, { projection: { capturedAt: 1 } })
+      .sort({ capturedAt: 1, _id: 1 }).limit(1).next(),
+    collection.find(query, { projection: { capturedAt: 1 } })
+      .sort({ capturedAt: -1, _id: -1 }).limit(1).next(),
+  ]);
+  return first && last
+    ? { start: first.capturedAt, end: last.capturedAt }
+    : { start: null, end: null };
+}
+
 async function timelineProjection(
   db: Db,
   owner: string,
@@ -3535,6 +3559,8 @@ export class MediaLibraryResource
           new Date(input.end),
           input.detailLimit,
         );
+      case "timeRange":
+        return await mediaTimelineRange(db, auth.principal);
       case "map":
         return await mapProjection(
           db,

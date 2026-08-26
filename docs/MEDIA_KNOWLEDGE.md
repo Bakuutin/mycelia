@@ -416,9 +416,18 @@ action.
 
 Every individual photo with a reliable local capture time appears on the
 adaptive **Photos** Timeline track, regardless of recognition status. Narrow
-ranges show thumbnail markers; wide ranges use indexed density buckets. Every
-photo with EXIF or manually assigned GPS appears on the default **Photos** map
-layer, which also works without GPX imports. Missing values are never inferred:
+ranges show thumbnail markers; overlapping markers expand into a captioned list,
+while wide ranges use indexed density buckets whose selected capture window can
+be opened as a paginated list. Every row links to the canonical Media Library
+detail view. Every photo with EXIF or manually assigned GPS appears on the
+default **Photos** map layer, which also works without GPX imports. A distant
+map cluster first zooms in; at close zoom it expands into the same thumbnail,
+status, capture-time, concise-description, and library-link view. Map viewport
+and Timeline list requests remain bounded, and a truncated map explicitly asks
+the user to zoom in rather than implying the list is complete. **Zoom to fit**
+combines the owner-scoped Object and photo capture ranges, so photo-only dates
+are not left outside the initial Timeline view. Missing values are never
+inferred:
 **Missing time**, **Missing location**, and Unplaced links open the inventory,
 where time/timezone/coordinates can be assigned locally with audit history.
 Photo groups remain separate: an event appears as a canonical Object only after
