@@ -838,6 +838,90 @@ async def test_idle_change_stream_heartbeat_advances_durable_resume_token(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_pause_holds_event_returned_by_in_flight_change_stream_poll(tmp_path) -> None:
+    runtime, mongo, vectors = manager(tmp_path)
+    runtime.settings.enable_background = True
+    runtime.settings.change_stream_retry_seconds = 0.1
+    await runtime.start()
+    poll_entered = threading.Event()
+    release_poll = threading.Event()
+    poll_returned = threading.Event()
+    mutation_started = threading.Event()
+    try:
+        await rebuild(runtime)
+        active = runtime.state.active_projection()
+        assert active is not None
+        original_source_hash = runtime.state.source_hash(active["id"], "messages", "m1")
+        original_token = runtime.state.get_meta("database_resume_token")
+
+        updated = {
+            "_id": "m1",
+            "text": "The launch deadline is now pause-race-aurora",
+            "platform": "mycelia",
+            "chatId": "chat-1",
+            "timestamp": datetime(2026, 2, 10, tzinfo=UTC),
+        }
+        event_token = {"_data": "pause-race-event"}
+        event = {
+            "_id": event_token,
+            "operationType": "update",
+            "ns": {"coll": "messages"},
+            "documentKey": {"_id": "m1"},
+            "fullDocument": updated,
+            "wallTime": datetime.now(UTC),
+        }
+        mongo.replace("messages", "m1", updated)
+        original_poll = mongo.poll_database_change
+        first_poll = True
+
+        def blocked_poll(collections, resume_token, max_await_time_ms=2_000):
+            nonlocal first_poll
+            if first_poll:
+                first_poll = False
+                poll_entered.set()
+                if not release_poll.wait(timeout=2):
+                    raise TimeoutError("test did not release change-stream poll")
+                mongo.resume_token = event_token
+                poll_returned.set()
+                return event, event_token
+            return original_poll(collections, resume_token, max_await_time_ms)
+
+        mongo.poll_database_change = blocked_poll
+        original_delete = vectors.delete_source
+
+        def tracked_delete(collection_name, collection, source_id):
+            mutation_started.set()
+            return original_delete(collection_name, collection, source_id)
+
+        vectors.delete_source = tracked_delete
+
+        assert await asyncio.to_thread(poll_entered.wait, 2)
+        runtime.pause()
+        release_poll.set()
+        assert await asyncio.to_thread(poll_returned.wait, 2)
+        await asyncio.sleep(0.05)
+
+        assert mutation_started.is_set() is False
+        assert runtime.state.source_hash(active["id"], "messages", "m1") == original_source_hash
+        assert runtime.state.get_meta("database_resume_token") == original_token
+
+        runtime.resume()
+        assert await asyncio.to_thread(mutation_started.wait, 2)
+        for _ in range(200):
+            raw_token = runtime.state.get_meta("database_resume_token")
+            if raw_token and json.loads(raw_token) == event_token:
+                break
+            await asyncio.sleep(0.01)
+
+        assert json.loads(runtime.state.get_meta("database_resume_token") or "null") == event_token
+        assert runtime.state.source_hash(active["id"], "messages", "m1") != original_source_hash
+    finally:
+        release_poll.set()
+        runtime.resume()
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
 async def test_successful_reconcile_clears_interrupted_recovery_warning(tmp_path) -> None:
     runtime, mongo, vectors = manager(tmp_path)
     await runtime.start()
