@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+import logging
+import time
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from qdrant_client import QdrantClient, models
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from .domain import ExactSource, SearchHit, SearchMode, SparseEmbedding, VectorPoint
 
 DENSE_VECTOR = "dense"
 SPARSE_VECTOR = "bm25"
+QDRANT_WRITE_RETRY_DELAYS_SECONDS = (0.25, 0.75)
+
+logger = logging.getLogger(__name__)
 
 
 class QdrantVectorStore:
@@ -97,26 +103,56 @@ class QdrantVectorStore:
             "status": str(status),
         }
 
+    @staticmethod
+    def _retry_idempotent_write(operation_name: str, operation: Callable[[], object]) -> None:
+        """Retry transport-only failures for writes with stable final state."""
+
+        for attempt in range(len(QDRANT_WRITE_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                operation()
+                return
+            except ResponseHandlingException:
+                if attempt >= len(QDRANT_WRITE_RETRY_DELAYS_SECONDS):
+                    raise
+                delay = QDRANT_WRITE_RETRY_DELAYS_SECONDS[attempt]
+                logger.warning(
+                    "transient Qdrant transport failure during %s; retrying in %.2fs "
+                    "(attempt %s/%s)",
+                    operation_name,
+                    delay,
+                    attempt + 2,
+                    len(QDRANT_WRITE_RETRY_DELAYS_SECONDS) + 1,
+                )
+                time.sleep(delay)
+
     def upsert(self, collection_name: str, points: Sequence[VectorPoint]) -> None:
         if not points:
             return
-        self.client.upsert(
-            collection_name=collection_name,
-            wait=True,
-            points=[
-                models.PointStruct(
-                    id=point.point_id,
-                    vector={
-                        DENSE_VECTOR: point.dense,
-                        SPARSE_VECTOR: models.SparseVector(
-                            indices=point.sparse.indices,
-                            values=point.sparse.values,
-                        ),
-                    },
-                    payload=point.payload,
-                )
-                for point in points
-            ],
+        qdrant_points = [
+            models.PointStruct(
+                id=point.point_id,
+                vector={
+                    DENSE_VECTOR: point.dense,
+                    SPARSE_VECTOR: models.SparseVector(
+                        indices=point.sparse.indices,
+                        values=point.sparse.values,
+                    ),
+                },
+                payload=point.payload,
+            )
+            for point in points
+        ]
+        # Point IDs are stable for one projection/chunk, so repeating this exact
+        # wait=true upsert after a lost HTTP response is safe. Do not retry
+        # validation or HTTP status failures: ResponseHandlingException is the
+        # qdrant-client wrapper for failures while exchanging/parsing a response.
+        self._retry_idempotent_write(
+            "point upsert",
+            lambda: self.client.upsert(
+                collection_name=collection_name,
+                wait=True,
+                points=qdrant_points,
+            ),
         )
 
     @staticmethod

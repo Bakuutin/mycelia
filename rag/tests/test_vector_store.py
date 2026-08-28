@@ -4,9 +4,48 @@ from datetime import UTC, datetime
 
 import pytest
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from mycelia_rag.domain import SparseEmbedding, VectorPoint
 from mycelia_rag.vector_store import QdrantVectorStore
+
+
+def vector_point() -> VectorPoint:
+    return VectorPoint(
+        point_id="00000000-0000-0000-0000-000000000001",
+        dense=[1.0, 0.0, 0.0, 0.0],
+        sparse=SparseEmbedding([7], [1.0]),
+        payload={"text": "retry contract"},
+    )
+
+
+def test_upsert_retries_transient_response_handling_failure(monkeypatch) -> None:
+    class FlakyClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.point_batches: list[list[object]] = []
+
+        def upsert(self, *, collection_name, wait, points):
+            assert collection_name == "contract"
+            assert wait is True
+            self.calls += 1
+            self.point_batches.append(points)
+            if self.calls < 3:
+                raise ResponseHandlingException(RuntimeError("connection closed"))
+            return object()
+
+    client = FlakyClient()
+    store = QdrantVectorStore.__new__(QdrantVectorStore)
+    store.client = client
+    sleeps: list[float] = []
+    monkeypatch.setattr("mycelia_rag.vector_store.time.sleep", sleeps.append)
+
+    store.upsert("contract", [vector_point()])
+
+    assert client.calls == 3
+    assert sleeps == [0.25, 0.75]
+    assert client.point_batches[0] is client.point_batches[1]
+    assert client.point_batches[1] is client.point_batches[2]
 
 
 @pytest.mark.filterwarnings("ignore:Payload indexes have no effect in the local Qdrant")
