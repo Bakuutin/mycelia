@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException
 
@@ -13,7 +14,13 @@ from .domain import ExactSource, SearchHit, SearchMode, SparseEmbedding, VectorP
 
 DENSE_VECTOR = "dense"
 SPARSE_VECTOR = "bm25"
-QDRANT_WRITE_RETRY_DELAYS_SECONDS = (0.25, 0.75)
+QDRANT_WRITE_RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
+TRANSIENT_QDRANT_TRANSPORT_ERRORS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+    httpx.ProxyError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,17 +118,20 @@ class QdrantVectorStore:
             try:
                 operation()
                 return
-            except ResponseHandlingException:
-                if attempt >= len(QDRANT_WRITE_RETRY_DELAYS_SECONDS):
+            except ResponseHandlingException as error:
+                if not isinstance(
+                    error.source, TRANSIENT_QDRANT_TRANSPORT_ERRORS
+                ) or attempt >= len(QDRANT_WRITE_RETRY_DELAYS_SECONDS):
                     raise
                 delay = QDRANT_WRITE_RETRY_DELAYS_SECONDS[attempt]
                 logger.warning(
                     "transient Qdrant transport failure during %s; retrying in %.2fs "
-                    "(attempt %s/%s)",
+                    "(attempt %s/%s, error=%s)",
                     operation_name,
                     delay,
                     attempt + 2,
                     len(QDRANT_WRITE_RETRY_DELAYS_SECONDS) + 1,
+                    type(error.source).__name__,
                 )
                 time.sleep(delay)
 
@@ -144,8 +154,8 @@ class QdrantVectorStore:
         ]
         # Point IDs are stable for one projection/chunk, so repeating this exact
         # wait=true upsert after a lost HTTP response is safe. Do not retry
-        # validation or HTTP status failures: ResponseHandlingException is the
-        # qdrant-client wrapper for failures while exchanging/parsing a response.
+        # validation, local protocol, or HTTP status failures. Only confirmed
+        # timeout/network/remote-protocol transport failures enter this helper.
         self._retry_idempotent_write(
             "point upsert",
             lambda: self.client.upsert(
@@ -173,10 +183,15 @@ class QdrantVectorStore:
             count_filter=query_filter,
             exact=True,
         ).count
-        self.client.delete(
-            collection_name=collection_name,
-            points_selector=models.FilterSelector(filter=query_filter),
-            wait=True,
+        # Count once. Repeating the same filter delete after an ambiguous lost
+        # response is safe and must not change the reported deleted-point count.
+        self._retry_idempotent_write(
+            "source delete",
+            lambda: self.client.delete(
+                collection_name=collection_name,
+                points_selector=models.FilterSelector(filter=query_filter),
+                wait=True,
+            ),
         )
         return count
 
