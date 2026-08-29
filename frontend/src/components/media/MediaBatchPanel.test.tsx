@@ -90,8 +90,9 @@ describe("MediaBatchPanel mounted-folder sync", () => {
     });
     renderPanel();
 
-    expect(await screen.findByText("Mounted folder browser")).toBeTruthy();
-    expect(screen.getByText(/Root is/).textContent).toContain("/media-source");
+    expect(await screen.findByText("Folder sync")).toBeTruthy();
+    expect(screen.getByText("/media-source/")).toBeTruthy();
+    expect(screen.queryByText("Mounted folders")).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Process all with Google Cloud/i }),
     ).toBeNull();
@@ -141,6 +142,9 @@ describe("MediaBatchPanel mounted-folder sync", () => {
     });
     renderPanel();
 
+    await user.click(
+      await screen.findByRole("button", { name: "Choose mounted folder" }),
+    );
     await user.click(await screen.findByRole("button", { name: "Trips" }));
     expect(screen.getByLabelText("Selected mounted folder").textContent)
       .toContain("Trips");

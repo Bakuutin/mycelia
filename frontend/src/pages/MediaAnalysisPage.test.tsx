@@ -128,9 +128,7 @@ describe("MediaAnalysisPage", () => {
     renderPage(`/media/analysis?view=table&assetIds=${ids}`);
 
     expect(await screen.findByRole("table")).toBeTruthy();
-    await waitFor(() =>
-      expect(screen.getByText("2 explicit photo(s) selected")).toBeTruthy()
-    );
+    await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
     expect(mockCallResource).toHaveBeenCalledWith(
       "media",
       expect.objectContaining({
@@ -328,15 +326,15 @@ describe("MediaAnalysisPage", () => {
 
     await screen.findByText("first.jpg");
     expect(screen.getByText("Captured from / to")).toBeTruthy();
-    expect(screen.getByText(/across all server pages/)).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "About selecting all matching photos",
+      }),
+    ).toBeTruthy();
     await user.click(
       screen.getByRole("button", { name: "Select all matching for review" }),
     );
-    expect(
-      await screen.findByText(
-        "All 196 unprocessed matches across every server page selected",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("196 selected")).toBeTruthy();
     expect(screen.getByText("Showing 100 of 196 matching photo(s)"))
       .toBeTruthy();
     expect((screen.getByLabelText("Status") as HTMLSelectElement).value).toBe(
@@ -587,7 +585,7 @@ describe("MediaAnalysisPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    expect(await screen.findByText(/Existing batches continue/)).toBeTruthy();
+    expect(await screen.findByText("Batch running")).toBeTruthy();
     expect((screen.getByLabelText("Status") as HTMLSelectElement).disabled)
       .toBe(
         false,
@@ -673,7 +671,7 @@ describe("MediaAnalysisPage", () => {
     expect(
       await screen.findByText("Ready to review one photo"),
     ).toBeTruthy();
-    expect(screen.getByText("1 explicit photo(s) selected")).toBeTruthy();
+    expect(screen.getByText("1 selected")).toBeTruthy();
     expect(
       mockCallResource.mock.calls.filter(([, input]) =>
         input.action === "previewRecognitionBatch"
@@ -736,7 +734,7 @@ describe("MediaAnalysisPage", () => {
 
     expect(await screen.findByText("Photo preview is unavailable"))
       .toBeTruthy();
-    expect(screen.getByText("0 explicit photo(s) selected")).toBeTruthy();
+    expect(screen.getByText("0 selected")).toBeTruthy();
     expect(
       screen.queryByRole("button", {
         name: "Continue to Review analysis batch (1)",
@@ -785,7 +783,7 @@ describe("MediaAnalysisPage", () => {
       );
 
       expect(await screen.findByText(title)).toBeTruthy();
-      expect(screen.getByText("0 explicit photo(s) selected")).toBeTruthy();
+      expect(screen.getByText("0 selected")).toBeTruthy();
       expect(
         screen.queryByRole("button", {
           name: "Continue to Review analysis batch (1)",

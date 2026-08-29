@@ -284,6 +284,14 @@ catalog's `manualRun` capability. Generic cancel/clear actions leave folder
 imports, recognition batches, and paid per-photo work untouched; manage those
 campaigns on `/media` and `/media/analysis` instead.
 
+The Media workspace uses progressive disclosure: the folder tree is collapsed
+until **Choose folder** is activated, while durable campaign progress remains
+visible. Status, placement, sorting, page/all-results selection, and processing
+actions share one compact toolbar. Long provider, privacy, placement, and
+incremental-sync explanations belong in the reusable hover/focus `MediaHint`
+rather than in always-visible paragraphs; the tooltip trigger must retain an
+accessible name for keyboard and screen-reader users.
+
 Media detail exposes one **Storage & deletion…** panel. **Remove from Mycelia**
 deletes an external-reference or preview-only library record together with its
 Mycelia WebP previews and derived projections, writes a local deletion receipt,

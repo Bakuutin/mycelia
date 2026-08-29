@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
+  ChevronDown,
   ChevronRight,
   Folder,
   FolderSearch,
@@ -11,8 +12,14 @@ import { toast } from "sonner";
 import { callResource } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { MediaHint } from "@/components/media/MediaHint";
 
 const FOLDER_CAMPAIGN_KEY = "mycelia.media.folder-campaign";
 
@@ -122,6 +129,7 @@ export function MediaBatchPanel({
   const [folderBrowserLoading, setFolderBrowserLoading] = useState(false);
   const [folderBrowserError, setFolderBrowserError] = useState<string>();
   const [folderCampaign, setFolderCampaign] = useState<any>();
+  const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const inventoryFingerprintRef = useRef<string | undefined>(undefined);
 
@@ -279,37 +287,66 @@ export function MediaBatchPanel({
   };
 
   return (
-    <Card className="border-primary/40">
-      <CardHeader>
-        <CardTitle>Mounted folder sync</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <section className="space-y-3 rounded-md border p-4">
-          <div>
-            <h3 className="font-semibold">Sync mounted folder locally</h3>
-            <p className="text-sm text-muted-foreground">
-              Choose the mounted root or any visible subfolder below. The root
-              is selected by default. Mycelia walks subfolders, ignores
-              symlinks, and commits progress every 25 entries. Unchanged files
-              reuse their previously verified SHA-256; new or changed files are
-              hashed again.
-            </p>
-          </div>
-          <div className="space-y-3 rounded-md border bg-background p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <div className="text-sm font-medium">
-                  Mounted folder browser
+    <Card>
+      <CardContent className="space-y-3 p-3">
+        <Collapsible
+          open={folderBrowserOpen}
+          onOpenChange={setFolderBrowserOpen}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Folder className="h-4 w-4 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1">
+                  <CardTitle className="text-base">Folder sync</CardTitle>
+                  <MediaHint label="About folder sync">
+                    Scans are local and recursive. Symlinks are ignored;
+                    unchanged files reuse their verified SHA-256. Originals are
+                    mounted read-only and Google is not called.
+                  </MediaHint>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Root is{" "}
-                  <code>/media-source</code>. Scans are recursive; symlinks are
-                  ignored.
+                <div className="truncate text-xs text-muted-foreground">
+                  /media-source/{relativePath === "." ? "" : relativePath}
                 </div>
               </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Choose mounted folder"
+                >
+                  Choose folder
+                  <ChevronDown
+                    className={`ml-2 h-4 w-4 transition-transform ${
+                      folderBrowserOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                </Button>
+              </CollapsibleTrigger>
+              <Button
+                onClick={startFolderScan}
+                disabled={busy || folderBrowserLoading}
+                size="sm"
+                aria-label="Scan selected folder recursively"
+              >
+                {busy
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <FolderSearch className="mr-2 h-4 w-4" />}
+                Scan
+              </Button>
+            </div>
+          </div>
+
+          <CollapsibleContent className="mt-3 space-y-2 border-t pt-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-medium">Mounted folders</div>
               <Button
                 size="icon"
                 variant="ghost"
+                className="h-8 w-8"
                 aria-label="Refresh mounted folders"
                 onClick={() =>
                   browseMountedFolder(folderListing.currentPath ?? ".")}
@@ -368,7 +405,7 @@ export function MediaBatchPanel({
               </Button>
             )}
             <div
-              className="max-h-44 space-y-1 overflow-y-auto"
+              className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-1"
               aria-label="Mounted subfolders"
             >
               {(folderListing.folders ?? []).map((folder: any) => (
@@ -396,115 +433,102 @@ export function MediaBatchPanel({
                 {folderBrowserError}
               </div>
             )}
-            <div className="rounded bg-muted px-3 py-2 text-xs">
-              Selected: <code>{relativePath}</code>
-              {relativePath === "." && " — all folders under the mounted root"}
+          </CollapsibleContent>
+        </Collapsible>
+
+        {folderCampaign && (
+          <div className="space-y-2 rounded-md bg-muted/60 p-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge>
+                {folderCampaign.progress?.waitingForRecovery
+                  ? "Waiting for recovery"
+                  : campaignStageLabel(
+                    folderCampaign.progress?.stage,
+                    folderCampaign.status,
+                  )}
+              </Badge>
+              <code>{folderCampaign.relativePath}</code>
             </div>
-            <Button
-              onClick={startFolderScan}
-              disabled={busy || folderBrowserLoading}
-              className="w-full"
-              variant="outline"
-            >
-              {busy
-                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                : <FolderSearch className="mr-2 h-4 w-4" />}
-              Scan selected folder recursively
-            </Button>
-          </div>
-          {folderCampaign && (
-            <div className="space-y-3 rounded bg-muted p-3 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge>
-                  {folderCampaign.progress?.waitingForRecovery
-                    ? "Waiting for recovery"
-                    : campaignStageLabel(
-                      folderCampaign.progress?.stage,
-                      folderCampaign.status,
-                    )}
-                </Badge>
-                <code>{folderCampaign.relativePath}</code>
-              </div>
-              {folderCampaign.progress
-                ? (
-                  <>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between gap-3 text-xs">
-                        <span>{folderCampaign.progress.message}</span>
-                        <strong>
-                          {folderCampaign.progress.percent.toFixed(1)}%
-                        </strong>
-                      </div>
-                      <Progress
-                        value={folderCampaign.progress.percent}
-                        className="h-2"
-                      />
-                      <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span>
-                          {folderCampaign.progress.processed} of{" "}
-                          {folderCampaign.progress.total}{" "}
-                          {folderCampaign.progress.stage === "creating_previews"
-                            ? "photos imported"
-                            : "supported files checked"}
-                        </span>
-                        {folderCampaign.progress.remaining > 0 && (
-                          <span>
-                            {folderCampaign.progress.remaining} remaining
-                          </span>
-                        )}
-                      </div>
+            {folderCampaign.progress
+              ? (
+                <>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between gap-3 text-xs">
+                      <span>{folderCampaign.progress.message}</span>
+                      <strong>
+                        {folderCampaign.progress.percent.toFixed(1)}%
+                      </strong>
                     </div>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                      {folderCampaign.progress.filesPerSecond != null && (
-                        <span>
-                          {Number(folderCampaign.progress.filesPerSecond)
-                            .toFixed(2)} files/sec
-                        </span>
-                      )}
-                      {folderCampaign.progress.etaSeconds != null && (
-                        <span>
-                          about{" "}
-                          {durationLabel(folderCampaign.progress.etaSeconds)}
-                          {" "}
-                          remaining
-                        </span>
-                      )}
-                      {folderCampaign.progress.lastProgressAt && (
-                        <span>
-                          last progress{" "}
-                          {timeAgo(folderCampaign.progress.lastProgressAt)}
-                        </span>
-                      )}
+                    <Progress
+                      value={folderCampaign.progress.percent}
+                      className="h-2"
+                    />
+                    <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       <span>
-                        {folderCampaign.progress.chunkSize}{" "}
-                        files per durable step
+                        {folderCampaign.progress.processed} of{" "}
+                        {folderCampaign.progress.total}{" "}
+                        {folderCampaign.progress.stage === "creating_previews"
+                          ? "photos imported"
+                          : "supported files checked"}
                       </span>
+                      {folderCampaign.progress.remaining > 0 && (
+                        <span>
+                          {folderCampaign.progress.remaining} remaining
+                        </span>
+                      )}
                     </div>
-                    <div className="rounded border bg-background/70 px-3 py-2 text-xs">
-                      <strong>Next:</strong> {folderCampaign.progress.nextStep}
-                    </div>
-                  </>
-                )
-                : <div>{countLine(folderCampaign.counts)}</div>}
-              <div className="text-xs text-muted-foreground">
-                {countLine(folderCampaign.counts)}
-                {Number(folderCampaign.reusedHashCount ?? 0) > 0 && (
-                  <>· reused SHA {folderCampaign.reusedHashCount}</>
-                )}
-              </div>
-              {folderCampaign.safeError && (
-                <div className="text-destructive">
-                  {folderCampaign.safeError}
-                </div>
-              )}
-              {folderCampaign.status === "preview_ready" && (
-                <Button onClick={confirmFolderImport} disabled={busy}>
-                  Confirm local import
-                </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {folderCampaign.progress.filesPerSecond != null && (
+                      <span>
+                        {Number(folderCampaign.progress.filesPerSecond)
+                          .toFixed(2)} files/sec
+                      </span>
+                    )}
+                    {folderCampaign.progress.etaSeconds != null && (
+                      <span>
+                        about{" "}
+                        {durationLabel(folderCampaign.progress.etaSeconds)}{" "}
+                        remaining
+                      </span>
+                    )}
+                    {folderCampaign.progress.lastProgressAt && (
+                      <span>
+                        last progress{" "}
+                        {timeAgo(folderCampaign.progress.lastProgressAt)}
+                      </span>
+                    )}
+                    <MediaHint label="Folder sync progress details">
+                      Progress is saved every{" "}
+                      {folderCampaign.progress.chunkSize} files.{" "}
+                      {folderCampaign.progress.nextStep}
+                    </MediaHint>
+                  </div>
+                </>
+              )
+              : <div>{countLine(folderCampaign.counts)}</div>}
+            <div className="text-xs text-muted-foreground">
+              {countLine(folderCampaign.counts)}
+              {Number(folderCampaign.reusedHashCount ?? 0) > 0 && (
+                <>· reused SHA {folderCampaign.reusedHashCount}</>
               )}
             </div>
-          )}
-        </section>
+            {folderCampaign.safeError && (
+              <div className="text-destructive">
+                {folderCampaign.safeError}
+              </div>
+            )}
+            {folderCampaign.status === "preview_ready" && (
+              <Button
+                size="sm"
+                onClick={confirmFolderImport}
+                disabled={busy}
+              >
+                Confirm local import
+              </Button>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

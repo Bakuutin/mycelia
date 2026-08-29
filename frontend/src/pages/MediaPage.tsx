@@ -15,6 +15,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { apiClient, callResource } from "@/lib/api";
@@ -45,6 +46,7 @@ import { LazyAuthenticatedMediaImage } from "@/components/media/LazyAuthenticate
 import { MediaEventsPanel } from "@/components/media/MediaEventsPanel";
 import { MediaBatchPanel } from "@/components/media/MediaBatchPanel";
 import { MediaSectionNav } from "@/components/media/MediaSectionNav";
+import { MediaHint } from "@/components/media/MediaHint";
 
 const MAX_MANAGED_UPLOAD_FILES = 50;
 const MAX_MANAGED_UPLOAD_TOTAL_BYTES = 48_000_000;
@@ -995,93 +997,97 @@ export default function MediaPage() {
     : "";
 
   return (
-    <div className="container mx-auto space-y-6 p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-3xl font-bold">
-            <FileImage /> Media Library
+    <div className="container mx-auto space-y-4 p-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            <FileImage className="h-6 w-6" /> Media
           </h1>
-          <p className="text-muted-foreground">
-            Local originals by reference; compact previews, visual meaning,
-            semantic search, metadata, and provider provenance in Mycelia.
-          </p>
+          <MediaSectionNav />
         </div>
         <Button
-          className="self-start sm:self-auto"
-          variant="outline"
+          size="icon"
+          variant="ghost"
+          aria-label="Refresh media library"
+          title="Refresh"
           onClick={() => void load()}
         >
-          <RefreshCw className="mr-2 h-4 w-4" />Refresh
+          <RefreshCw
+            className={`h-4 w-4 ${inventoryRefreshing ? "animate-spin" : ""}`}
+          />
         </Button>
-      </div>
-
-      <MediaSectionNav />
+      </header>
 
       {!status?.enabled && (
-        <Card className="border-amber-500/50">
-          <CardContent className="p-4">
-            Recognition is disabled. Local managed uploads, previews, EXIF/GPS,
-            deduplication, and metadata-only imports remain available. Enable a
-            provider in Settings → Google Cloud only when you want recognition.
-          </CardContent>
-        </Card>
+        <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
+          <span>Recognition is off. Local import and metadata still work.</span>
+          <MediaHint label="About disabled recognition">
+            Enable a provider in Settings → Google Cloud when you want visual
+            descriptions or OCR. Import, previews, EXIF/GPS, and deduplication
+            remain local.
+          </MediaHint>
+        </div>
       )}
 
-      <MediaBatchPanel
-        status={status}
-        onInventoryChanged={() => load({ silent: true })}
-      />
+      <div className="grid gap-3 lg:grid-cols-2">
+        <MediaBatchPanel
+          status={status}
+          onInventoryChanged={() => load({ silent: true })}
+        />
 
-      <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Upload from this computer</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Import locally first, then choose what to process on the Analysis
-              page.
-            </p>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div
-            aria-disabled={busy || Boolean(preview)}
-            className={`rounded-md border-2 border-dashed p-6 text-center ${
-              busy || Boolean(preview) ? "cursor-not-allowed opacity-60" : ""
-            }`}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              if (busy || Boolean(preview)) return;
-              void analyzeUploads(Array.from(event.dataTransfer.files));
-            }}
-          >
-            <Upload className="mx-auto mb-2 h-6 w-6" />
-            <div className="font-medium">Drop photos or PDFs here</div>
-            <p className="mb-3 text-sm text-muted-foreground">
-              JPEG, PNG, WebP, or PDF. Mycelia checks the real file type,
-              deduplicates by SHA-256, and creates metadata-free WebP previews.
-              Up to 50 files and 48 MB total; 20 MB per image, 32 MB per PDF,
-              and 15 pages per PDF.
-            </p>
-            <label>
-              <span className="inline-flex h-10 cursor-pointer items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground">
-                Choose files
-              </span>
-              <input
-                className="sr-only"
-                type="file"
-                multiple
-                accept="image/jpeg,image/png,image/webp,application/pdf"
-                disabled={busy || Boolean(preview)}
-                onChange={(event) => {
-                  void analyzeUploads(Array.from(event.target.files ?? []));
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
-          </div>
-        </CardContent>
-      </Card>
+        <Card>
+          <CardContent className="p-0">
+            <div
+              aria-disabled={busy || Boolean(preview)}
+              className={`flex min-h-20 items-center justify-between gap-3 rounded-lg border border-dashed p-3 ${
+                busy || Boolean(preview) ? "cursor-not-allowed opacity-60" : ""
+              }`}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (busy || Boolean(preview)) return;
+                void analyzeUploads(Array.from(event.dataTransfer.files));
+              }}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="rounded-md bg-muted p-2">
+                  <Upload className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1 font-medium">
+                    Upload files
+                    <MediaHint label="Upload limits and privacy">
+                      JPEG, PNG, WebP, or PDF. Up to 50 files and 48 MB total;
+                      20 MB per image, 32 MB per PDF, and 15 pages per PDF.
+                      Files are validated and deduplicated locally before any
+                      optional analysis.
+                    </MediaHint>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Drop photos or PDFs here
+                  </div>
+                </div>
+              </div>
+              <label>
+                <span className="inline-flex h-9 cursor-pointer items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground">
+                  Choose files
+                </span>
+                <input
+                  className="sr-only"
+                  type="file"
+                  multiple
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  disabled={busy || Boolean(preview)}
+                  onChange={(event) => {
+                    void analyzeUploads(Array.from(event.target.files ?? []));
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       {preview && (
         <Card className="border-primary">
@@ -1137,14 +1143,14 @@ export default function MediaPage() {
                 </div>
               ))}
             </div>
-            <div className="rounded-md bg-muted p-3 text-sm">
-              <ShieldCheck className="mr-2 inline h-4 w-4" />
-              {preview.storageMode === "managed_original"
-                ? "Upload analysis writes originals into staging in the separate media_originals store. An untouched preview expires after one hour; confirmation makes files canonical, and an interrupted confirmation has a bounded seven-day recovery lease. You can later delete each original through a second preview-and-confirm step while retaining WebP previews, metadata, analysis, and search data."
-                : "Confirmation stores checked external references and compact previews. The referenced source files are never copied or deleted."}
-              {" "}
-              No recognition provider is called by this import. Use Photo
-              Analysis after the files appear in the library.
+            <div className="flex items-center gap-2 rounded-md bg-muted p-3 text-sm">
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              <span>Local import only. No recognition provider is called.</span>
+              <MediaHint label="About local import storage">
+                {preview.storageMode === "managed_original"
+                  ? "Originals are staged in Mycelia, then made canonical after confirmation. Previews, metadata, and analysis can be retained if a managed original is deleted later."
+                  : "Checked references and compact previews are stored. Referenced source files are never copied or deleted."}
+              </MediaHint>
             </div>
             <Button onClick={confirm} disabled={busy}>
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -1155,30 +1161,33 @@ export default function MediaPage() {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>Semantic photo search</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            {searchProfile
-              ? searchProfile.providerType === "google-cloud"
-                ? `The search text is sent to the active provider ${searchProfile.name} only when you run a search and you have owned semantic media. Mycelia reserves at most $0.0004 gross list price per query.`
-                : `The search text is sent to the active provider ${searchProfile.name} only when you run a search and you have owned semantic media; it stays on your self-hosted endpoint.`
-              : "No enabled active recognition provider is configured, so search uses only stored OCR text and labels."}
-          </p>
-          <div className="flex gap-2">
+        <CardContent className="space-y-3 p-3">
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void search();
+            }}
+          >
+            <Search className="ml-1 h-4 w-4 shrink-0 text-muted-foreground" />
             <Input
               aria-label="Semantic photo search"
               value={query}
               maxLength={512}
               onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && search()}
-              placeholder="Фотографии с людьми у моря…"
+              placeholder="Search photos by meaning, OCR, or label…"
             />
-            <Button aria-label="Search media" onClick={search}>
+            <MediaHint label="About semantic search">
+              {searchProfile
+                ? searchProfile.providerType === "google-cloud"
+                  ? `Search text is sent to ${searchProfile.name} only when you submit it. The gross reservation is capped at $0.0004 per query.`
+                  : `Search text is sent only to your active self-hosted provider ${searchProfile.name}.`
+                : "Without an active recognition provider, search uses stored OCR text and labels."}
+            </MediaHint>
+            <Button type="submit" size="icon" aria-label="Search media">
               <Search className="h-4 w-4" />
             </Button>
-          </div>
+          </form>
           {results.length > 0 && (
             <div className="grid gap-3 md:grid-cols-2">
               {results.map((result, index) => (
@@ -1218,12 +1227,16 @@ export default function MediaPage() {
       </Card>
 
       <Card id="media-inventory">
-        <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <CardTitle>Photo library</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Showing {assets.length} of {assetTotal} imported item(s).
-            </p>
+        <CardHeader className="flex-row items-center justify-between space-y-0 p-3">
+          <div className="flex items-center gap-2">
+            <CardTitle className="text-base">Library</CardTitle>
+            <span className="text-xs text-muted-foreground">
+              {assets.length} of {assetTotal}
+            </span>
+            <MediaHint label="About photo placement">
+              Photos with reliable EXIF time or GPS also appear on Timeline and
+              Map. Missing values are left unplaced rather than guessed.
+            </MediaHint>
           </div>
           <div
             className="flex items-center gap-2 text-xs text-muted-foreground"
@@ -1237,10 +1250,11 @@ export default function MediaPage() {
               : lastUpdatedAt
               ? `Updated ${lastUpdatedAt.toLocaleTimeString()}`
               : "Ready"}
-            <div className="ml-2 inline-flex rounded-md border p-1">
+            <div className="inline-flex rounded-md border p-0.5">
               <Button
                 type="button"
-                size="sm"
+                size="icon"
+                className="h-8 w-8"
                 variant={viewMode === "grid" ? "secondary" : "ghost"}
                 aria-label="Grid view"
                 aria-pressed={viewMode === "grid"}
@@ -1250,7 +1264,8 @@ export default function MediaPage() {
               </Button>
               <Button
                 type="button"
-                size="sm"
+                size="icon"
+                className="h-8 w-8"
                 variant={viewMode === "table" ? "secondary" : "ghost"}
                 aria-label="Table view"
                 aria-pressed={viewMode === "table"}
@@ -1261,54 +1276,31 @@ export default function MediaPage() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs text-muted-foreground">
-                Individual photos also appear on the Photos track and Photos map
-                layer when they have reliable EXIF time/GPS. Photo events remain
-                separate explicitly published Objects on the{" "}
-                <a className="underline" href="/timeline">
-                  Timeline
-                </a>.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {([
-                ["all", "All"],
-                ["unprocessed", "Unprocessed"],
-                ["processing", "Queued / processing"],
-                ["ready", "Ready"],
-                ["errors", "Needs attention"],
-                ["ignored", "Ignored"],
-              ] as Array<[InventoryFilter, string]>).map(([value, label]) => (
-                <Button
-                  key={value}
-                  type="button"
-                  size="sm"
-                  variant={inventoryFilter === value ? "default" : "outline"}
-                  aria-pressed={inventoryFilter === value}
-                  onClick={() => setInventoryFilter(value)}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {([
-              ["all", "All placement"],
-              ["missing_time", "Missing time"],
-              ["missing_location", "Missing location"],
-            ] as const).map(([value, label]) => (
-              <Button
-                key={value}
-                type="button"
-                size="sm"
-                variant={placementFilter === value ? "default" : "outline"}
-                aria-pressed={placementFilter === value}
-                onClick={() => {
+        <CardContent className="space-y-3 p-3 pt-0">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/20 p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Processing status"
+                title="Processing status"
+                className="h-9 rounded-md border bg-background px-3 text-sm"
+                value={inventoryFilter}
+                onChange={(event) =>
+                  setInventoryFilter(event.target.value as InventoryFilter)}
+              >
+                <option value="all">All statuses</option>
+                <option value="unprocessed">Unprocessed</option>
+                <option value="processing">Queued / processing</option>
+                <option value="ready">Ready</option>
+                <option value="errors">Needs attention</option>
+                <option value="ignored">Ignored</option>
+              </select>
+              <select
+                aria-label="Photo placement"
+                title="Photo placement"
+                className="h-9 rounded-md border bg-background px-3 text-sm"
+                value={placementFilter}
+                onChange={(event) => {
+                  const value = event.target.value as typeof placementFilter;
                   setPlacementFilter(value);
                   setSearchParams((current) => {
                     const next = new URLSearchParams(current);
@@ -1318,51 +1310,53 @@ export default function MediaPage() {
                   }, { replace: true });
                 }}
               >
-                {label}
-              </Button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg border bg-muted/25 p-3">
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="space-y-1">
-                <Label htmlFor="media-sort">Sort by</Label>
-                <select
-                  id="media-sort"
-                  className="h-9 rounded-md border bg-background px-3 text-sm"
-                  value={sortBy}
-                  onChange={(event) =>
-                    updateLibraryParams({ sort: event.target.value })}
-                >
-                  <option value="createdAt">Imported</option>
-                  <option value="capturedAt">Captured</option>
-                  <option value="fileName">Filename</option>
-                  <option value="status">Status</option>
-                  <option value="byteLength">File size</option>
-                  <option value="updatedAt">Last changed</option>
-                </select>
-              </div>
+                <option value="all">Any placement</option>
+                <option value="missing_time">Missing time</option>
+                <option value="missing_location">Missing location</option>
+              </select>
+              <select
+                id="media-sort"
+                aria-label="Sort photos"
+                title="Sort photos"
+                className="h-9 rounded-md border bg-background px-3 text-sm"
+                value={sortBy}
+                onChange={(event) =>
+                  updateLibraryParams({ sort: event.target.value })}
+              >
+                <option value="createdAt">Imported</option>
+                <option value="capturedAt">Captured</option>
+                <option value="fileName">Filename</option>
+                <option value="status">Status</option>
+                <option value="byteLength">File size</option>
+                <option value="updatedAt">Last changed</option>
+              </select>
               <Button
                 type="button"
-                size="sm"
-                variant="outline"
+                size="icon"
+                variant="ghost"
+                className="h-9 w-9"
                 aria-label={`Sort ${
                   sortDirection === "asc" ? "descending" : "ascending"
                 }`}
+                title={sortDirection === "asc"
+                  ? "Ascending; click for descending"
+                  : "Descending; click for ascending"}
                 onClick={() =>
                   updateLibraryParams({
                     direction: sortDirection === "asc" ? "desc" : "asc",
                   })}
               >
-                <ArrowUpDown className="mr-2 h-4 w-4" />
-                {sortDirection === "asc" ? "Ascending" : "Descending"}
+                <ArrowUpDown className="h-4 w-4" />
               </Button>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
+                aria-label={`Select loaded (${
+                  assets.filter((asset) => asset.kind === "image").length
+                })`}
                 disabled={assets.every((asset) => asset.kind !== "image")}
                 onClick={() => {
                   setAllMatchingSelected(false);
@@ -1373,30 +1367,29 @@ export default function MediaPage() {
                   );
                 }}
               >
-                Select loaded ({assets.filter((asset) => asset.kind === "image")
-                  .length})
+                Page ({assets.filter((asset) => asset.kind === "image").length})
               </Button>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
+                aria-label={`Select all matching (${assetTotal})`}
                 disabled={assetTotal === 0}
                 onClick={() => {
                   setSelectedAssetIds([]);
                   setAllMatchingSelected(true);
                 }}
               >
-                Select all matching ({assetTotal})
+                All results ({assetTotal})
               </Button>
             </div>
           </div>
 
           {(selectedAssetIds.length > 0 || allMatchingSelected) && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+            <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-background/95 p-2 shadow-sm backdrop-blur">
               <span className="text-sm font-medium">
                 {allMatchingSelected ? assetTotal : selectedAssetIds.length}
-                {" "}
-                item(s) selected
+                {" selected"}
               </span>
               <Button
                 type="button"
@@ -1412,13 +1405,14 @@ export default function MediaPage() {
                 type="button"
                 size="sm"
                 variant="outline"
+                aria-label={inventoryFilter === "ignored"
+                  ? "Return to processing"
+                  : "Ignore for processing"}
                 onClick={() =>
                   void setSelectedIgnored(inventoryFilter !== "ignored")}
                 disabled={busy}
               >
-                {inventoryFilter === "ignored"
-                  ? "Return to processing"
-                  : "Ignore for processing"}
+                {inventoryFilter === "ignored" ? "Return" : "Ignore"}
               </Button>
               <Button
                 type="button"
@@ -1429,7 +1423,7 @@ export default function MediaPage() {
                   setAllMatchingSelected(false);
                 }}
               >
-                Clear selection
+                Clear
               </Button>
             </div>
           )}
@@ -1437,7 +1431,7 @@ export default function MediaPage() {
           {inventoryLoading && filteredAssets.length === 0
             ? (
               <div
-                className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
                 aria-label="Loading media"
               >
                 {Array.from(
@@ -1448,7 +1442,7 @@ export default function MediaPage() {
                       className="overflow-hidden rounded-xl border"
                     >
                       <Skeleton className="aspect-[4/3] w-full rounded-none" />
-                      <div className="space-y-2 p-4">
+                      <div className="space-y-2 p-3">
                         <Skeleton className="h-4 w-3/4" />
                         <Skeleton className="h-3 w-1/2" />
                       </div>
@@ -1465,7 +1459,7 @@ export default function MediaPage() {
             )
             : viewMode === "grid"
             ? (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                 {filteredAssets.map((asset) => {
                   const id = String(asset._id);
                   const metadata = mediaMetadataSummary(asset);
@@ -1474,14 +1468,14 @@ export default function MediaPage() {
                   return (
                     <article
                       key={id}
-                      className={`group relative overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                      className={`group relative overflow-hidden rounded-lg border bg-card transition hover:border-primary/40 hover:shadow-sm ${
                         selectedForEvent ? "ring-2 ring-primary" : ""
                       }`}
                     >
                       {asset.kind === "image" && (
                         <label
                           htmlFor={`event-select-${id}`}
-                          className="absolute left-2 top-2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-background/90 shadow-sm backdrop-blur"
+                          className="absolute left-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-md bg-background/90 shadow-sm backdrop-blur"
                           onClick={(event) => event.stopPropagation()}
                         >
                           <Checkbox
@@ -1512,13 +1506,13 @@ export default function MediaPage() {
                           containerClassName="aspect-[4/3] overflow-hidden bg-muted"
                           className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
                         />
-                        <div className="space-y-3 p-4">
+                        <div className="space-y-2 p-3">
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="truncate font-medium">
                                 {asset.fileName}
                               </div>
-                              <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                              <div className="line-clamp-1 text-xs text-muted-foreground">
                                 {metadata.captured}
                               </div>
                             </div>
@@ -1535,17 +1529,14 @@ export default function MediaPage() {
                                 : asset.status}
                             </Badge>
                           </div>
-                          <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
+                          <p className="line-clamp-1 text-sm text-muted-foreground">
                             {asset.inventory?.shortCaption ??
                               (asset.safeError
                                 ? asset.safeError
                                 : "No visual description yet")}
                           </p>
-                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <div className="text-xs text-muted-foreground">
                             <span>{asset.kind} · {metadata.dimensions}</span>
-                            <span className="inline-flex items-center font-medium text-foreground">
-                              <Eye className="mr-1 h-3.5 w-3.5" />Details
-                            </span>
                           </div>
                         </div>
                       </button>
@@ -1555,11 +1546,13 @@ export default function MediaPage() {
               </div>
             )
             : (
-              <div className="overflow-x-auto rounded-lg border">
-                <Table>
+              <div className="overflow-x-auto rounded-md border">
+                <Table className="text-sm">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-12">Select</TableHead>
+                      <TableHead className="w-10">
+                        <span className="sr-only">Select</span>
+                      </TableHead>
                       {([
                         ["fileName", "Photo"],
                         ["capturedAt", "Captured"],
@@ -1601,7 +1594,7 @@ export default function MediaPage() {
                           key={id}
                           data-state={selected ? "selected" : undefined}
                         >
-                          <TableCell>
+                          <TableCell className="py-2">
                             {asset.kind === "image" && (
                               <Checkbox
                                 aria-label={`Select ${asset.fileName}`}
@@ -1618,20 +1611,20 @@ export default function MediaPage() {
                               />
                             )}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="py-2">
                             <button
                               type="button"
-                              className="flex min-w-[240px] items-center gap-3 text-left"
+                              className="flex min-w-[210px] items-center gap-2 text-left"
                               onClick={() => openAsset(id)}
                             >
                               <LazyAuthenticatedMediaImage
                                 path={asset.thumbnailUrl}
                                 alt={asset.fileName}
-                                containerClassName="h-14 w-14 shrink-0 overflow-hidden rounded border bg-muted"
+                                containerClassName="h-10 w-10 shrink-0 overflow-hidden rounded border bg-muted"
                                 className="h-full w-full object-cover"
                               />
                               <div className="min-w-0">
-                                <div className="max-w-[260px] truncate font-medium">
+                                <div className="max-w-[240px] truncate font-medium">
                                   {asset.fileName}
                                 </div>
                                 <div className="text-xs text-muted-foreground">
@@ -1640,10 +1633,10 @@ export default function MediaPage() {
                               </div>
                             </button>
                           </TableCell>
-                          <TableCell className="min-w-[180px]">
+                          <TableCell className="min-w-[165px] py-2 text-xs">
                             {metadata.captured}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="py-2">
                             <Badge
                               variant={asset.status === "ready"
                                 ? "default"
@@ -1656,27 +1649,30 @@ export default function MediaPage() {
                                 : asset.status}
                             </Badge>
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="py-2 text-xs">
                             {(Number(asset.byteLength ?? 0) / 1_000_000)
                               .toFixed(2)} MB
                           </TableCell>
-                          <TableCell className="max-w-[380px]">
+                          <TableCell className="max-w-[340px] py-2">
                             <div className="truncate text-xs text-muted-foreground">
                               {asset.source?.relativePath ?? asset.storageMode}
                             </div>
-                            <div className="line-clamp-2 text-sm">
+                            <div className="line-clamp-1 text-sm">
                               {asset.inventory?.shortCaption ??
                                 asset.safeError ?? "No description yet"}
                             </div>
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell className="py-2 text-right">
                             <Button
                               type="button"
-                              size="sm"
-                              variant="outline"
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              aria-label={`Open details for ${asset.fileName}`}
+                              title="Open details"
                               onClick={() => openAsset(id)}
                             >
-                              <Eye className="mr-2 h-4 w-4" />Details
+                              <Eye className="h-4 w-4" />
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -1735,11 +1731,14 @@ export default function MediaPage() {
                 </div>
                 <Button
                   type="button"
-                  variant="outline"
-                  size="sm"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Close details"
+                  title="Close"
                   onClick={closeAsset}
                 >
-                  Close details
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
             </DialogHeader>
@@ -1771,7 +1770,7 @@ export default function MediaPage() {
                     </div>
                   )}
                   <div
-                    className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"
+                    className="space-y-2 rounded-md border bg-muted/30 p-3 text-sm"
                     aria-label="Provider analysis status"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1795,57 +1794,48 @@ export default function MediaPage() {
                     {activeRecognitionRun
                       ? (
                         <>
-                          <div>
-                            Active result from{" "}
-                            <span className="font-medium">
-                              {displayedProviderName}
-                            </span>
-                            .
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {activeRecognitionRun.provenance?.service ??
-                              "Service not reported"} ·{" "}
-                            {activeRecognitionRun.provenance?.location ??
-                              "location not reported"}
-                            {activeRecognitionRun.provenance?.modelVersion
-                              ? " · " +
-                                activeRecognitionRun.provenance.modelVersion
-                              : ""}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            Visual description:{" "}
+                          <div className="text-muted-foreground">
+                            {displayedProviderName} · description{" "}
                             {detail.visual?.visualUnderstanding
                               ? "available"
-                              : "not available"} · OCR pages:{" "}
-                            {detail.pages?.length ?? 0} · annotations:{" "}
-                            {detail.annotations?.length ?? 0}
+                              : "not available"} · OCR{" "}
+                            {detail.pages?.length ?? 0}
                           </div>
+                          <details className="text-xs text-muted-foreground">
+                            <summary className="cursor-pointer font-medium text-foreground">
+                              Technical provenance
+                            </summary>
+                            <div className="mt-2">
+                              {activeRecognitionRun.provenance?.service ??
+                                "Service not reported"} ·{" "}
+                              {activeRecognitionRun.provenance?.location ??
+                                "location not reported"}
+                              {activeRecognitionRun.provenance?.modelVersion
+                                ? " · " +
+                                  activeRecognitionRun.provenance.modelVersion
+                                : ""} · annotations{" "}
+                              {detail.annotations?.length ?? 0}
+                            </div>
+                          </details>
                         </>
                       )
                       : detail.asset.status === "queued" ||
                           detail.asset.status === "processing"
                       ? (
-                        <div>
-                          Provider analysis is{" "}
-                          {detail.asset.status}. No active result is stored yet.
+                        <div className="text-muted-foreground">
+                          {detail.asset.status}. No result yet.
                         </div>
                       )
                       : latestRecognitionRun
                       ? (
-                        <div>
-                          No active provider result is attached to this photo.
-                          The latest historical attempt used{" "}
-                          <span className="font-medium">
-                            {displayedProviderName}
-                          </span>{" "}
-                          and ended as {latestRecognitionRun.state}.
+                        <div className="text-muted-foreground">
+                          Latest attempt: {displayedProviderName} ·{" "}
+                          {latestRecognitionRun.state}
                         </div>
                       )
                       : (
-                        <div>
-                          No stored Google Cloud or self-hosted analysis run or
-                          result exists for this photo. Only the local preview
-                          and EXIF/GPS metadata are stored.
+                        <div className="text-muted-foreground">
+                          Local preview and metadata only.
                         </div>
                       )}
                   </div>

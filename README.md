@@ -87,16 +87,21 @@ your own words.
   audio/transcription/Object links stay local and identity recognition is
   forbidden. Media uses switchable gallery/table views, stable server-side
   sorting, explicit page selection, and all-matching server selection with a
-  focused detail viewer. `/media/analysis` provides the same sortable inventory
-  plus server-side status, placement, filename, and a shared capture-date range
-  picker. Its **Unprocessed by
+  focused detail viewer. The compact workspace keeps import, filters, selection,
+  and batch actions close to the photos; secondary privacy, provider, and
+  placement explanations are available through keyboard-accessible hover/focus
+  hints instead of permanent help paragraphs. `/media/analysis` provides the
+  same sortable inventory plus server-side status, placement, filename, and a
+  shared capture-date range picker. Its **Unprocessed by
   capture-date range** workflow can target every eligible asset matching the
   server-side filters without being limited to the visible page, then shows an
   exact preview and ceiling before confirmation. Unmatched event candidates
   remain visible as single photos instead of being silently omitted.
 - Large mounted folders use a visual folder picker and resumable scan → review →
   confirm campaigns. The mounted root is selected by default and subfolders are
-  browsable without typing paths. One `mediaFolderImport` job reports live
+  browsable without typing paths from a collapsed **Choose folder** control, so
+  the current path and primary Scan action remain visible without consuming the
+  page. One `mediaFolderImport` job reports live
   checked/total progress, speed and ETA while committing durable 25-file steps.
   Later syncs stat every path but reuse the previously verified SHA-256 and
   extracted metadata when owner, path, byte size, and modification time are

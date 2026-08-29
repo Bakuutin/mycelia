@@ -168,8 +168,9 @@ describe("MediaPage consolidated library", () => {
   it("shows one mounted-folder picker and routes recognition to analysis", async () => {
     renderMediaPage();
 
-    expect(await screen.findByText("Mounted folder browser")).toBeTruthy();
-    expect(screen.getAllByText("Mounted folder browser")).toHaveLength(1);
+    expect(await screen.findByText("Folder sync")).toBeTruthy();
+    expect(screen.getAllByText("Folder sync")).toHaveLength(1);
+    expect(screen.queryByText("Mounted folders")).toBeNull();
     expect(screen.queryByLabelText("Relative folder or file path")).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Analyze mounted path" }),
@@ -343,9 +344,15 @@ describe("MediaPage consolidated library", () => {
     renderMediaPage();
 
     await screen.findByText("No media matches these filters.");
-    await user.click(screen.getByRole("button", { name: "Ready" }));
+    await user.selectOptions(
+      screen.getByLabelText("Processing status"),
+      "ready",
+    );
     await waitFor(() => expect(resolveReady).toBeTypeOf("function"));
-    await user.click(screen.getByRole("button", { name: "Unprocessed" }));
+    await user.selectOptions(
+      screen.getByLabelText("Processing status"),
+      "unprocessed",
+    );
     await waitFor(() => expect(resolveUnprocessed).toBeTypeOf("function"));
 
     await act(async () => {
@@ -569,11 +576,7 @@ describe("MediaPage consolidated library", () => {
     ).toBeTruthy();
     expect(screen.getByLabelText("Provider analysis status").textContent)
       .toContain("Not processed");
-    expect(
-      screen.getByText(
-        /No stored Google Cloud or self-hosted analysis run or result/i,
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText(/Local preview and metadata only/i)).toBeTruthy();
     expect(mockCallResource).toHaveBeenCalledWith("media", {
       action: "getAsset",
       assetId: "asset-1",
@@ -655,10 +658,8 @@ describe("MediaPage consolidated library", () => {
     expect(providerStatus.textContent).toContain(
       "Google Cloud EU Photo Knowledge",
     );
-    expect(providerStatus.textContent).toContain(
-      "Visual description: available",
-    );
-    expect(providerStatus.textContent).toContain("OCR pages: 1");
+    expect(providerStatus.textContent).toContain("description available");
+    expect(providerStatus.textContent).toContain("OCR 1");
     expect(
       screen.getByRole("link", {
         name: "Open in Photo analysis",
