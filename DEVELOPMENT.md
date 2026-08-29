@@ -254,7 +254,11 @@ For the 900-photo campaign, place originals under
 folder browser on `/media`; `.` remains the default recursive root. Local folder
 sync does not call Google. Its single normal `mediaFolderImport` job loops over
 durable 25-file commits and publishes checked/total progress, speed and ETA to
-Media and Jobs. Restart/recovery attempts remain durable history, but Jobs
+Media and Jobs. A later sync still inventories and stats the selected tree, but
+reuses a prior item SHA and metadata only when owner, relative path, byte size,
+and modification time all match; `reused SHA` in the campaign report makes this
+visible. New or changed files are hashed normally. Restart/recovery attempts
+remain durable history, but Jobs
 groups the same `campaignId` into one visible campaign row. On
 `/media/analysis`, a batch preview can select an explicit set or every eligible
 asset matching the current server-side filters, not only the visible gallery
@@ -280,10 +284,15 @@ catalog's `manualRun` capability. Generic cancel/clear actions leave folder
 imports, recognition batches, and paid per-photo work untouched; manage those
 campaigns on `/media` and `/media/analysis` instead.
 
-Media detail exposes one **Storage & deletion…** panel, not a whole-asset
-delete. Mounted originals are read-only and are never deleted: forgetting the
-reference only converts the record to preview-only, while deleting WebP
-previews affects only Mycelia's derived files. These storage mutations must
+Media detail exposes one **Storage & deletion…** panel. **Remove from Mycelia**
+deletes an external-reference or preview-only library record together with its
+Mycelia WebP previews and derived projections, writes a local deletion receipt,
+and never deletes the mounted original. A later folder sync may import that
+still-present original again. **Ignore for processing** instead preserves the
+record, previews, original reference, and existing analysis while excluding it
+from unprocessed/attention selection; **Return to processing** clears that
+flag. Managed originals must still use their separate preview-and-confirm
+deletion before the remaining library item can be removed. These mutations must
 claim the same per-asset reservation used by recognition batches and are
 rejected while recognition is reserved, queued, or processing. A managed
 original deletion remains preview-and-confirm; cancelling its review must call

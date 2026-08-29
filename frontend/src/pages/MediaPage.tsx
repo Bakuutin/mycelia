@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
+  ArrowUpDown,
   Clock3,
   Eye,
   FileImage,
+  LayoutGrid,
+  List,
   Loader2,
   MapPin,
   RefreshCw,
@@ -29,6 +32,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { AuthenticatedMediaImage } from "@/components/media/AuthenticatedMediaImage";
 import { LazyAuthenticatedMediaImage } from "@/components/media/LazyAuthenticatedMediaImage";
 import { MediaEventsPanel } from "@/components/media/MediaEventsPanel";
@@ -49,7 +60,23 @@ type InventoryFilter =
   | "unprocessed"
   | "processing"
   | "ready"
-  | "errors";
+  | "errors"
+  | "ignored";
+type MediaSortBy =
+  | "capturedAt"
+  | "createdAt"
+  | "fileName"
+  | "status"
+  | "byteLength"
+  | "updatedAt";
+const MEDIA_SORTS = new Set<MediaSortBy>([
+  "capturedAt",
+  "createdAt",
+  "fileName",
+  "status",
+  "byteLength",
+  "updatedAt",
+]);
 
 type BoundOriginalDeletionPreview = {
   assetId: string;
@@ -207,6 +234,7 @@ function MediaPlacementEditor({
 
 export default function MediaPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<any>();
   const [assets, setAssets] = useState<any[]>([]);
   const [assetTotal, setAssetTotal] = useState(0);
@@ -217,9 +245,18 @@ export default function MediaPage() {
   const [inventoryFilter, setInventoryFilter] = useState<InventoryFilter>(
     "all",
   );
-  const [selectedEventAssetIds, setSelectedEventAssetIds] = useState<string[]>(
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>(
     [],
   );
+  const [allMatchingSelected, setAllMatchingSelected] = useState(false);
+  const viewMode = searchParams.get("view") === "table" ? "table" : "grid";
+  const requestedSort = searchParams.get("sort") as MediaSortBy | null;
+  const sortBy: MediaSortBy = requestedSort && MEDIA_SORTS.has(requestedSort)
+    ? requestedSort
+    : "createdAt";
+  const sortDirection = searchParams.get("direction") === "asc"
+    ? "asc"
+    : "desc";
   const [preview, setPreview] = useState<any>();
   const [busy, setBusy] = useState(false);
   const [inventoryLoading, setInventoryLoading] = useState(true);
@@ -273,6 +310,8 @@ export default function MediaPage() {
           limit,
           inventoryFilter: backendFilter,
           placement: placementFilter,
+          sortBy,
+          sortDirection,
           ...(pageCursor ? { cursor: pageCursor } : {}),
         });
       const loadRefreshedPrefix = async () => {
@@ -333,13 +372,14 @@ export default function MediaPage() {
         setInventoryRefreshing(false);
       }
     }
-  }, [inventoryFilter, placementFilter]);
+  }, [inventoryFilter, placementFilter, sortBy, sortDirection]);
 
   useEffect(() => {
     nextCursorRef.current = undefined;
     loadedAssetCountRef.current = 0;
     setNextCursor(undefined);
-    setSelectedEventAssetIds([]);
+    setSelectedAssetIds([]);
+    setAllMatchingSelected(false);
     void load();
   }, [load]);
 
@@ -373,6 +413,84 @@ export default function MediaPage() {
     [status],
   );
   const filteredAssets = assets;
+  const selectedCount = allMatchingSelected
+    ? assetTotal
+    : selectedAssetIds.length;
+  const selectedImageIds = selectedAssetIds.filter((id) =>
+    assets.some((asset) => String(asset._id) === id && asset.kind === "image")
+  );
+  const backendInventoryFilter = inventoryFilter === "errors"
+    ? "needs_attention"
+    : inventoryFilter;
+
+  const updateLibraryParams = (changes: Record<string, string>) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      for (const [key, value] of Object.entries(changes)) {
+        if (!value) next.delete(key);
+        else next.set(key, value);
+      }
+      return next;
+    }, { replace: true });
+  };
+
+  const openSelectedForProcessing = () => {
+    if (selectedCount === 0) return;
+    const next = new URLSearchParams();
+    next.set("view", "table");
+    if (backendInventoryFilter !== "all") {
+      next.set("status", backendInventoryFilter);
+    }
+    if (placementFilter !== "all") next.set("placement", placementFilter);
+    if (allMatchingSelected) next.set("selection", "all");
+    else next.set("assetIds", selectedImageIds.join(","));
+    navigate(`/media/analysis?${next.toString()}`);
+  };
+
+  const setSelectedIgnored = async (ignored: boolean) => {
+    if (selectedCount === 0) return;
+    if (
+      !globalThis.confirm(
+        ignored
+          ? `Ignore ${selectedCount} selected photo(s) for future analysis? Originals, previews, and existing results stay unchanged.`
+          : `Return ${selectedCount} selected photo(s) to normal processing selection?`,
+      )
+    ) return;
+    setBusy(true);
+    try {
+      const result = await callResource("media-library", {
+        action: "setRecognitionIgnored",
+        selection: allMatchingSelected
+          ? {
+            mode: "all_matching",
+            inventoryFilter: backendInventoryFilter,
+            placement: placementFilter,
+          }
+          : {
+            mode: "explicit",
+            inventoryFilter: backendInventoryFilter,
+            placement: placementFilter,
+            assetIds: selectedImageIds,
+          },
+        ignored,
+        confirm: true,
+      });
+      toast.success(
+        `${ignored ? "Ignored" : "Returned"} ${
+          Number(result.updated ?? 0)
+        } photo(s)`,
+      );
+      setSelectedAssetIds([]);
+      setAllMatchingSelected(false);
+      await load();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Selection update failed",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
   const selectedAssetId = searchParams.get("assetId") ?? "";
   selectedAssetIdRef.current = selectedAssetId;
   deletionPreviewRef.current = deletionPreview;
@@ -658,7 +776,11 @@ export default function MediaPage() {
   }, [releaseOriginalDeletionPreview, setSearchParams]);
 
   const deleteDerived = async (
-    target: "previews" | "analysis" | "source_reference",
+    target:
+      | "previews"
+      | "analysis"
+      | "source_reference"
+      | "asset_record",
   ) => {
     if (!selectedAssetId) return;
     if (currentOriginalDeletionBusy) {
@@ -675,6 +797,8 @@ export default function MediaPage() {
       ? "Delete the Mycelia WebP previews? The original will not be touched. This asset will no longer have a viewable photo preview or be eligible for photo analysis."
       : target === "analysis"
       ? "Reset the derived visual/OCR analysis? The original and Mycelia previews will be retained."
+      : target === "asset_record"
+      ? "Remove this item, its previews, and its analysis from Mycelia? The original file in the mounted folder will NOT be deleted. A later folder sync can import it again."
       : "Forget the mounted original reference? The mounted file will not be deleted. Mycelia previews will be retained, but this asset cannot be reanalyzed.";
     if (!globalThis.confirm(confirmation)) return;
     setBusy(true);
@@ -686,14 +810,19 @@ export default function MediaPage() {
         confirm: true,
       });
       toast.success(
-        target === "source_reference"
+        target === "asset_record"
+          ? "Removed from Mycelia; the mounted original was not touched"
+          : target === "source_reference"
           ? "Forgot the mounted reference; the original file was not touched"
           : target === "previews"
           ? "Deleted Mycelia previews; the original file and reference were not touched"
           : "Reset derived analysis; the original and previews were not touched",
       );
+      if (target === "asset_record") closeAsset();
       await load();
-      setDetailReloadVersion((current) => current + 1);
+      if (target !== "asset_record") {
+        setDetailReloadVersion((current) => current + 1);
+      }
     } catch (error) {
       toast.error(
         error instanceof Error
@@ -1108,6 +1237,28 @@ export default function MediaPage() {
               : lastUpdatedAt
               ? `Updated ${lastUpdatedAt.toLocaleTimeString()}`
               : "Ready"}
+            <div className="ml-2 inline-flex rounded-md border p-1">
+              <Button
+                type="button"
+                size="sm"
+                variant={viewMode === "grid" ? "secondary" : "ghost"}
+                aria-label="Grid view"
+                aria-pressed={viewMode === "grid"}
+                onClick={() => updateLibraryParams({ view: "" })}
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={viewMode === "table" ? "secondary" : "ghost"}
+                aria-label="Table view"
+                aria-pressed={viewMode === "table"}
+                onClick={() => updateLibraryParams({ view: "table" })}
+              >
+                <List className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1129,6 +1280,7 @@ export default function MediaPage() {
                 ["processing", "Queued / processing"],
                 ["ready", "Ready"],
                 ["errors", "Needs attention"],
+                ["ignored", "Ignored"],
               ] as Array<[InventoryFilter, string]>).map(([value, label]) => (
                 <Button
                   key={value}
@@ -1171,17 +1323,111 @@ export default function MediaPage() {
             ))}
           </div>
 
-          {selectedEventAssetIds.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
-              <span className="text-sm font-medium">
-                {selectedEventAssetIds.length}{" "}
-                photo(s) selected for event grouping
-              </span>
+          <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg border bg-muted/25 p-3">
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="media-sort">Sort by</Label>
+                <select
+                  id="media-sort"
+                  className="h-9 rounded-md border bg-background px-3 text-sm"
+                  value={sortBy}
+                  onChange={(event) =>
+                    updateLibraryParams({ sort: event.target.value })}
+                >
+                  <option value="createdAt">Imported</option>
+                  <option value="capturedAt">Captured</option>
+                  <option value="fileName">Filename</option>
+                  <option value="status">Status</option>
+                  <option value="byteLength">File size</option>
+                  <option value="updatedAt">Last changed</option>
+                </select>
+              </div>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={() => setSelectedEventAssetIds([])}
+                aria-label={`Sort ${
+                  sortDirection === "asc" ? "descending" : "ascending"
+                }`}
+                onClick={() =>
+                  updateLibraryParams({
+                    direction: sortDirection === "asc" ? "desc" : "asc",
+                  })}
+              >
+                <ArrowUpDown className="mr-2 h-4 w-4" />
+                {sortDirection === "asc" ? "Ascending" : "Descending"}
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={assets.every((asset) => asset.kind !== "image")}
+                onClick={() => {
+                  setAllMatchingSelected(false);
+                  setSelectedAssetIds(
+                    assets.filter((asset) => asset.kind === "image").map((
+                      asset,
+                    ) => String(asset._id)),
+                  );
+                }}
+              >
+                Select loaded ({assets.filter((asset) => asset.kind === "image")
+                  .length})
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={assetTotal === 0}
+                onClick={() => {
+                  setSelectedAssetIds([]);
+                  setAllMatchingSelected(true);
+                }}
+              >
+                Select all matching ({assetTotal})
+              </Button>
+            </div>
+          </div>
+
+          {(selectedAssetIds.length > 0 || allMatchingSelected) && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+              <span className="text-sm font-medium">
+                {allMatchingSelected ? assetTotal : selectedAssetIds.length}
+                {" "}
+                item(s) selected
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                onClick={openSelectedForProcessing}
+                disabled={busy || selectedImageIds.length === 0 &&
+                    !allMatchingSelected}
+              >
+                <Sparkles className="mr-2 h-4 w-4" />
+                Process selection
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void setSelectedIgnored(inventoryFilter !== "ignored")}
+                disabled={busy}
+              >
+                {inventoryFilter === "ignored"
+                  ? "Return to processing"
+                  : "Ignore for processing"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSelectedAssetIds([]);
+                  setAllMatchingSelected(false);
+                }}
               >
                 Clear selection
               </Button>
@@ -1217,12 +1463,14 @@ export default function MediaPage() {
                 No media matches these filters.
               </div>
             )
-            : (
+            : viewMode === "grid"
+            ? (
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {filteredAssets.map((asset) => {
                   const id = String(asset._id);
                   const metadata = mediaMetadataSummary(asset);
-                  const selectedForEvent = selectedEventAssetIds.includes(id);
+                  const selectedForEvent = allMatchingSelected ||
+                    selectedAssetIds.includes(id);
                   return (
                     <article
                       key={id}
@@ -1238,14 +1486,17 @@ export default function MediaPage() {
                         >
                           <Checkbox
                             id={`event-select-${id}`}
-                            aria-label={`Select ${asset.fileName} for photo event`}
+                            aria-label={`Select ${asset.fileName}`}
                             checked={selectedForEvent}
-                            onCheckedChange={(checked) =>
-                              setSelectedEventAssetIds((current) =>
+                            disabled={allMatchingSelected}
+                            onCheckedChange={(checked) => {
+                              setAllMatchingSelected(false);
+                              setSelectedAssetIds((current) =>
                                 checked
                                   ? [...new Set([...current, id])]
                                   : current.filter((entry) => entry !== id)
-                              )}
+                              );
+                            }}
                           />
                         </label>
                       )}
@@ -1279,7 +1530,9 @@ export default function MediaPage() {
                                 : "secondary"}
                               className="shrink-0"
                             >
-                              {asset.status}
+                              {asset.recognitionIgnoredAt
+                                ? "ignored"
+                                : asset.status}
                             </Badge>
                           </div>
                           <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">
@@ -1299,6 +1552,138 @@ export default function MediaPage() {
                     </article>
                   );
                 })}
+              </div>
+            )
+            : (
+              <div className="overflow-x-auto rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12">Select</TableHead>
+                      {([
+                        ["fileName", "Photo"],
+                        ["capturedAt", "Captured"],
+                        ["status", "Status"],
+                        ["byteLength", "Size"],
+                      ] as Array<[MediaSortBy, string]>).map(([key, label]) => (
+                        <TableHead key={key}>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="-ml-3"
+                            onClick={() =>
+                              updateLibraryParams({
+                                sort: key,
+                                direction: sortBy === key &&
+                                    sortDirection === "asc"
+                                  ? "desc"
+                                  : "asc",
+                              })}
+                          >
+                            {label}
+                            <ArrowUpDown className="ml-2 h-3.5 w-3.5" />
+                          </Button>
+                        </TableHead>
+                      ))}
+                      <TableHead>Source / result</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAssets.map((asset) => {
+                      const id = String(asset._id);
+                      const metadata = mediaMetadataSummary(asset);
+                      const selected = allMatchingSelected ||
+                        selectedAssetIds.includes(id);
+                      return (
+                        <TableRow
+                          key={id}
+                          data-state={selected ? "selected" : undefined}
+                        >
+                          <TableCell>
+                            {asset.kind === "image" && (
+                              <Checkbox
+                                aria-label={`Select ${asset.fileName}`}
+                                checked={selected}
+                                disabled={allMatchingSelected}
+                                onCheckedChange={(checked) => {
+                                  setAllMatchingSelected(false);
+                                  setSelectedAssetIds((current) =>
+                                    checked
+                                      ? [...new Set([...current, id])]
+                                      : current.filter((entry) => entry !== id)
+                                  );
+                                }}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <button
+                              type="button"
+                              className="flex min-w-[240px] items-center gap-3 text-left"
+                              onClick={() => openAsset(id)}
+                            >
+                              <LazyAuthenticatedMediaImage
+                                path={asset.thumbnailUrl}
+                                alt={asset.fileName}
+                                containerClassName="h-14 w-14 shrink-0 overflow-hidden rounded border bg-muted"
+                                className="h-full w-full object-cover"
+                              />
+                              <div className="min-w-0">
+                                <div className="max-w-[260px] truncate font-medium">
+                                  {asset.fileName}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {asset.kind} · {metadata.dimensions}
+                                </div>
+                              </div>
+                            </button>
+                          </TableCell>
+                          <TableCell className="min-w-[180px]">
+                            {metadata.captured}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={asset.status === "ready"
+                                ? "default"
+                                : asset.safeError
+                                ? "destructive"
+                                : "secondary"}
+                            >
+                              {asset.recognitionIgnoredAt
+                                ? "ignored"
+                                : asset.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {(Number(asset.byteLength ?? 0) / 1_000_000)
+                              .toFixed(2)} MB
+                          </TableCell>
+                          <TableCell className="max-w-[380px]">
+                            <div className="truncate text-xs text-muted-foreground">
+                              {asset.source?.relativePath ?? asset.storageMode}
+                            </div>
+                            <div className="line-clamp-2 text-sm">
+                              {asset.inventory?.shortCaption ??
+                                asset.safeError ?? "No description yet"}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openAsset(id)}
+                            >
+                              <Eye className="mr-2 h-4 w-4" />Details
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
               </div>
             )}
 
@@ -1321,10 +1706,11 @@ export default function MediaPage() {
 
       <MediaEventsPanel
         status={status}
-        candidateAssetIds={selectedEventAssetIds.filter((id) =>
-          assets.some((asset) =>
-            String(asset._id) === id && asset.kind === "image"
-          )
+        candidateAssetIds={(allMatchingSelected ? [] : selectedAssetIds).filter(
+          (id) =>
+            assets.some((asset) =>
+              String(asset._id) === id && asset.kind === "image"
+            ),
         )}
         onOpenAsset={openAsset}
       />
@@ -1554,8 +1940,9 @@ export default function MediaPage() {
                       <div>
                         <div className="font-semibold">Storage & deletion</div>
                         <p className="mt-1 text-muted-foreground">
-                          These controls do not remove the Media Library record.
-                          Each action changes one retained layer only.
+                          Mounted originals remain read-only. You can remove the
+                          complete Mycelia library item, or use advanced
+                          layer-specific controls for Mycelia-managed files.
                         </p>
                       </div>
                       {storageMutationLocked && (
@@ -1590,30 +1977,26 @@ export default function MediaPage() {
                         </div>
                       )}
 
-                      {detail.asset.storageMode === "external_reference" && (
+                      {["external_reference", "preview_only"].includes(
+                        detail.asset.storageMode,
+                      ) && (
                         <div className="space-y-2 rounded-md border bg-background p-3">
-                          <div className="font-medium">Mounted original</div>
+                          <div className="font-medium">Remove from Mycelia</div>
                           <p className="text-muted-foreground">
-                            Mycelia stores a read-only reference to{" "}
-                            <span className="break-all font-medium text-foreground">
-                              {detail.asset.source?.relativePath ??
-                                "the mounted file"}
-                            </span>
-                            . The external mounted original is never deleted by
-                            this action. Forgetting the reference keeps existing
-                            previews, metadata, and results, but prevents this
-                            asset from being reanalyzed.
+                            Removes this library item, Mycelia WebP previews,
+                            and analysis results. The original file in the
+                            mounted folder is never deleted. If it is still
+                            present, a later folder sync can import it again.
                           </p>
                           <Button
                             type="button"
-                            variant="outline"
-                            onClick={() => deleteDerived("source_reference")}
+                            variant="destructive"
+                            onClick={() => deleteDerived("asset_record")}
                             disabled={storageActionsBusy ||
-                              storageMutationLocked ||
-                              !detail.asset.source?.relativePath}
+                              storageMutationLocked}
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
-                            Forget mounted original reference
+                            Remove from Mycelia
                           </Button>
                         </div>
                       )}
@@ -1646,29 +2029,33 @@ export default function MediaPage() {
                         </div>
                       )}
 
-                      <div className="space-y-2 rounded-md border bg-background p-3">
-                        <div className="font-medium">Mycelia WebP previews</div>
-                        <p className="text-muted-foreground">
-                          Deleting previews removes only compact WebP files
-                          stored by Mycelia. It never deletes an original or its
-                          reference. Without previews, this item cannot be
-                          viewed in the gallery{detailIsPhoto
-                            ? " or sent for photo analysis"
-                            : ""}.
-                        </p>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => deleteDerived("previews")}
-                          disabled={storageActionsBusy ||
-                            storageMutationLocked ||
-                            !(detail.asset.previewUrl ||
-                              detail.asset.thumbnailUrl)}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Delete Mycelia previews
-                        </Button>
-                      </div>
+                      {detail.asset.storageMode === "managed_original" && (
+                        <div className="space-y-2 rounded-md border bg-background p-3">
+                          <div className="font-medium">
+                            Mycelia WebP previews
+                          </div>
+                          <p className="text-muted-foreground">
+                            Deleting previews removes only compact WebP files
+                            stored by Mycelia. It never deletes an original or
+                            its reference. Without previews, this item cannot be
+                            viewed in the gallery{detailIsPhoto
+                              ? " or sent for photo analysis"
+                              : ""}.
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => deleteDerived("previews")}
+                            disabled={storageActionsBusy ||
+                              storageMutationLocked ||
+                              !(detail.asset.previewUrl ||
+                                detail.asset.thumbnailUrl)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete Mycelia previews
+                          </Button>
+                        </div>
+                      )}
 
                       {currentDeletionPreview && (
                         <div className="space-y-3 rounded border border-destructive/50 bg-background p-3">

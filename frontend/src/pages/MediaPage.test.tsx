@@ -190,6 +190,73 @@ describe("MediaPage consolidated library", () => {
     ).toBe(false);
   });
 
+  it("offers a sortable table and sends all matching photos to processing", async () => {
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [baseAsset], total: 801 });
+      }
+      return defaultResourceResponse(input);
+    });
+    const user = userEvent.setup();
+    renderMediaPage("/media?view=table");
+
+    expect(await screen.findByRole("table")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Photo" }));
+    await waitFor(() =>
+      expect(mockCallResource).toHaveBeenCalledWith(
+        "media",
+        expect.objectContaining({
+          action: "listAssets",
+          sortBy: "fileName",
+          sortDirection: "asc",
+        }),
+      )
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Select all matching (801)" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Process selection" }),
+    );
+    expect(screen.getByTestId("media-location").textContent).toBe(
+      "/media/analysis?view=table&selection=all",
+    );
+  });
+
+  it("can ignore an explicit processing selection without deleting it", async () => {
+    mockCallResource.mockImplementation((_resource, input) => {
+      if (input.action === "listAssets") {
+        return Promise.resolve({ assets: [baseAsset], total: 1 });
+      }
+      if (input.action === "setRecognitionIgnored") {
+        return Promise.resolve({ success: true, updated: 1 });
+      }
+      return defaultResourceResponse(input);
+    });
+    const confirm = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderMediaPage();
+
+    await user.click(await screen.findByLabelText("Select photo.jpg"));
+    await user.click(
+      screen.getByRole("button", { name: "Ignore for processing" }),
+    );
+    await waitFor(() =>
+      expect(mockCallResource).toHaveBeenCalledWith("media-library", {
+        action: "setRecognitionIgnored",
+        selection: {
+          mode: "explicit",
+          inventoryFilter: "all",
+          placement: "all",
+          assetIds: ["asset-1"],
+        },
+        ignored: true,
+        confirm: true,
+      })
+    );
+    confirm.mockRestore();
+  });
+
   it("uploads locally and refreshes the gallery after confirmation", async () => {
     let confirmed = false;
     mockCallResource.mockImplementation((_resource, input) => {
@@ -366,6 +433,8 @@ describe("MediaPage consolidated library", () => {
       inventoryFilter: "all",
       placement: "all",
       cursor: "cursor-2",
+      sortBy: "createdAt",
+      sortDirection: "desc",
     });
   });
 
@@ -392,7 +461,7 @@ describe("MediaPage consolidated library", () => {
     renderMediaPage();
 
     await user.click(
-      await screen.findByLabelText("Select photo.jpg for photo event"),
+      await screen.findByLabelText("Select photo.jpg"),
     );
     expect(screen.getByTestId("event-candidates").textContent).toContain(
       "asset-1",
@@ -429,7 +498,7 @@ describe("MediaPage consolidated library", () => {
     ).toBe(false);
     expect(
       screen.getByText(
-        /These controls do not remove the Media Library record/i,
+        /Mounted originals remain read-only/i,
       ),
     ).toBeTruthy();
     expect(screen.getByText("Manual Timeline / Map placement")).toBeTruthy();
@@ -697,26 +766,42 @@ describe("MediaPage consolidated library", () => {
       screen.getByRole("button", { name: "Storage & deletion…" }),
     );
 
-    expect(screen.getByText("Mounted original")).toBeTruthy();
     expect(
-      screen.getByText(/external mounted original is never deleted/i),
+      screen.getByRole("button", { name: "Remove from Mycelia" }),
     ).toBeTruthy();
     expect(
-      screen.getByText(/keeps existing previews, metadata, and results/i),
+      screen.getByText(/original file in the mounted folder is never deleted/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/later folder sync can import it again/i),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", {
-        name: "Forget mounted original reference",
+        name: "Remove from Mycelia",
       }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Delete Mycelia previews" }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", {
+      name: "Delete Mycelia previews",
+    })).toBeNull();
     expect(
       screen.queryByRole("button", {
         name: "Review managed original deletion",
       }),
     ).toBeNull();
+
+    const confirm = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    await user.click(
+      screen.getByRole("button", { name: "Remove from Mycelia" }),
+    );
+    await waitFor(() =>
+      expect(mockCallResource).toHaveBeenCalledWith("media", {
+        action: "deleteDerived",
+        assetId: "asset-1",
+        target: "asset_record",
+        confirm: true,
+      })
+    );
+    confirm.mockRestore();
   });
 
   it("locks every storage mutation while recognition reserves the asset", async () => {
@@ -768,12 +853,7 @@ describe("MediaPage consolidated library", () => {
     ).toBe("/media/analysis");
     expect(
       (screen.getByRole("button", {
-        name: "Forget mounted original reference",
-      }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(
-      (screen.getByRole("button", {
-        name: "Delete Mycelia previews",
+        name: "Remove from Mycelia",
       }) as HTMLButtonElement).disabled,
     ).toBe(true);
     await user.click(screen.getByText("Advanced: reset provider analysis"));

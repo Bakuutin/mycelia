@@ -9,6 +9,7 @@ import {
 import { Link, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
+  ArrowUpDown,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -61,10 +62,18 @@ type InventoryFilter =
   | "unprocessed"
   | "processing"
   | "ready"
-  | "needs_attention";
+  | "needs_attention"
+  | "ignored";
 type PlacementFilter = "all" | "missing_time" | "missing_location";
 type RecognitionTask = "visual-understanding" | "ocr";
 type SelectionMode = "explicit" | "all_matching";
+type MediaSortBy =
+  | "capturedAt"
+  | "createdAt"
+  | "fileName"
+  | "status"
+  | "byteLength"
+  | "updatedAt";
 const RECOGNITION_TASKS: RecognitionTask[] = [
   "visual-understanding",
   "ocr",
@@ -98,6 +107,7 @@ interface Asset {
     ocrPageCount?: number;
     annotationCount?: number;
   };
+  recognitionIgnoredAt?: string | Date;
 }
 
 interface Batch {
@@ -138,7 +148,7 @@ function idOf(value: unknown): string {
 function parsedInventoryFilter(value: string | null): InventoryFilter {
   if (
     value === "unprocessed" || value === "processing" || value === "ready" ||
-    value === "needs_attention"
+    value === "needs_attention" || value === "ignored"
   ) return value;
   return "all";
 }
@@ -341,8 +351,30 @@ export default function MediaAnalysisPage() {
     return { start, ...(end ? { end } : {}) };
   }, [filters.capturedFrom, filters.capturedTo, timeZone]);
   const viewMode = searchParams.get("view") === "table" ? "table" : "grid";
+  const requestedSort = searchParams.get("sort") as MediaSortBy | null;
+  const sortBy: MediaSortBy = requestedSort && [
+      "capturedAt",
+      "createdAt",
+      "fileName",
+      "status",
+      "byteLength",
+      "updatedAt",
+    ].includes(requestedSort)
+    ? requestedSort
+    : "capturedAt";
+  const sortDirection = searchParams.get("direction") === "asc"
+    ? "asc"
+    : "desc";
   const selectedAssetId = searchParams.get("assetId") ?? "";
   const selectRequested = searchParams.get("select") === "1";
+  const bulkSelectionRequested = searchParams.get("selection") === "all";
+  const requestedAssetIds = useMemo(
+    () =>
+      (searchParams.get("assetIds") ?? "").split(",").filter((value) =>
+        /^[a-f\d]{24}$/i.test(value)
+      ),
+    [searchParams],
+  );
 
   const [queryDraft, setQueryDraft] = useState(filters.query);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -377,6 +409,7 @@ export default function MediaAnalysisPage() {
   const [pendingAllMatchingFilterKey, setPendingAllMatchingFilterKey] =
     useState("");
   const autoSelectionRef = useRef("");
+  const bulkSelectionRef = useRef("");
   const reviewBatchButtonRef = useRef<HTMLButtonElement>(null);
   const sortedSelectedIds = useMemo(
     () => Array.from(selectedIds).sort(),
@@ -464,6 +497,8 @@ export default function MediaAnalysisPage() {
           action: "listAssets",
           limit,
           ...filterRequest(filters, timeZone),
+          sortBy,
+          sortDirection,
           ...(pageCursor ? { cursor: pageCursor } : {}),
         }, { signal: controller.signal });
       const loadRefreshedPrefix = async () => {
@@ -527,7 +562,7 @@ export default function MediaAnalysisPage() {
         }
       }
     }
-  }, [currentFilterKey, filters, timeZone]);
+  }, [currentFilterKey, filters, sortBy, sortDirection, timeZone]);
 
   const loadSummary = useCallback(async () => {
     try {
@@ -697,6 +732,29 @@ export default function MediaAnalysisPage() {
 
   const scopeReady = loadedFilterKey === currentFilterKey && !loading &&
     !loadError;
+
+  useEffect(() => {
+    if (!scopeReady) return;
+    const key = bulkSelectionRequested
+      ? `all:${currentFilterKey}:${total}`
+      : requestedAssetIds.length > 0
+      ? `ids:${requestedAssetIds.join(",")}`
+      : "";
+    if (!key || bulkSelectionRef.current === key) return;
+    bulkSelectionRef.current = key;
+    setSelectionMode(bulkSelectionRequested ? "all_matching" : "explicit");
+    setSelectedIds(
+      bulkSelectionRequested ? new Set() : new Set(requestedAssetIds),
+    );
+    setPreview(undefined);
+  }, [
+    bulkSelectionRequested,
+    currentFilterKey,
+    requestedAssetIds,
+    scopeReady,
+    total,
+  ]);
+
   const processableAssets = assets.filter(isBatchSelectableAsset);
   const selectedCount = selectionMode === "all_matching"
     ? total
@@ -776,6 +834,39 @@ export default function MediaAnalysisPage() {
       );
     } finally {
       if (isCurrentRequest()) setPreviewing(false);
+    }
+  };
+
+  const setSelectionIgnored = async (ignored: boolean) => {
+    if (!scopeReady || selectedCount === 0) return;
+    if (
+      !globalThis.confirm(
+        ignored
+          ? `Ignore ${selectedCount} selected photo(s) for future analysis? Existing results and files stay unchanged.`
+          : `Return ${selectedCount} selected photo(s) to normal processing selection?`,
+      )
+    ) return;
+    setBatchAction(ignored ? "ignore-selection" : "restore-selection");
+    try {
+      const result = await callResource("media-library", {
+        action: "setRecognitionIgnored",
+        selection: previewSelection,
+        ignored,
+        confirm: true,
+      });
+      toast.success(
+        `${ignored ? "Ignored" : "Returned"} ${
+          Number(result.updated ?? 0)
+        } photo(s)`,
+      );
+      clearSelection();
+      await Promise.all([loadAssets(), loadSummary()]);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Selection update failed",
+      );
+    } finally {
+      setBatchAction("");
     }
   };
 
@@ -861,7 +952,8 @@ export default function MediaAnalysisPage() {
         checked={selectionMode === "all_matching"
           ? isBatchSelectableAsset(asset)
           : selectedIds.has(assetId)}
-        disabled={!scopeReady || !isBatchSelectableAsset(asset) ||
+        disabled={!scopeReady ||
+          !(isBatchSelectableAsset(asset) || asset.recognitionIgnoredAt) ||
           selectionMode === "all_matching"}
         onCheckedChange={(checked) => toggleAsset(assetId, checked === true)}
       />
@@ -1023,6 +1115,7 @@ export default function MediaAnalysisPage() {
                 <option value="processing">Queued / processing</option>
                 <option value="ready">Ready</option>
                 <option value="needs_attention">Needs attention</option>
+                <option value="ignored">Ignored</option>
               </select>
             </div>
             <div className="space-y-1.5">
@@ -1092,6 +1185,20 @@ export default function MediaAnalysisPage() {
                 onClick={clearSelection}
               >
                 Clear
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!scopeReady || selectedCount === 0 ||
+                  Boolean(batchAction)}
+                onClick={() =>
+                  void setSelectionIgnored(
+                    filters.inventoryFilter !== "ignored",
+                  )}
+              >
+                {filters.inventoryFilter === "ignored"
+                  ? "Return to processing"
+                  : "Ignore for processing"}
               </Button>
               <span className="text-sm text-muted-foreground">
                 {selectionMode === "all_matching"
@@ -1270,6 +1377,7 @@ export default function MediaAnalysisPage() {
                           variant={statusTone(asset.status)}
                         >
                           {asset.status}
+                          {asset.recognitionIgnoredAt ? " · ignored" : ""}
                         </Badge>
                       </div>
                       <div className="space-y-2 p-4">
@@ -1298,9 +1406,31 @@ export default function MediaAnalysisPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-12">Select</TableHead>
-                      <TableHead>Photo</TableHead>
-                      <TableHead>Captured</TableHead>
-                      <TableHead>Status</TableHead>
+                      {([
+                        ["fileName", "Photo"],
+                        ["capturedAt", "Captured"],
+                        ["status", "Status"],
+                      ] as Array<[MediaSortBy, string]>).map(([key, label]) => (
+                        <TableHead key={key}>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="-ml-3"
+                            onClick={() =>
+                              updateParams({
+                                sort: key,
+                                direction: sortBy === key &&
+                                    sortDirection === "asc"
+                                  ? "desc"
+                                  : "asc",
+                              })}
+                          >
+                            {label}
+                            <ArrowUpDown className="ml-2 h-3.5 w-3.5" />
+                          </Button>
+                        </TableHead>
+                      ))}
                       <TableHead>Analysis result</TableHead>
                       <TableHead className="text-right">View</TableHead>
                     </TableRow>
@@ -1335,6 +1465,7 @@ export default function MediaAnalysisPage() {
                           <TableCell>
                             <Badge variant={statusTone(asset.status)}>
                               {asset.status}
+                              {asset.recognitionIgnoredAt ? " · ignored" : ""}
                             </Badge>
                           </TableCell>
                           <TableCell className="max-w-[360px]">

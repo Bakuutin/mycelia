@@ -5,6 +5,7 @@ import {
   loadMediaAssetDetailProjections,
   mediaAssetListFilterQuery,
   mediaAssetLocation,
+  mediaAssetSortSpec,
   mediaImportTemporalSpatialFields,
   mediaPlacementFilterQuery,
   MediaResource,
@@ -32,6 +33,7 @@ Deno.test("media inventory filters filename kind and capture range on the server
     }),
     {
       owner: "admin",
+      recognitionIgnoredAt: { $exists: false },
       status: { $nin: ["ready", "queued", "processing"] },
       $nor: [{ "geo.type": "Point" }],
       kind: "image",
@@ -48,6 +50,29 @@ Deno.test("media inventory filters filename kind and capture range on the server
         $gte: new Date("2026-01-01T00:00:00.000Z"),
         $lte: new Date("2026-12-31T23:59:59.999Z"),
       },
+    },
+  );
+});
+
+Deno.test("media inventory sorting is server-side and stable", () => {
+  assertEquals(mediaAssetSortSpec("capturedAt", "asc"), {
+    capturedAt: 1,
+    _id: 1,
+  });
+  assertEquals(mediaAssetSortSpec("fileName", "desc"), {
+    fileName: -1,
+    _id: -1,
+  });
+  assertEquals(
+    mediaAssetListFilterQuery("admin", {
+      inventoryFilter: "ignored",
+      placement: "all",
+      kind: "image",
+    }),
+    {
+      owner: "admin",
+      kind: "image",
+      recognitionIgnoredAt: { $type: "date" },
     },
   );
 });
@@ -71,6 +96,18 @@ Deno.test("derived photo deletion declares the Event Object mutation", () => {
       action: "deleteDerived",
       assetId,
       target: "previews",
+      confirm: true,
+    }),
+    [
+      { path: ["media", "deleteDerived"], actions: ["use"] },
+      { path: ["objects"], actions: ["update"] },
+    ],
+  );
+  assertEquals(
+    resource.extractActions({
+      action: "deleteDerived",
+      assetId,
+      target: "asset_record",
       confirm: true,
     }),
     [

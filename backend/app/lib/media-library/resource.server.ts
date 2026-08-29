@@ -110,6 +110,12 @@ const processRecognitionBatchSchema = z.object({
   batchId: z.string().refine(ObjectId.isValid).optional(),
   jobId: z.string().refine(ObjectId.isValid),
 });
+const setRecognitionIgnoredSchema = z.object({
+  action: z.literal("setRecognitionIgnored"),
+  selection: zMediaRecognitionSelection,
+  ignored: z.boolean(),
+  confirm: z.literal(true),
+});
 
 const timelineSchema = z.object({
   action: z.literal("timeline"),
@@ -156,6 +162,7 @@ export const mediaLibraryRequestSchema = z.discriminatedUnion("action", [
   cancelRecognitionBatchSchema,
   retryRecognitionBatchFailuresSchema,
   processRecognitionBatchSchema,
+  setRecognitionIgnoredSchema,
   timelineSchema,
   timeRangeSchema,
   mapSchema,
@@ -986,6 +993,8 @@ async function publicFolderCampaign(db: Db, campaign: any) {
     campaign._id,
   );
   const counts = publicFolderCounts(rawCounts);
+  const reusedHashCount = await db.collection("media_folder_items")
+    .countDocuments({ campaignId: campaign._id, hashReused: true });
   const samples = await db.collection("media_folder_items").find({
     campaignId: campaign._id,
     state: { $in: ["ready", "duplicate", "imported"] },
@@ -1005,6 +1014,7 @@ async function publicFolderCampaign(db: Db, campaign: any) {
     relativePath: campaign.relativePath,
     status: campaign.status,
     counts,
+    reusedHashCount,
     progress: folderCampaignProgress(campaign, rawCounts),
     samples,
     inventoryTruncated: Boolean(campaign.inventoryTruncated),
@@ -1091,6 +1101,25 @@ async function initializeFolderInventory(db: Db, campaign: any): Promise<void> {
   campaign.lastProgressAt = scanStartedAt;
 }
 
+export function mediaFolderReusableHashQuery(
+  owner: string,
+  campaignId: ObjectId,
+  relativePath: string,
+  byteLength: number,
+  sourceModifiedAtMs: number,
+) {
+  return {
+    owner,
+    campaignId: { $ne: campaignId },
+    relativePath,
+    byteLength,
+    sourceModifiedAtMs,
+    sha256: { $type: "string" },
+    kind: "image",
+    state: { $in: ["ready", "duplicate", "imported"] },
+  };
+}
+
 async function inspectFolderChunk(
   db: Db,
   campaign: any,
@@ -1125,7 +1154,20 @@ async function inspectFolderChunk(
     if (!item) break;
     processed += 1;
     try {
-      const inspected = await inspectLocalMedia(
+      const resolved = await resolveMediaSourcePath(item.relativePath);
+      const fileInfo = await Deno.stat(resolved.realPath);
+      const modifiedAtMs = fileInfo.mtime?.getTime();
+      const reusable = modifiedAtMs == null ? null : await items.findOne(
+        mediaFolderReusableHashQuery(
+          campaign.owner,
+          campaign._id,
+          item.relativePath,
+          fileInfo.size,
+          modifiedAtMs,
+        ),
+        { sort: { updatedAt: -1 } },
+      );
+      const inspected = reusable ?? await inspectLocalMedia(
         item.relativePath,
         config.limits,
       );
@@ -1166,9 +1208,16 @@ async function inspectFolderChunk(
             location: inspected.location,
             metadata: inspected.metadata,
             duplicateAssetId: duplicate?._id,
+            sourceModifiedAtMs: modifiedAtMs,
+            hashReused: Boolean(reusable),
+            ...(reusable ? { hashSourceCampaignId: reusable.campaignId } : {}),
             updatedAt: new Date(),
           },
-          $unset: { claimedAt: "", safeError: "" },
+          $unset: {
+            claimedAt: "",
+            safeError: "",
+            ...(reusable ? {} : { hashSourceCampaignId: "" }),
+          },
         },
       );
     } catch (error) {
@@ -1553,6 +1602,7 @@ export function recognitionEligibilityQuery(owner: string) {
     "preview.fileId": { $type: "objectId" },
     derivedDeletionPending: { $exists: false },
     originalDeletionPending: { $exists: false },
+    recognitionIgnoredAt: { $exists: false },
     status: {
       $in: ["staged", "failed", "budget_blocked", "recognition_disabled"],
     },
@@ -1592,6 +1642,7 @@ function inventorySelectionQuery(
   }
   if (filter === "needs_attention") {
     return {
+      recognitionIgnoredAt: { $exists: false },
       status: {
         $in: [
           "failed",
@@ -1604,7 +1655,13 @@ function inventorySelectionQuery(
     };
   }
   if (filter === "unprocessed") {
-    return { status: { $nin: ["ready", "queued", "processing"] } };
+    return {
+      recognitionIgnoredAt: { $exists: false },
+      status: { $nin: ["ready", "queued", "processing"] },
+    };
+  }
+  if (filter === "ignored") {
+    return { recognitionIgnoredAt: { $type: "date" } };
   }
   return {};
 }
@@ -3303,6 +3360,7 @@ export function mediaLibrarySummaryQueries(owner: string) {
     all: images,
     unprocessed: {
       ...images,
+      recognitionIgnoredAt: { $exists: false },
       status: { $nin: ["ready", "queued", "processing"] },
     },
     processing: {
@@ -3320,6 +3378,7 @@ export function mediaLibrarySummaryQueries(owner: string) {
     ready: { ...images, status: "ready" },
     needsAttention: {
       ...images,
+      recognitionIgnoredAt: { $exists: false },
       status: {
         $in: [
           "failed",
@@ -3330,6 +3389,7 @@ export function mediaLibrarySummaryQueries(owner: string) {
         ],
       },
     },
+    ignored: { ...images, recognitionIgnoredAt: { $type: "date" } },
   };
 }
 
@@ -3609,6 +3669,43 @@ export class MediaLibraryResource
           new ObjectId(input.jobId),
         );
       }
+      case "setRecognitionIgnored": {
+        const selection = normalizeRecognitionSelection(input.selection);
+        const now = new Date();
+        const scope = recognitionSelectionScopeQuery(
+          auth.principal,
+          now,
+          selection,
+        );
+        const result = await db.collection("media_assets").updateMany(
+          {
+            $and: [
+              scope,
+              { status: { $nin: ["queued", "processing"] } },
+            ],
+          },
+          input.ignored
+            ? {
+              $set: {
+                recognitionIgnoredAt: now,
+                recognitionIgnoreReason: "manual",
+                updatedAt: now,
+              },
+            }
+            : {
+              $set: { updatedAt: now },
+              $unset: {
+                recognitionIgnoredAt: "",
+                recognitionIgnoreReason: "",
+              },
+            },
+        );
+        return {
+          success: true,
+          matched: result.matchedCount,
+          updated: result.modifiedCount,
+        };
+      }
       case "timeline":
         return await timelineProjection(
           db,
@@ -3636,6 +3733,7 @@ export class MediaLibraryResource
           missingLocation,
           ready,
           needsAttention,
+          ignored,
         ] = await Promise.all([
           db.collection("media_assets").countDocuments(queries.all),
           db.collection("media_assets").countDocuments(queries.unprocessed),
@@ -3648,6 +3746,7 @@ export class MediaLibraryResource
           db.collection("media_assets").countDocuments(
             queries.needsAttention,
           ),
+          db.collection("media_assets").countDocuments(queries.ignored),
         ]);
         return {
           all,
@@ -3657,6 +3756,7 @@ export class MediaLibraryResource
           missingLocation,
           ready,
           needsAttention,
+          ignored,
         };
       }
       case "updatePlacement":

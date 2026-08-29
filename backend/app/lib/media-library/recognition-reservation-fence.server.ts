@@ -7,6 +7,7 @@ export type MediaDeletionReservationTarget =
   | "previews"
   | "analysis"
   | "source_reference"
+  | "asset_record"
   | "managed_original";
 
 function objectId(value: ObjectId | string): ObjectId {

@@ -12,6 +12,7 @@ import {
   folderCampaignProgress,
   geoBoundsQuery,
   listRecognitionBatches,
+  mediaFolderReusableHashQuery,
   mediaLibraryRequestSchema,
   MediaLibraryResource,
   mediaLibrarySummaryQueries,
@@ -236,6 +237,7 @@ Deno.test("all-matching recognition selection scopes server-side filters", () =>
     { owner: "alice", kind: "image" },
     { createdAt: { $lte: cutoff } },
     {
+      recognitionIgnoredAt: { $exists: false },
       status: {
         $in: [
           "failed",
@@ -306,13 +308,50 @@ Deno.test("explicit recognition selection is unique, normalized, and ID-scoped",
   );
 });
 
-Deno.test("recognition eligibility excludes ready, active, and deleting assets", () => {
+Deno.test("ignore processing accepts explicit and all-matching selections", () => {
+  const assetId = new ObjectId().toString();
+  assertEquals(
+    mediaLibraryRequestSchema.parse({
+      action: "setRecognitionIgnored",
+      selection: { mode: "explicit", assetIds: [assetId] },
+      ignored: true,
+      confirm: true,
+    }),
+    {
+      action: "setRecognitionIgnored",
+      selection: {
+        mode: "explicit",
+        inventoryFilter: "unprocessed",
+        placement: "all",
+        assetIds: [assetId],
+      },
+      ignored: true,
+      confirm: true,
+    },
+  );
+  const restored = mediaLibraryRequestSchema.parse({
+    action: "setRecognitionIgnored",
+    selection: {
+      mode: "all_matching",
+      inventoryFilter: "ignored",
+    },
+    ignored: false,
+    confirm: true,
+  });
+  if (restored.action !== "setRecognitionIgnored") {
+    throw new Error("Unexpected parsed action");
+  }
+  assertEquals(restored.selection.inventoryFilter, "ignored");
+});
+
+Deno.test("recognition eligibility excludes ready, active, deleting, and ignored assets", () => {
   assertEquals(recognitionEligibilityQuery("admin"), {
     owner: "admin",
     kind: "image",
     "preview.fileId": { $type: "objectId" },
     derivedDeletionPending: { $exists: false },
     originalDeletionPending: { $exists: false },
+    recognitionIgnoredAt: { $exists: false },
     status: {
       $in: ["staged", "failed", "budget_blocked", "recognition_disabled"],
     },
@@ -382,11 +421,13 @@ Deno.test("media summary exposes mutually observable queue and attention counts"
   assertEquals(queries.unprocessed, {
     owner: "alice",
     kind: "image",
+    recognitionIgnoredAt: { $exists: false },
     status: { $nin: ["ready", "queued", "processing"] },
   });
   assertEquals(queries.needsAttention, {
     owner: "alice",
     kind: "image",
+    recognitionIgnoredAt: { $exists: false },
     status: {
       $in: [
         "failed",
@@ -397,6 +438,34 @@ Deno.test("media summary exposes mutually observable queue and attention counts"
       ],
     },
   });
+  assertEquals(queries.ignored, {
+    owner: "alice",
+    kind: "image",
+    recognitionIgnoredAt: { $type: "date" },
+  });
+});
+
+Deno.test("folder sync reuses SHA only for an unchanged owner-scoped path", () => {
+  const campaignId = new ObjectId();
+  assertEquals(
+    mediaFolderReusableHashQuery(
+      "alice",
+      campaignId,
+      "900-photos/IMG_0001.JPG",
+      1_234_567,
+      1_787_000_000_000,
+    ),
+    {
+      owner: "alice",
+      campaignId: { $ne: campaignId },
+      relativePath: "900-photos/IMG_0001.JPG",
+      byteLength: 1_234_567,
+      sourceModifiedAtMs: 1_787_000_000_000,
+      sha256: { $type: "string" },
+      kind: "image",
+      state: { $in: ["ready", "duplicate", "imported"] },
+    },
+  );
 });
 
 Deno.test("photo Timeline switches from hour to day and month density", () => {

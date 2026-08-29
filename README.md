@@ -71,7 +71,10 @@ your own words.
   pages, annotations, provenance, usage, deduplication, an app-side gross-cost
   ledger, previews, derived analysis, and source references are stored as
   separate layers. Their actions live in one **Storage & deletion…** panel;
-  there is no whole-record delete yet, and mounted originals are never deleted.
+  mounted items can be removed from Mycelia together with their previews and
+  analysis while the read-only mounted original is never deleted. Photos can
+  also be ignored for future recognition and later returned without changing
+  files or existing results.
   Recognition reservations temporarily block these storage mutations. The main
   UAT stack opts into read-only source and ADC mounts with
   `docker-compose.media-uat.yml`; real host paths remain in `.env`. See
@@ -82,9 +85,11 @@ your own words.
   by default, at most twelve). Ready results can be reviewed and explicitly
   published as idempotent Mycelia Event Objects on the Timeline;
   audio/transcription/Object links stay local and identity recognition is
-  forbidden. Media uses a responsive photo gallery with a focused detail
-  viewer, while `/media/analysis` provides server-side status, placement,
-  filename, and a shared capture-date range picker. Its **Unprocessed by
+  forbidden. Media uses switchable gallery/table views, stable server-side
+  sorting, explicit page selection, and all-matching server selection with a
+  focused detail viewer. `/media/analysis` provides the same sortable inventory
+  plus server-side status, placement, filename, and a shared capture-date range
+  picker. Its **Unprocessed by
   capture-date range** workflow can target every eligible asset matching the
   server-side filters without being limited to the visible page, then shows an
   exact preview and ceiling before confirmation. Unmatched event candidates
@@ -93,6 +98,9 @@ your own words.
   confirm campaigns. The mounted root is selected by default and subfolders are
   browsable without typing paths. One `mediaFolderImport` job reports live
   checked/total progress, speed and ETA while committing durable 25-file steps.
+  Later syncs stat every path but reuse the previously verified SHA-256 and
+  extracted metadata when owner, path, byte size, and modification time are
+  unchanged; only new or changed files are read and hashed again.
   The gallery is cursor-paginated and refreshes while folder imports or
   recognition jobs advance. An exact SHA-bound provider batch on the Analysis
   page can process every eligible photo matching the server-side filters with

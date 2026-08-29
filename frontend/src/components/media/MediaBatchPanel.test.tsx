@@ -68,6 +68,7 @@ describe("MediaBatchPanel mounted-folder sync", () => {
               ready: 24,
               unsupported: 103,
             },
+            reusedHashCount: 24,
             progress: {
               stage: "metadata_scan",
               processed: 25,
@@ -107,6 +108,7 @@ describe("MediaBatchPanel mounted-folder sync", () => {
     expect(screen.getByText(/about 9 min remaining/)).toBeTruthy();
     expect(screen.getByText(/pending 775/)).toBeTruthy();
     expect(screen.getByText(/ready 24/)).toBeTruthy();
+    expect(screen.getByText(/reused SHA 24/)).toBeTruthy();
   });
 
   it("chooses a visible mounted subfolder without typing a path", async () => {

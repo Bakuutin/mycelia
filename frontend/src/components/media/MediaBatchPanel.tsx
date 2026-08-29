@@ -290,7 +290,9 @@ export function MediaBatchPanel({
             <p className="text-sm text-muted-foreground">
               Choose the mounted root or any visible subfolder below. The root
               is selected by default. Mycelia walks subfolders, ignores
-              symlinks, hashes files, and commits progress every 25 entries.
+              symlinks, and commits progress every 25 entries. Unchanged files
+              reuse their previously verified SHA-256; new or changed files are
+              hashed again.
             </p>
           </div>
           <div className="space-y-3 rounded-md border bg-background p-3">
@@ -486,6 +488,9 @@ export function MediaBatchPanel({
                 : <div>{countLine(folderCampaign.counts)}</div>}
               <div className="text-xs text-muted-foreground">
                 {countLine(folderCampaign.counts)}
+                {Number(folderCampaign.reusedHashCount ?? 0) > 0 && (
+                  <>· reused SHA {folderCampaign.reusedHashCount}</>
+                )}
               </div>
               {folderCampaign.safeError && (
                 <div className="text-destructive">

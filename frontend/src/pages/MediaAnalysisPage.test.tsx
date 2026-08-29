@@ -115,6 +115,33 @@ describe("MediaAnalysisPage", () => {
     settings.defaultTimeZone = "UTC";
   });
 
+  it("opens an explicit library handoff in the sortable table", async () => {
+    mockCallResource.mockImplementation((resource, input) => {
+      const base = baseResponse(resource, input);
+      if (base) return base;
+      if (resource === "media" && input.action === "listAssets") {
+        return Promise.resolve({ total: 2, assets: stagedAssets });
+      }
+      return Promise.resolve({});
+    });
+    const ids = stagedAssets.map((asset) => asset._id).join(",");
+    renderPage(`/media/analysis?view=table&assetIds=${ids}`);
+
+    expect(await screen.findByRole("table")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByText("2 explicit photo(s) selected")).toBeTruthy()
+    );
+    expect(mockCallResource).toHaveBeenCalledWith(
+      "media",
+      expect.objectContaining({
+        action: "listAssets",
+        sortBy: "capturedAt",
+        sortDirection: "desc",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("does not let a stale filter response replace the newest result", async () => {
     const allResponse = deferred<any>();
     const readyResponse = deferred<any>();

@@ -113,10 +113,20 @@ const listAssetsSchema = z.object({
     "processing",
     "ready",
     "needs_attention",
+    "ignored",
   ]).default("all"),
   placement: z.enum(["all", "missing_time", "missing_location"]).default(
     "all",
   ),
+  sortBy: z.enum([
+    "capturedAt",
+    "createdAt",
+    "fileName",
+    "status",
+    "byteLength",
+    "updatedAt",
+  ]).default("createdAt"),
+  sortDirection: z.enum(["asc", "desc"]).default("desc"),
 });
 const getAssetSchema = z.object({
   action: z.literal("getAsset"),
@@ -155,7 +165,12 @@ const testConnectorSchema = z.object({
 const deleteDerivedSchema = z.object({
   action: z.literal("deleteDerived"),
   assetId: z.string().refine(ObjectId.isValid),
-  target: z.enum(["previews", "analysis", "source_reference"]),
+  target: z.enum([
+    "previews",
+    "analysis",
+    "source_reference",
+    "asset_record",
+  ]),
   confirm: z.literal(true),
 });
 const previewOriginalDeletionSchema = z.object({
@@ -348,16 +363,41 @@ function mediaAssetResponse(asset: any) {
   };
 }
 
-function mediaAssetCursor(asset: { createdAt: Date; _id: ObjectId }): string {
-  return btoa(`${asset.createdAt.toISOString()}|${asset._id}`);
+function mediaAssetCursor(input: {
+  offset: number;
+  sortBy: z.infer<typeof listAssetsSchema>["sortBy"];
+  sortDirection: z.infer<typeof listAssetsSchema>["sortDirection"];
+}): string {
+  return btoa(JSON.stringify({ v: 2, ...input }));
 }
 
 function decodeMediaAssetCursor(value: string): {
-  createdAt: Date;
-  id: ObjectId;
+  offset?: number;
+  sortBy?: z.infer<typeof listAssetsSchema>["sortBy"];
+  sortDirection?: z.infer<typeof listAssetsSchema>["sortDirection"];
+  createdAt?: Date;
+  id?: ObjectId;
 } {
   try {
-    const [date, id] = atob(value).split("|");
+    const decoded = atob(value);
+    if (decoded.startsWith("{")) {
+      const parsed = JSON.parse(decoded);
+      const sorts = [
+        "capturedAt",
+        "createdAt",
+        "fileName",
+        "status",
+        "byteLength",
+        "updatedAt",
+      ];
+      if (
+        parsed?.v !== 2 || !Number.isSafeInteger(parsed.offset) ||
+        parsed.offset < 0 || !sorts.includes(parsed.sortBy) ||
+        !["asc", "desc"].includes(parsed.sortDirection)
+      ) throw new Error("invalid cursor");
+      return parsed;
+    }
+    const [date, id] = decoded.split("|");
     const createdAt = new Date(date);
     if (!Number.isFinite(createdAt.getTime()) || !ObjectId.isValid(id)) {
       throw new Error("invalid cursor");
@@ -377,6 +417,7 @@ function mediaInventoryFilterQuery(
   }
   if (filter === "needs_attention") {
     return {
+      recognitionIgnoredAt: { $exists: false },
       status: {
         $in: [
           "failed",
@@ -389,7 +430,13 @@ function mediaInventoryFilterQuery(
     };
   }
   if (filter === "unprocessed") {
-    return { status: { $nin: ["ready", "queued", "processing"] } };
+    return {
+      recognitionIgnoredAt: { $exists: false },
+      status: { $nin: ["ready", "queued", "processing"] },
+    };
+  }
+  if (filter === "ignored") {
+    return { recognitionIgnoredAt: { $type: "date" } };
   }
   return {};
 }
@@ -445,6 +492,14 @@ export function mediaAssetListFilterQuery(
     query.capturedAt = range;
   }
   return query;
+}
+
+export function mediaAssetSortSpec(
+  sortBy: z.infer<typeof listAssetsSchema>["sortBy"],
+  sortDirection: z.infer<typeof listAssetsSchema>["sortDirection"],
+) {
+  const direction = sortDirection === "asc" ? 1 : -1;
+  return { [sortBy]: direction, _id: direction } as Record<string, 1 | -1>;
 }
 
 const STAGED_ORIGINAL_TTL_MS = 60 * 60 * 1000;
@@ -2393,7 +2448,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
     }];
     if (
       input.action === "deleteDerived" &&
-      ["previews", "analysis"].includes(input.target)
+      ["previews", "analysis", "asset_record"].includes(input.target)
     ) {
       actions.push({ path: ["objects"], actions: ["update"] });
     }
@@ -2964,24 +3019,41 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
         );
         if (input.status) baseQuery.status = input.status;
         const pageConditions: Record<string, unknown>[] = [];
+        let offset = 0;
         if (input.before) {
           pageConditions.push({ createdAt: { $lt: new Date(input.before) } });
         }
         if (input.cursor) {
           const cursor = decodeMediaAssetCursor(input.cursor);
-          pageConditions.push({
-            $or: [
-              { createdAt: { $lt: cursor.createdAt } },
-              { createdAt: cursor.createdAt, _id: { $lt: cursor.id } },
-            ],
-          });
+          if (cursor.offset != null) {
+            if (
+              cursor.sortBy !== input.sortBy ||
+              cursor.sortDirection !== input.sortDirection
+            ) throw new Error("Media Library cursor does not match sorting");
+            offset = cursor.offset;
+          } else {
+            if (
+              input.sortBy !== "createdAt" || input.sortDirection !== "desc"
+            ) {
+              throw new Error(
+                "Legacy Media Library cursor requires default sorting",
+              );
+            }
+            pageConditions.push({
+              $or: [
+                { createdAt: { $lt: cursor.createdAt } },
+                { createdAt: cursor.createdAt, _id: { $lt: cursor.id } },
+              ],
+            });
+          }
         }
         const query = pageConditions.length > 0
           ? { ...baseQuery, $and: pageConditions }
           : baseQuery;
         const [assets, total] = await Promise.all([
           db.collection<any>("media_assets").find(query)
-            .sort({ createdAt: -1, _id: -1 }).limit(input.limit + 1).toArray(),
+            .sort(mediaAssetSortSpec(input.sortBy, input.sortDirection))
+            .skip(offset).limit(input.limit + 1).toArray(),
           db.collection("media_assets").countDocuments(baseQuery),
         ]);
         const pageAssets = assets.slice(0, input.limit);
@@ -3073,7 +3145,11 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
         return {
           total,
           nextCursor: assets.length > input.limit && pageAssets.length > 0
-            ? mediaAssetCursor(pageAssets[pageAssets.length - 1])
+            ? mediaAssetCursor({
+              offset: offset + pageAssets.length,
+              sortBy: input.sortBy,
+              sortDirection: input.sortDirection,
+            })
             : undefined,
           assets: pageAssets.map((asset) => {
             const assetId = String(asset._id);
@@ -3997,6 +4073,15 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             "Media analysis is active. Wait for it to finish or stop it before deleting media data.",
           );
         }
+        if (
+          input.target === "asset_record" &&
+          asset.storageMode === "managed_original" &&
+          asset.managedOriginal?.fileId
+        ) {
+          throw new Error(
+            "Delete the Mycelia-managed original first, then remove this library item",
+          );
+        }
         const deletionClaimId = randomUUID();
         const deletionExpiresAt = new Date(
           Date.now() + MEDIA_DERIVED_DELETION_LEASE_MS,
@@ -4037,7 +4122,7 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
           );
         }
         asset = locked;
-        if (["previews", "analysis"].includes(input.target)) {
+        if (["previews", "analysis", "asset_record"].includes(input.target)) {
           try {
             await fenceMediaAssetDerivedDeletion(
               db,
@@ -4068,7 +4153,51 @@ export class MediaResource implements Resource<MediaRequest, unknown> {
             throw error;
           }
         }
-        if (input.target === "previews") {
+        if (input.target === "asset_record") {
+          const removedAt = new Date();
+          await Promise.all([
+            deleteGridFs(db, "media_previews", asset.thumbnail?.fileId),
+            deleteGridFs(db, "media_previews", asset.preview?.fileId),
+            db.collection("media_visual_descriptions").deleteMany({
+              assetId: asset._id,
+            }),
+            db.collection("media_ocr_pages").deleteMany({ assetId: asset._id }),
+            db.collection("media_annotations").deleteMany({
+              assetId: asset._id,
+            }),
+            db.collection("media_metadata_versions").deleteMany({
+              assetId: asset._id,
+            }),
+            db.collection("media_asset_placement_history").deleteMany({
+              assetId: asset._id,
+              owner: auth.principal,
+            }),
+            db.collection<any>("media_analysis_runs").updateMany(
+              { assetId: asset._id },
+              { $set: { state: "deleted", deletedAt: removedAt } },
+            ),
+          ]);
+          await db.collection("media_asset_deletion_receipts").insertOne({
+            _id: new ObjectId(),
+            owner: auth.principal,
+            assetId: asset._id,
+            sha256: asset.sha256,
+            fileName: asset.fileName,
+            storageMode: asset.storageMode,
+            source: asset.source,
+            externalOriginalPreserved: asset.storageMode ===
+              "external_reference",
+            removedAt,
+          });
+          const deleted = await db.collection("media_assets").deleteOne({
+            _id: asset._id,
+            owner: auth.principal,
+            "derivedDeletionPending.claimId": deletionClaimId,
+          });
+          if (deleted.deletedCount !== 1) {
+            throw new Error("Media library item changed during deletion");
+          }
+        } else if (input.target === "previews") {
           await Promise.all([
             deleteGridFs(db, "media_previews", asset.thumbnail?.fileId),
             deleteGridFs(db, "media_previews", asset.preview?.fileId),

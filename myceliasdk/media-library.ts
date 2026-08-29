@@ -28,6 +28,7 @@ export const zMediaInventoryFilter = z.enum([
   "processing",
   "ready",
   "needs_attention",
+  "ignored",
 ]);
 
 export const zMediaPlacementFilter = z.enum([

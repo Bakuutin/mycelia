@@ -122,6 +122,8 @@ export const zMediaAsset = z.object({
   status: zMediaAnalysisStatus,
   currentRunId: z.string().optional(),
   safeError: z.string().optional(),
+  recognitionIgnoredAt: zDateOrString().optional(),
+  recognitionIgnoreReason: z.string().optional(),
   createdAt: zDateOrString(),
   updatedAt: zDateOrString(),
 });
