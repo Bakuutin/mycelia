@@ -1,12 +1,106 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from mycelia_rag.domain import SparseEmbedding, VectorPoint
 from mycelia_rag.vector_store import QdrantVectorStore
+
+
+def vector_point() -> VectorPoint:
+    return VectorPoint(
+        point_id="00000000-0000-0000-0000-000000000001",
+        dense=[1.0, 0.0, 0.0, 0.0],
+        sparse=SparseEmbedding([7], [1.0]),
+        payload={"text": "retry contract"},
+    )
+
+
+def test_upsert_retries_transient_response_handling_failure(monkeypatch) -> None:
+    class FlakyClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.point_batches: list[list[object]] = []
+
+        def upsert(self, *, collection_name, wait, points):
+            assert collection_name == "contract"
+            assert wait is True
+            self.calls += 1
+            self.point_batches.append(points)
+            if self.calls < 3:
+                raise ResponseHandlingException(
+                    httpx.RemoteProtocolError("connection closed after commit")
+                )
+            return object()
+
+    client = FlakyClient()
+    store = QdrantVectorStore.__new__(QdrantVectorStore)
+    store.client = client
+    sleeps: list[float] = []
+    monkeypatch.setattr("mycelia_rag.vector_store.time.sleep", sleeps.append)
+
+    store.upsert("contract", [vector_point()])
+
+    assert client.calls == 3
+    assert sleeps == [0.5, 1.0]
+    assert client.point_batches[0] is client.point_batches[1]
+    assert client.point_batches[1] is client.point_batches[2]
+
+
+def test_upsert_does_not_retry_non_transient_response_failure(monkeypatch) -> None:
+    class InvalidClient:
+        calls = 0
+
+        def upsert(self, **_kwargs):
+            self.calls += 1
+            raise ResponseHandlingException(httpx.LocalProtocolError("invalid request"))
+
+    client = InvalidClient()
+    store = QdrantVectorStore.__new__(QdrantVectorStore)
+    store.client = client
+    sleeps: list[float] = []
+    monkeypatch.setattr("mycelia_rag.vector_store.time.sleep", sleeps.append)
+
+    with pytest.raises(ResponseHandlingException):
+        store.upsert("contract", [vector_point()])
+
+    assert client.calls == 1
+    assert sleeps == []
+
+
+def test_delete_retries_only_the_idempotent_write(monkeypatch) -> None:
+    class FlakyDeleteClient:
+        def __init__(self) -> None:
+            self.count_calls = 0
+            self.delete_calls = 0
+
+        def count(self, **_kwargs):
+            self.count_calls += 1
+            return SimpleNamespace(count=7)
+
+        def delete(self, **_kwargs):
+            self.delete_calls += 1
+            if self.delete_calls == 1:
+                raise ResponseHandlingException(httpx.ReadError("connection reset"))
+            return object()
+
+    client = FlakyDeleteClient()
+    store = QdrantVectorStore.__new__(QdrantVectorStore)
+    store.client = client
+    sleeps: list[float] = []
+    monkeypatch.setattr("mycelia_rag.vector_store.time.sleep", sleeps.append)
+
+    deleted = store.delete_source("contract", "messages", "m1")
+
+    assert deleted == 7
+    assert client.count_calls == 1
+    assert client.delete_calls == 2
+    assert sleeps == [0.5]
 
 
 @pytest.mark.filterwarnings("ignore:Payload indexes have no effect in the local Qdrant")
