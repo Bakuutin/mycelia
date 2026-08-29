@@ -72,7 +72,9 @@ your own words.
   ledger, previews, derived analysis, and source references are stored as
   separate layers. Their actions live in one **Storage & deletion…** panel;
   there is no whole-record delete yet, and mounted originals are never deleted.
-  Recognition reservations temporarily block these storage mutations. See
+  Recognition reservations temporarily block these storage mutations. The main
+  UAT stack opts into read-only source and ADC mounts with
+  `docker-compose.media-uat.yml`; real host paths remain in `.env`. See
   [MEDIA_KNOWLEDGE.md](docs/MEDIA_KNOWLEDGE.md).
 - Photo events locally cluster nearby owned images by capture time and EXIF GPS,
   then use a separate preview-and-confirm step before a Google or self-hosted

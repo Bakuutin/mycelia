@@ -168,6 +168,33 @@ When a change is not visible:
    may have changed: `docker compose restart nginx`.
 6. Do not restart MongoDB or Redis for an application-code reload.
 
+#### Photo/PDF Knowledge in the main UAT stack
+
+The main `sky-uat` stack keeps its existing project, database, ports, and other
+overlays. To expose the mounted media source and Google ADC to that backend,
+set absolute `MEDIA_SOURCE_HOST_PATH` and `GCP_ADC_HOST_PATH` values in the
+uncommitted `.env`, then append `docker-compose.media-uat.yml` to the same UAT
+Compose command. Do not copy the ADC JSON into the repository.
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.media-uat.yml \
+  up -d --no-deps --force-recreate backend
+
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.media-uat.yml \
+  restart nginx
+```
+
+If UAT already uses another overlay, keep it in both commands and append the
+media overlay last. Verify that `/media-source` and `/run/secrets/gcp-adc` are
+read-only mounts, wait for backend `[READY]`, then require `/readiness = 200`.
+Missing host variables or paths fail at Compose time rather than producing a
+later `MEDIA_SOURCE_ROOT is not configured` request error. MongoDB and Redis do
+not need to be recreated.
+
 #### Isolated Photo/PDF Knowledge development
 
 Use the media overlays when the feature must run without sharing the main

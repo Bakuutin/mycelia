@@ -117,6 +117,12 @@ listed or followed. To change the real host folder, edit
 `MEDIA_SOURCE_HOST_PATH` in `.env.media.local`, recreate only `backend`, and
 restart `nginx`:
 
+For the main `sky-uat` stack, store `MEDIA_SOURCE_HOST_PATH` and
+`GCP_ADC_HOST_PATH` only in its uncommitted `.env` and append
+`docker-compose.media-uat.yml` to every Compose command that recreates backend.
+This preserves the UAT database and ports while mounting the source folder and
+ADC JSON read-only. Keep any existing UAT overlays in the command as well.
+
 For the large gallery workflow, create a subfolder such as
 `~/Pictures/Mycelia-Import/900-photos/` under the mounted host root and select
 `900-photos` in the folder browser. Use **Sync mounted folder locally** instead
