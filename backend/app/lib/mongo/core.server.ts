@@ -13,6 +13,17 @@ import { withObjectListCategories } from "@/lib/objects/list-categories.ts";
 
 let client: MongoClient | null = null;
 
+// One shared, explicitly bounded application pool. GridFS and regular Mongo
+// resources use this client; the cap prevents a request burst from creating
+// unbounded sockets while leaving room for the collection change streams.
+const MAX_MONGO_POOL_SIZE = 100;
+
+function createMongoClient(): MongoClient {
+  return new MongoClient(env.MONGO_URL, {
+    maxPoolSize: MAX_MONGO_POOL_SIZE,
+  });
+}
+
 interface CursorEntry {
   cursor: any;
   expiresAt: number;
@@ -54,7 +65,7 @@ async function connectWithRetry(): Promise<void> {
 
   connectingPromise = (async () => {
     if (!client) {
-      client = new MongoClient(env.MONGO_URL);
+      client = createMongoClient();
     }
 
     let lastError: Error | null = null;
@@ -77,7 +88,7 @@ async function connectWithRetry(): Promise<void> {
           try {
             await client.close();
           } catch { /* ignore */ }
-          client = new MongoClient(env.MONGO_URL);
+          client = createMongoClient();
         }
       }
     }

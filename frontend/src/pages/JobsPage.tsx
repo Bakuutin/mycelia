@@ -106,7 +106,11 @@ import {
   selectionUsesLogicalCampaign,
 } from "@/lib/jobFilters";
 import { isEmptyJobResult } from "@/lib/jobEmptyResult";
-import { getJobsListView, withJobsListView } from "@/lib/jobListView";
+import {
+  DEFAULT_JOBS_LIST_LIMIT,
+  getJobsListView,
+  withJobsListView,
+} from "@/lib/jobListView";
 import { parseJobError } from "@/lib/jobs";
 import { formatJobDuration } from "@/lib/jobDuration";
 import { getJobTimeRange } from "@/lib/jobTimeRange";
@@ -1744,6 +1748,9 @@ export default function JobsPage() {
 
   const { jobs, isLoading } = useJobsListener({
     view: jobsView,
+    // Keep the bounded 200-row baseline for client-side filters, but honor
+    // the explicit 500-row selector instead of silently truncating it.
+    limit: Math.max(DEFAULT_JOBS_LIST_LIMIT, limit),
     types: !allTypesSelected && filterTypes.size > 0
       ? Array.from(filterTypes)
       : undefined,
