@@ -1,35 +1,36 @@
-#%%
-from discovery import Importer, extract_device_info
-
 import argparse
-import logging
-from datetime import datetime, UTC
-import time
-
-import platform
-
 import io
-from pydub import AudioSegment
-from datetime import timedelta
+import logging
+import os
+import platform
+import sys
+import time
+from datetime import UTC, datetime, timedelta
+from logging.handlers import RotatingFileHandler
 
-from lib.resources import call_resource
-from lib.api import job_token_var, exchange_api_key_for_jwt
+from pydub import AudioSegment
 
 import settings
+from discovery import Importer, extract_device_info
+from lib.api import exchange_api_key_for_jwt, job_token_var
+from lib.resources import call_resource
 
 #%%
 
 logger = logging.getLogger('daemon')
 
-import os
 log_dir = os.path.expanduser('~/Library/mycelia/logs')
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, 'daemon.log')
 
 console = logging.StreamHandler()
-console.setLevel(logging.INFO)
+console.setLevel(logging.INFO if sys.stderr.isatty() else logging.WARNING)
 
-file_handler = logging.FileHandler(log_file)
+file_handler = RotatingFileHandler(
+    log_file,
+    maxBytes=10 * 1024 * 1024,
+    backupCount=3,
+)
 file_handler.setLevel(logging.DEBUG)
 
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -47,12 +48,37 @@ def initialize_auth():
     job_token_var.set(jwt_token)
 
 
-def import_new_files():
+_importer_error_state: dict[str, tuple[str, float]] = {}
+
+
+def import_new_files() -> list[dict]:
+    results = []
     for importer in settings.importers:
         try:
-            importer.run()
+            discovered = importer.run()
+            warning = getattr(importer, "last_warning", None)
+            if importer.code in _importer_error_state:
+                logger.info("Importer %s recovered", importer.code)
+                _importer_error_state.pop(importer.code, None)
+            results.append({
+                "source": importer.code,
+                "status": "degraded" if warning else "completed",
+                "discovered": discovered,
+                **({"warning": warning} if warning else {}),
+            })
         except Exception as e:
-            logger.exception('Error importing files via %s', importer.code)
+            message = str(e)
+            now = time.monotonic()
+            previous = _importer_error_state.get(importer.code)
+            if previous is None or previous[0] != message or now - previous[1] >= 300:
+                logger.exception('Error importing files via %s', importer.code)
+                _importer_error_state[importer.code] = (message, now)
+            results.append({
+                "source": importer.code,
+                "status": "failed",
+                "error": message,
+            })
+    return results
 
 
 importer_map = {importer.code: importer for importer in settings.importers}
@@ -174,7 +200,7 @@ def ingests_missing_sources(
             })
             processed += 1
             logger.info(f"✓ Successfully ingested: {file_name}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - cache failures per audio file
             errors += 1
             error_msg = str(e)
             logger.error(f"✗ Error ingesting {file_name}: {error_msg[:100]}")
@@ -364,7 +390,7 @@ def backfill_device_info(limit=100):
                 })
                 updated += 1
                 logger.debug(f"Added device info for {os.path.basename(path)}: {device_info.get('device_type')}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - continue device backfill
             errors += 1
             logger.warning(f"Error extracting device info for {path}: {e}")
 
@@ -441,8 +467,8 @@ def run_cycles(cycle, *, once=False):
             cycle()
         except KeyboardInterrupt:
             raise
-        except Exception as e:
-            logger.exception(f"Error in main: {e}")
+        except Exception:
+            logger.exception("Error in main")
             if once:
                 raise
             time.sleep(10)

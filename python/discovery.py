@@ -1,32 +1,30 @@
-import platform
-from chunking import get_os_metadata
-from utils import lazy
-import os
-import re
 import json
-import subprocess
-from datetime import datetime, UTC, timedelta
-
-from typing import Iterable, TypedDict
 import logging
-import threading
-from chunking import ingest_source
-import sqlite3
-
-
-from functools import cached_property
-import pytz
-
+import os
+import platform
+import re
 import shutil
+import sqlite3
 import stat
-import humanize
-from tqdm import tqdm
+import subprocess
+import sys
+import threading
+from collections.abc import Iterable
 from contextlib import contextmanager
-import paramiko
-from chunking import get_tmp_dir
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
+from functools import cached_property
+from pathlib import Path
+from typing import TypedDict
 
+import humanize
+import paramiko
+import pytz
+from tqdm import tqdm
+
+from chunking import get_os_metadata, get_tmp_dir, ingest_source
 from lib.resources import call_resource
+from utils import lazy
 
 
 def extract_device_info(filepath: str) -> dict | None:
@@ -42,6 +40,7 @@ def extract_device_info(filepath: str) -> dict | None:
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
         if result.returncode != 0:
             return None
@@ -85,6 +84,10 @@ def extract_device_info(filepath: str) -> dict | None:
 class Skip(Exception):
     pass
 
+
+class SourceUnavailableError(RuntimeError):
+    """A configured discovery source could not be read."""
+
 class Metadata(TypedDict):
     path: str
 
@@ -92,14 +95,14 @@ _IS_AUDIO_RE = re.compile(r"\.(m4a|mp3|wav|opus)$", re.IGNORECASE)
 
 
 
-_known_discovered_cache = lazy(lambda: set(d['path'] for d in call_resource('mongo', {
+_known_discovered_cache = lazy(lambda: {d['path'] for d in call_resource('mongo', {
     "action": "find",
     "collection": "source_files",
     "query": {
         "path": {"$exists": True}
     },
     "projection": {"path": 1, "_id": 0},
-})))
+})})
 
 
 def is_audio_file(path: str) -> bool:
@@ -155,7 +158,7 @@ class Importer:
             "doc": metadata
         })
 
-    def run(self):
+    def run(self) -> int:
         with self.lock:
             new_files = list(self.discover())
             if new_files:
@@ -164,6 +167,7 @@ class Importer:
                     self.ingest(item)
             else:
                 self.logger.info("no new files found in '%s'", self.root)
+            return len(new_files)
 
     def upload(self, source: dict):
         ingest_source(source)
@@ -192,57 +196,188 @@ def apple_date_to_datetime(apple_date):
 
 
 class AppleVoiceMemosImporter(Importer):
+    db_path: str
+    not_before: datetime | None = None
+    last_warning: str | None = None
+
+    def __init__(
+        self,
+        *,
+        root: str,
+        code: str,
+        db_path: str | None = None,
+        not_before: datetime | None = None,
+    ):
+        super().__init__(code=code, root=root)
+        self.db_path = db_path or os.path.join(root, "CloudRecordings.db")
+        self.not_before = not_before
+
     def get_start(self, metadata: Metadata):
         return apple_date_to_datetime(metadata["voicememo"]["ZDATE"])
 
     def get_sqlite_data(self):
-        db_path = os.path.join(self.root, 'CloudRecordings.db')
-        if not os.path.exists(db_path):
-            return []
+        db_path = os.path.abspath(os.path.expanduser(self.db_path))
+        uri = f"{Path(db_path).as_uri()}?mode=ro"
         try:
-            db = sqlite3.connect(db_path)
-        except sqlite3.Error:
-            return []
+            # Do not use immutable=1: the live Voice Memos database uses WAL,
+            # and recent recordings may only exist in its sidecar files.
+            db = sqlite3.connect(uri, uri=True)
+        except sqlite3.Error as exc:
+            raise SourceUnavailableError(
+                f"Apple Voice Memos database is unavailable at {db_path}: {exc}. "
+                "Publish a readable archive snapshot with "
+                "scripts/refresh-voice-memos-staging.sh, or set "
+                "MYCELIA_APPLE_VOICEMEMOS_ROOT and "
+                "MYCELIA_APPLE_VOICEMEMOS_DB to verified staging paths."
+            ) from exc
         try:
             cursor = db.cursor()
-            cursor.execute("SELECT * FROM ZCLOUDRECORDING")
+            query = "SELECT * FROM ZCLOUDRECORDING"
+            params: tuple[float, ...] = ()
+            if self.not_before is not None:
+                query += " WHERE ZDATE >= ?"
+                params = (
+                    self.not_before.astimezone(UTC).timestamp()
+                    - APPLE_REFERENCE_DATE,
+                )
+            cursor.execute(query, params)
             field_names = [d for d, *_ in cursor.description]
             return [dict(zip(field_names, row)) for row in cursor.fetchall()]
+        except sqlite3.Error as exc:
+            raise SourceUnavailableError(
+                f"Apple Voice Memos database could not be queried at "
+                f"{db_path}: {exc}"
+            ) from exc
         finally:
             db.close()
 
+    @staticmethod
+    def get_known_identities(
+        candidate_paths: set[str],
+        candidate_unique_ids: set[str],
+    ) -> tuple[set[str], set[str]]:
+        """Refresh identities for this catalog without relying on find defaults."""
+        clauses = []
+        if candidate_paths:
+            clauses.append({"path": {"$in": sorted(candidate_paths)}})
+        if candidate_unique_ids:
+            clauses.append({
+                "voicememo.ZUNIQUEID": {
+                    "$in": sorted(candidate_unique_ids),
+                }
+            })
+
+        if not clauses:
+            return set(), set()
+
+        records = call_resource('mongo', {
+            "action": "find",
+            "collection": "source_files",
+            "query": {"$or": clauses},
+            "projection": {
+                "path": 1,
+                "voicememo.ZUNIQUEID": 1,
+                "_id": 0,
+            },
+            # The resource has a conservative default find limit. The result
+            # cannot exceed the number of candidate identities in this query.
+            "limit": len(candidate_paths) + len(candidate_unique_ids),
+        })
+        paths = {record["path"] for record in records if record.get("path")}
+        unique_ids = {
+            record.get("voicememo", {}).get("ZUNIQUEID")
+            for record in records
+            if record.get("voicememo", {}).get("ZUNIQUEID")
+        }
+        return paths, unique_ids
+
     def discover(self) -> Iterable[Metadata]:
+        self.last_warning = None
+        root = os.path.abspath(os.path.expanduser(self.root))
+        try:
+            with os.scandir(root):
+                pass
+        except OSError as exc:
+            raise SourceUnavailableError(
+                f"Apple Voice Memos audio folder is unavailable at {root}: "
+                f"{exc}"
+            ) from exc
+
         sqlite_data = self.get_sqlite_data()
         total_memos = len(sqlite_data)
+        candidate_paths = {
+            os.path.join(root, memo["ZPATH"])
+            for memo in sqlite_data
+            if memo.get("ZPATH")
+        }
+        candidate_unique_ids = {
+            memo["ZUNIQUEID"]
+            for memo in sqlite_data
+            if memo.get("ZUNIQUEID")
+        }
+        known_paths, known_unique_ids = self.get_known_identities(
+            candidate_paths,
+            candidate_unique_ids,
+        )
+        missing_media: list[str] = []
 
-        with tqdm(total=total_memos, desc=f"Discovering {self.code}", unit="files") as pbar:
+        with tqdm(
+            total=total_memos,
+            desc=f"Discovering {self.code}",
+            unit="files",
+            disable=not sys.stderr.isatty(),
+        ) as pbar:
             for memo in sqlite_data:
-                if not memo["ZPATH"]:
+                try:
+                    if not memo["ZPATH"]:
+                        continue
+                    path = os.path.join(root, memo["ZPATH"])
+                    unique_id = memo.get("ZUNIQUEID")
+
+                    if path in known_paths or (
+                        unique_id and unique_id in known_unique_ids
+                    ):
+                        continue
+
+                    try:
+                        os_metadata = get_os_metadata(path)
+                    except OSError as exc:
+                        missing_media.append(
+                            f"{os.path.basename(path)} ({exc.strerror or exc})"
+                        )
+                        continue
+
+                    metadata = {
+                        **os_metadata,
+                        "voicememo": {
+                            "ZENCRYPTEDTITLE": memo["ZENCRYPTEDTITLE"],
+                            "ZUNIQUEID": unique_id,
+                            "ZDATE": memo["ZDATE"],
+                        },
+                        "duration": memo["ZDURATION"],
+                    }
+
+                    # Extract device info from m4a file
+                    device_info = extract_device_info(path)
+                    if device_info:
+                        metadata["device"] = device_info
+
+                    # Keep the in-cycle identity sets current as records are
+                    # yielded, preventing duplicates inside a backup catalog.
+                    known_paths.add(path)
+                    if unique_id:
+                        known_unique_ids.add(unique_id)
+                    yield metadata
+                finally:
                     pbar.update(1)
-                    continue
-                path = os.path.join(self.root, memo["ZPATH"])
 
-                if is_discovered(path):
-                    pbar.update(1)
-                    continue
-
-                metadata = {
-                    **get_os_metadata(path),
-                    "voicememo": {
-                        "ZENCRYPTEDTITLE": memo["ZENCRYPTEDTITLE"],
-                        "ZUNIQUEID": memo["ZUNIQUEID"],
-                        "ZDATE": memo["ZDATE"],
-                    },
-                    "duration": memo["ZDURATION"],
-                }
-
-                # Extract device info from m4a file
-                device_info = extract_device_info(path)
-                if device_info:
-                    metadata["device"] = device_info
-
-                yield metadata
-                pbar.update(1)
+        if missing_media:
+            examples = ", ".join(missing_media[:3])
+            self.last_warning = (
+                f"{len(missing_media)} Voice Memos catalog entries could not "
+                f"be read from {root}; examples: {examples}"
+            )
+            self.logger.warning(self.last_warning)
 
 
 class SshFilesystemImporter(FilesystemImporter):
@@ -261,7 +396,7 @@ class SshFilesystemImporter(FilesystemImporter):
         return platform
 
     def iterate_remote_files(self) -> Iterable[tuple[str, paramiko.SFTPAttributes]]:
-        with self.clients() as (ssh, sftp):
+        with self.clients() as (_ssh, sftp):
             stack = [self.root]
             while stack:
                 current_path = stack.pop()
@@ -310,7 +445,7 @@ class SshFilesystemImporter(FilesystemImporter):
         try:
             os.makedirs(local_dir, exist_ok=True)
             local_path = os.path.join(local_dir, os.path.basename(remote_path))
-            with self.clients() as (ssh, sftp):
+            with self.clients() as (_ssh, sftp):
                 print(f"Downloading {humanize.naturalsize(source['size'])} from {self.host}")
                 total_size = int(source.get("size") or 0)
                 description = os.path.basename(remote_path)
@@ -324,7 +459,7 @@ class SshFilesystemImporter(FilesystemImporter):
             local_source["path"] = local_path
             super().upload(local_source)
             if self.delete_after_upload:
-                with self.clients() as (ssh, sftp):
+                with self.clients() as (_ssh, sftp):
                     sftp.remove(remote_path)
 
                     print(f"Cleaned up {humanize.naturalsize(source['size'])} from {self.host}")
@@ -353,5 +488,8 @@ class ExtractStartTimeFromPathMixin:
         if not match:
             raise Skip(f"Could not find start time in filename {metadata['path']}")
         return self.timezone.localize(
-            datetime.strptime(match.group(1), self.strptime_format), is_dst=None
+            datetime.strptime(  # noqa: DTZ007 - localized on the next call
+                match.group(1), self.strptime_format
+            ),
+            is_dst=None,
         ).astimezone(pytz.UTC)

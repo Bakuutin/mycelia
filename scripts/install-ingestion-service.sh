@@ -7,6 +7,7 @@ label="tech.mycelia.ingestion"
 launch_agents_dir="${HOME}/Library/LaunchAgents"
 log_dir="${HOME}/Library/Logs/Mycelia"
 plist_path="${launch_agents_dir}/${label}.plist"
+health_url="http://127.0.0.1:8001/health"
 uid="$(id -u)"
 
 mkdir -p "${launch_agents_dir}" "${log_dir}"
@@ -44,5 +45,26 @@ launchctl bootout "gui/${uid}" "${plist_path}" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/${uid}" "${plist_path}"
 launchctl kickstart -k "gui/${uid}/${label}"
 
+health_ready=false
+health_response=""
+for _ in {1..90}; do
+  if health_response="$(curl -fsS --max-time 2 "${health_url}" 2>/dev/null)" \
+    && [[ "${health_response}" == *'"status":"healthy"'* ]]; then
+    health_ready=true
+    break
+  fi
+  sleep 1
+done
+
+if [[ "${health_ready}" != "true" ]]; then
+  echo "Installed ${label}, but ingestion did not become healthy within 90 seconds." >&2
+  if [[ -n "${health_response}" ]]; then
+    echo "Health: ${health_response}" >&2
+  fi
+  echo "Inspect ${log_dir}/ingestion-service.error.log" >&2
+  exit 1
+fi
+
 echo "Installed and started ${label}"
-echo "Health: curl -fsS http://localhost:8001/health"
+echo "${health_response}"
+echo

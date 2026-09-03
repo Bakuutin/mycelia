@@ -49,7 +49,48 @@ bash scripts/install-ingestion-service.sh
 It runs discovery and ingestion automatically and exposes the authenticated
 `POST /jobs/ingestion` endpoint used by Jobs -> Ingestion -> Run now. Use
 `daemon.py` directly only for a foreground session or recovery, and do not run
-both ingestion processes simultaneously.
+both ingestion processes simultaneously. The installer waits for `/health`, and
+the service adds the standard Homebrew binary paths required for `ffmpeg` and
+`ffprobe` when running under launchd.
+
+`GET http://127.0.0.1:8001/health` reports per-source discovery state. A
+configured Apple staging database that is missing or cannot be queried makes
+the service `degraded`; it is no longer reported as an empty successful scan.
+The response also reports `appleVoiceMemosMode`.
+
+The recommended macOS background mode is verified staging:
+
+```bash
+# Read-only preview
+bash scripts/refresh-voice-memos-staging.sh
+
+# Interactive archive refresh, full verification, and atomic publication
+bash scripts/refresh-voice-memos-staging.sh --apply
+```
+
+Configure `.env` with `MYCELIA_APPLE_VOICEMEMOS_MODE=staged`, the local
+`~/Library/mycelia/voice-memos-staging/audio-original` directory, the published
+`CloudRecordings.snapshot.db` beside it, and a timezone-aware
+`MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` cutoff. The refresh copies and verifies
+only that bounded audio set from the external archive. The LaunchAgent reads
+only local ordinary paths; do not grant Full Disk Access to its `uv` executable.
+New Voice Memos enter staging only after the interactive refresh command runs.
+
+Apple backup recovery supports separate paths and a bounded date range:
+
+```bash
+MYCELIA_APPLE_VOICEMEMOS_ROOT=/path/to/audio-original \
+MYCELIA_APPLE_VOICEMEMOS_DB=/path/to/CloudRecordings.snapshot.db \
+MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE=2026-08-24T00:00:00+04:00 \
+MYCELIA_APPLE_VOICEMEMOS_MODE=staged \
+uv run --env-file ../.env daemon.py --once
+```
+
+The cutoff must include a UTC offset. Metadata comes from the Apple database,
+and deduplication uses the full `ZUNIQUEID`, not the absolute audio path. Stop
+the LaunchAgent for this separate foreground command. In normal staged
+operation, publishing a replacement snapshot is atomic and the service can stay
+running.
 
 Chunk ingestion uses unordered, idempotent `bulkWrite` batches of 50. Retrying
 an interrupted source safely reuses the existing `(original_id, index)` chunks.

@@ -1153,16 +1153,46 @@ a large source chunk; inspect Job Detail window diagnostics first.
 2. Common causes:
    - Corrupted audio file
    - Unsupported codec
-   - File permission issues (grant Full Disk Access)
-3. Failed files auto-retry after 2 hours
+   - Missing, stale, or unreadable staging archive
+3. Failed files remain cached until an explicit retry with
+   `python/manage_errors.py`; fixing staging access does not clear old errors.
 
-### macOS Full Disk Access
+### macOS Voice Memos staging boundary
 
-Required for accessing Voice Memos:
+The supported background configuration avoids Full Disk Access for `uv` and
+`tech.mycelia.ingestion`:
 
-1. System Settings → Privacy & Security → Full Disk Access
-2. Add your terminal app (Terminal, iTerm, VS Code, etc.)
-3. Restart the terminal
+1. Set `MYCELIA_APPLE_VOICEMEMOS_MODE=staged`.
+2. Point `MYCELIA_APPLE_VOICEMEMOS_ROOT` at the local published
+   `~/Library/mycelia/voice-memos-staging/audio-original` directory and
+   `MYCELIA_APPLE_VOICEMEMOS_DB` at the stable local SQLite snapshot.
+3. From an already trusted interactive Terminal, preview with
+   `bash scripts/refresh-voice-memos-staging.sh`, then refresh with
+   `bash scripts/refresh-voice-memos-staging.sh --apply`.
+4. Let the running LaunchAgent pick up the atomic snapshot on its next cycle.
+
+The refresh wrapper runs the existing `icloud-archive-tool`, performs a full
+archive verification, then hash-verifies and materializes the audio at or after
+`MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` alongside the newest completed SQLite
+snapshot in `~/Library/mycelia/voice-memos-staging`. The database is replaced
+last and atomically. The archive and local audio staging are additive; the
+wrapper does not delete source or archived recordings. Keeping the audio local
+also prevents launchd from crossing the removable-volume privacy boundary. A
+fully unattended read of Apple's Group Container still requires a
+TCC-authorized background process, so `live` mode remains an explicit legacy
+opt-in rather than the normal LaunchAgent configuration. If no interactive
+process may read the protected library either, export recordings from Voice
+Memos to a user-readable folder and import that folder instead.
+
+When `/health` is `degraded`, inspect `appleVoiceMemosMode` and
+`lastCycle.sources` before changing any data. A readable source with no new
+files is `completed` with `discovered: 0`; SQLite corruption and missing-path
+failures are explicit. A healthy staged cycle proves the published paths are
+readable, not that the interactive archive refresh is current. For a bounded
+recovery, also set `MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` to a timezone-aware ISO
+timestamp. Stop the LaunchAgent only when running a separate foreground
+recovery process; publishing a new staging snapshot is atomic and does not
+require a stop.
 
 Source ingestion writes audio chunks as unordered 50-operation `bulkWrite`
 batches. The `$setOnInsert` contract on `(original_id, index)` makes a retry

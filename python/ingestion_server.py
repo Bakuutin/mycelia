@@ -17,6 +17,7 @@ os.environ.setdefault("MYCELIA_URL", "http://localhost:3210")
 from daemon import import_new_files, ingests_missing_sources, initialize_auth
 from lib.api import job_token_var
 from lib.resources import call_resource
+from settings import get_apple_voicememos_mode
 
 logger = logging.getLogger("ingestion_server")
 
@@ -41,7 +42,7 @@ def run_ingestion_cycle(limit: int, job_id: str | None = None) -> dict[str, Any]
                 "progress": {"phase": "discovery", "processed": 0, "limit": limit},
             })
 
-        import_new_files()
+        source_results = import_new_files()
 
         if job_id:
             call_resource("jobs", {
@@ -51,7 +52,15 @@ def run_ingestion_cycle(limit: int, job_id: str | None = None) -> dict[str, Any]
             })
 
         ingests_missing_sources(limit=limit)
-        last_cycle = {"status": "completed", "limit": limit}
+        degraded = any(
+            source.get("status") != "completed"
+            for source in source_results
+        )
+        last_cycle = {
+            "status": "degraded" if degraded else "completed",
+            "limit": limit,
+            "sources": source_results,
+        }
         return last_cycle.copy()
 
 
@@ -94,7 +103,19 @@ app = FastAPI(title="Mycelia Host Ingestion", lifespan=lifespan)
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"status": "healthy", "automatic": True, "lastCycle": last_cycle}
+    cycle_status = last_cycle.get("status")
+    if cycle_status == "completed":
+        status = "healthy"
+    elif cycle_status == "not_started":
+        status = "starting"
+    else:
+        status = "degraded"
+    return {
+        "status": status,
+        "automatic": True,
+        "appleVoiceMemosMode": get_apple_voicememos_mode(),
+        "lastCycle": last_cycle,
+    }
 
 
 @app.post("/jobs/ingestion")

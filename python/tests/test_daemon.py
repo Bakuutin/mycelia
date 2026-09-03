@@ -5,11 +5,42 @@ from unittest.mock import patch
 
 path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import daemon  # noqa: E402
-import manage_errors  # noqa: E402
+import daemon
+import manage_errors
 
 
 class DaemonCliTest(TestCase):
+    def test_import_new_files_returns_per_source_failures(self):
+        successful = type(
+            "Importer",
+            (),
+            {"code": "ok", "run": lambda self: 2, "last_warning": None},
+        )()
+
+        def fail(_self):
+            raise RuntimeError("source denied")
+
+        failed = type(
+            "Importer",
+            (),
+            {"code": "bad", "run": fail},
+        )()
+
+        with (
+            patch.object(daemon.settings, "importers", [successful, failed]),
+            patch.object(daemon.logger, "exception"),
+        ):
+            daemon._importer_error_state.clear()
+            results = daemon.import_new_files()
+
+        self.assertEqual(results[0], {
+            "source": "ok",
+            "status": "completed",
+            "discovered": 2,
+        })
+        self.assertEqual(results[1]["status"], "failed")
+        self.assertEqual(results[1]["error"], "source denied")
+
     def test_successful_retry_clears_cached_ingestion_error(self):
         source = {
             "_id": "source-1",

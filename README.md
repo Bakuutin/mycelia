@@ -12,7 +12,8 @@ your own words.
 
 ### Audio Ingestion & Processing
 
-- Continuous import from Apple Voice Memos, Google Drive, and local folders.
+- Staged import from Apple Voice Memos plus continuous Google Drive and local
+  folder discovery.
 - Automated pipeline: VAD → Transcription → Conversation extraction →
   Summarization.
 - Smart chunking, waveform normalization, and diarization-friendly segments.
@@ -335,12 +336,24 @@ The daemon can import:
 - Google Drive Folders
 - Local Audio Folders
 
-On macOS, give your terminal application **Full Disk Access** in System Settings
-if you want to import Apple Voice Memos.
+On macOS, the recommended background setup does not read Apple's protected
+Group Container. Run the repository's staging refresh interactively from an
+already trusted Terminal; it copies a bounded set of verified audio and an
+atomically published SQLite snapshot into `~/Library/mycelia`. The LaunchAgent
+never opens either Apple's library or the external archive volume. Do not grant
+Full Disk Access to `uv` or to the ingestion LaunchAgent for this workflow.
 
 **Environment variables** (optional, set in `.env`):
 
-- `MYCELIA_APPLE_VOICEMEMOS_ROOT` - Apple Voice Memos path
+- `MYCELIA_APPLE_VOICEMEMOS_MODE` - `manual` disables background Apple
+  discovery, `staged` requires explicit local staging paths, and `live` is the
+  legacy opt-in direct-library mode
+- `MYCELIA_APPLE_VOICEMEMOS_ROOT` - local published staging folder containing
+  Apple audio files; required in `staged` mode
+- `MYCELIA_APPLE_VOICEMEMOS_DB` - optional separate `CloudRecordings.db` or
+  snapshot path; required in `staged` mode
+- `MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` - timezone-aware ISO 8601 cutoff;
+  required by the bounded staging publisher and optional for direct discovery
 - `MYCELIA_GOOGLE_DRIVE_ROOT` - Google Drive path
 - `MYCELIA_LOCAL_AUDIO_ROOT` - Local audio folder
 - `MYCELIA_GOOGLE_TZ` / `MYCELIA_LOCAL_TZ` - Timezones (default: UTC)
@@ -377,12 +390,51 @@ bash scripts/install-ingestion-service.sh
 curl -fsS http://localhost:8001/health
 ```
 
-The LaunchAgent starts at login, discovers local recordings every 10 seconds,
-and ingests bounded batches on the host. The Jobs page's ingestion **Run now**
-button calls the same serialized service, so it cannot overlap the automatic
-cycle. Ingestion remains host-side because local source paths are deliberately
-not mounted into the Docker Python worker. Grant Full Disk Access to the
-background process if Apple Voice Memos reports permission errors.
+The LaunchAgent starts at login, scans its configured readable sources every 10
+seconds, and ingests bounded batches on the host. The Jobs page's ingestion
+**Run now** button calls the same serialized service, so it cannot overlap the
+automatic cycle. Ingestion remains host-side because local source paths are
+deliberately not mounted into the Docker Python worker. The installer waits up
+to 90 seconds for a healthy response and prints the per-source result; the
+service includes standard Intel and Apple Silicon Homebrew paths so `uv`,
+`ffmpeg`, and `ffprobe` remain available under launchd's minimal environment.
+The health response is `degraded` when a configured staging source cannot be
+opened; an empty, readable catalog remains a healthy cycle.
+
+To preview a Voice Memos archive refresh without changing anything, then apply
+and verify it when ready:
+
+```bash
+bash scripts/refresh-voice-memos-staging.sh
+bash scripts/refresh-voice-memos-staging.sh --apply
+```
+
+`--apply` runs the existing `~/claude-cowork/icloud-archive-tool` Voice Memos
+component, performs its full verification, and copies the audio at or after
+`MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` plus the newest `CloudRecordings` snapshot
+under `~/Library/mycelia/voice-memos-staging`. Audio is published additively;
+the database is replaced atomically only after every bounded audio file passes
+a hash check. Start it interactively so only the trusted Terminal crosses the
+macOS privacy and external-volume boundaries; the background `uv` process never
+does. The LaunchAgent discovers the local published update on its next cycle.
+
+For a verified backup whose audio and database snapshot are stored separately,
+run one bounded recovery cycle like this:
+
+```bash
+cd python
+MYCELIA_APPLE_VOICEMEMOS_ROOT=/path/to/audio-original \
+MYCELIA_APPLE_VOICEMEMOS_DB=/path/to/CloudRecordings.snapshot.db \
+MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE=2026-08-24T00:00:00+04:00 \
+MYCELIA_APPLE_VOICEMEMOS_MODE=staged \
+uv run --env-file ../.env daemon.py --once
+```
+
+Stop the LaunchAgent before a foreground recovery and start it again afterward.
+The Apple importer uses the full Voice Memo UUID for deduplication, so changing
+from the live path to a backup path does not create a second source record. The
+cutoff limits discovery only. Refresh and republish the staging snapshot before
+expecting newer recordings to appear in the automatic scan.
 
 Audio chunks are written with idempotent MongoDB upserts in batches of 50. A
 retry after interruption reuses `(original_id, index)` and does not duplicate
@@ -395,9 +447,11 @@ cd /path/to/mycelia
 ./scripts/run-audio-pipeline.sh
 ```
 
-It starts the Docker services and then runs local discovery/import on the host,
-where Apple Voice Memos and other local files are accessible. After each audio
-chunk is inserted, the backend automatically runs the remaining stages:
+It starts the Docker services and then runs local discovery/import on the host.
+With the recommended `staged` mode, Apple Voice Memos are still read from the
+published local staging directory. Direct access to the live protected library
+is only an explicit `live`-mode foreground exception. After each audio chunk is
+inserted, the backend automatically runs the remaining stages:
 
 The foreground wrapper waits up to three minutes for backend readiness before
 starting the host daemon. Do not run it while the LaunchAgent is active, because
