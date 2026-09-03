@@ -1,4 +1,6 @@
 export type SummaryHistoryFilters = {
+  start?: string;
+  end?: string;
   model?: string;
   from?: string;
   to?: string;
@@ -115,6 +117,8 @@ export function buildSummaryHistoryPipeline(
 
   if (filters.from) generatedAt.$gte = startOfLocalDay(filters.from);
   if (filters.to) generatedAt.$lte = endOfLocalDay(filters.to);
+  if (filters.start) generatedAt.$gte = new Date(filters.start);
+  if (filters.end) generatedAt.$lt = new Date(filters.end);
   if (Object.keys(generatedAt).length > 0) {
     summaryMatch["summaries.date"] = generatedAt;
   }

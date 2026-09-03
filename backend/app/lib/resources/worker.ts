@@ -64,6 +64,11 @@ import {
   WORKER_CATALOG_SNAPSHOT_ID,
 } from "@/lib/jobs/jobs-dashboard-snapshots.ts";
 
+import {
+  buildSummaryRerunPipeline,
+  ReprocessModelArtifactsSchema,
+} from "@/lib/jobs/summary-rerun.ts";
+
 const STALE_JOB_AGE_MS = 15 * 60 * 1000;
 
 const WORKER_SPECIFIC_IDLE_TYPES = [
@@ -596,20 +601,11 @@ const ModelArtifactsSchema = z.object({
   action: z.literal("model_artifacts"),
   artifactTypes: z.array(ModelArtifactTypeSchema).optional(),
   model: z.string().optional(),
+  start: z.string().datetime({ offset: true }).optional(),
+  end: z.string().datetime({ offset: true }).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
   limit: z.number().int().min(1).max(500).default(100),
-});
-
-const ReprocessModelArtifactsSchema = z.object({
-  action: z.literal("reprocess_model_artifacts"),
-  artifactType: z.literal("summary"),
-  sourceModel: z.string().min(1),
-  targetModel: z.string().min(1),
-  // Pin rerun jobs to one provider profile (no cross-provider failover).
-  targetProviderProfileId: z.string().min(1).optional(),
-  artifactIds: z.array(z.string()).max(100).optional(),
-  limit: z.number().int().min(1).max(100).default(25),
 });
 
 const RequestSchema = z.union([
@@ -1539,6 +1535,8 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     const generatedAtMatch: Record<string, Date> = {};
     if (input.from) generatedAtMatch.$gte = new Date(`${input.from}T00:00:00`);
     if (input.to) generatedAtMatch.$lte = new Date(`${input.to}T23:59:59.999`);
+    if (input.start) generatedAtMatch.$gte = new Date(input.start);
+    if (input.end) generatedAtMatch.$lt = new Date(input.end);
 
     const facetFor = (
       base: Record<string, unknown>[],
@@ -1841,80 +1839,10 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
     await assertJobServicesHealthy("summarization", true);
 
     const mongo = await getMongoResource(auth);
-    const selectedObjectIds = (input.artifactIds ?? [])
-      .map((id) => id.split(":", 1)[0])
-      .filter((id) => ObjectId.isValid(id));
     const objects = await mongo({
       action: "aggregate",
       collection: "objects",
-      pipeline: [
-        {
-          $match: {
-            isConversation: true,
-            ...(selectedObjectIds.length
-              ? {
-                _id: { $in: selectedObjectIds.map((id) => new ObjectId(id)) },
-              }
-              : {}),
-            $expr: {
-              $anyElementTrue: {
-                $map: {
-                  input: { $ifNull: ["$summaries", []] },
-                  as: "summary",
-                  in: {
-                    $eq: [
-                      {
-                        $ifNull: [
-                          "$$summary.resolvedModel",
-                          {
-                            $ifNull: [
-                              "$$summary.modelName",
-                              "$$summary.model",
-                            ],
-                          },
-                        ],
-                      },
-                      input.sourceModel,
-                    ],
-                  },
-                },
-              },
-            },
-          },
-        },
-        {
-          $match: {
-            $expr: {
-              $not: [{
-                $anyElementTrue: {
-                  $map: {
-                    input: { $ifNull: ["$summaries", []] },
-                    as: "summary",
-                    in: {
-                      $eq: [
-                        {
-                          $ifNull: [
-                            "$$summary.resolvedModel",
-                            {
-                              $ifNull: [
-                                "$$summary.modelName",
-                                "$$summary.model",
-                              ],
-                            },
-                          ],
-                        },
-                        input.targetModel,
-                      ],
-                    },
-                  },
-                },
-              }],
-            },
-          },
-        },
-        { $limit: input.limit },
-        { $project: { _id: 1 } },
-      ],
+      pipeline: buildSummaryRerunPipeline(input),
     }) as Array<{ _id: ObjectId }>;
 
     const objectIds = objects.map((object) => object._id.toString());
@@ -1927,6 +1855,9 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
           state: { $in: ["waiting", "active", "delayed", "paused"] },
           "data.objectId": { $in: objectIds },
           "data.model": input.targetModel,
+          ...(input.targetProviderProfileId
+            ? { "data.providerProfileId": input.targetProviderProfileId }
+            : {}),
         },
         options: { projection: { "data.objectId": 1 } },
       }) as any[]
@@ -1950,7 +1881,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       }, {
         trigger: {
           type: "manual",
-          reason: `model_quality_rerun:${input.sourceModel}`,
+          reason: `model_quality_rerun:${input.sourceModel ?? "all"}`,
         },
       }, serverAuth);
       queued.push({ objectId, jobId: job.id! });
@@ -1962,6 +1893,7 @@ export class JobsResource implements Resource<WorkerProgressRequest, any> {
       sourceModel: input.sourceModel,
       targetModel: input.targetModel,
       matched: objectIds.length,
+      nextCursor: objectIds.length === input.limit ? objectIds.at(-1) : null,
       queued,
       skippedAlreadyQueued: objectIds.length - queued.length,
       mode: "append_summary_version",

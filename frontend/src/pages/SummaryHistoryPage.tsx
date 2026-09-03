@@ -53,6 +53,8 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { resolveDefaultTimeZone } from "@/lib/timeZones";
 import { zonedDateKey, zonedDateKeyToDate } from "@/lib/datePicker";
 
+import { queueSummaryRerunRange, summaryDateBounds } from "@/lib/summaryRerun";
+
 type HistoryView = "summaries" | "tasks" | "models";
 type DatePreset = "all" | "7d" | "30d" | "custom";
 
@@ -525,16 +527,17 @@ export default function SummaryHistoryPage() {
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunResult, setRerunResult] = useState<string | null>(null);
 
+  const dateBounds = summaryDateBounds(from, to, pickerTimeZone);
+
   const query = useQuery({
-    queryKey: ["summary-history", model, from, to, limit],
+    queryKey: ["summary-history", model, from, to, pickerTimeZone, limit],
     queryFn: async () => {
       const result = await api.callResource("mongo", {
         action: "aggregate",
         collection: "objects",
         pipeline: buildSummaryHistoryPipeline({
           model,
-          from: from || undefined,
-          to: to || undefined,
+          ...(dateBounds ?? {}),
           limit: Number(limit),
         }),
       });
@@ -563,15 +566,22 @@ export default function SummaryHistoryPage() {
   });
 
   const modelArtifactQuery = useQuery({
-    queryKey: ["model-artifacts", artifactType, model, from, to, limit],
+    queryKey: [
+      "model-artifacts",
+      artifactType,
+      model,
+      from,
+      to,
+      pickerTimeZone,
+      limit,
+    ],
     queryFn: async () => {
       const result = await api.callResource("jobs", {
         action: "model_artifacts",
         model,
         limit: Number(limit),
         ...(artifactType === "all" ? {} : { artifactTypes: [artifactType] }),
-        ...(from ? { from } : {}),
-        ...(to ? { to } : {}),
+        ...(dateBounds ?? {}),
       });
       return normalizeModelArtifactResult(result);
     },
@@ -619,8 +629,8 @@ export default function SummaryHistoryPage() {
 
     const today = new Date();
     const days = preset === "7d" ? 7 : 30;
-    setFrom(format(subDays(today, days - 1), "yyyy-MM-dd"));
-    setTo(format(today, "yyyy-MM-dd"));
+    setFrom(zonedDateKey(subDays(today, days - 1), pickerTimeZone));
+    setTo(zonedDateKey(today, pickerTimeZone));
   };
 
   const changeView = (nextView: HistoryView) => {
@@ -629,6 +639,7 @@ export default function SummaryHistoryPage() {
     setTaskStatus("all");
     setArtifactType("all");
     setRerunTargetModel("");
+    setRerunTargetProviderId(undefined);
     setRerunResult(null);
   };
 
@@ -655,46 +666,55 @@ export default function SummaryHistoryPage() {
     : modelArtifactQuery.isFetching;
 
   const rerunSummaries = async () => {
-    if (model === "all" || !rerunTargetModel) return;
+    if (!dateBounds || !rerunTargetModel || rerunPending) return;
     if (model === rerunTargetModel) {
       setRerunResult("Choose a target model different from the source model.");
       return;
     }
     const accepted = await confirmAction({
-      title: "Append new summary versions?",
-      description: `Create versions for up to ${
-        Math.min(Number(limit), 100)
-      } conversations summarized by ${model}, using ${rerunTargetModel}. Existing summaries will be kept.`,
-      actionLabel: "Queue reruns",
+      title: "Rerun all summaries in this range?",
+      description:
+        `Append one new version per conversation with summaries generated from ${from} through ${to} (${pickerTimeZone}), ${
+          model === "all" ? "across all source models" : `from ${model}`
+        }, using ${rerunTargetModel}. This includes all matching conversations, beyond the displayed results. Existing target-model versions and queued jobs are skipped. Originals are kept.`,
+      actionLabel: "Queue all in range",
     });
     if (!accepted) return;
 
     setRerunPending(true);
     setRerunResult(null);
+    let queuedSoFar = 0;
     try {
-      const result = await api.callResource("jobs", {
-        action: "reprocess_model_artifacts",
-        artifactType: "summary",
-        sourceModel: model,
-        targetModel: rerunTargetModel,
-        // Omit rather than pass undefined: EJSON turns undefined into null.
-        ...(rerunTargetProviderId
-          ? { targetProviderProfileId: rerunTargetProviderId }
-          : {}),
-        limit: Math.min(Number(limit), 100),
-      }) as {
-        queued?: Array<unknown>;
-        skippedAlreadyQueued?: number;
-      };
-      setRerunResult(
-        `Queued ${result.queued?.length ?? 0} summary rerun(s); ${
-          result.skippedAlreadyQueued ?? 0
-        } already queued. Originals remain available for comparison.`,
+      const result = await queueSummaryRerunRange(
+        {
+          ...dateBounds,
+          ...(model !== "all" ? { sourceModel: model } : {}),
+          targetModel: rerunTargetModel,
+          ...(rerunTargetProviderId
+            ? { targetProviderProfileId: rerunTargetProviderId }
+            : {}),
+        },
+        (request) => api.callResource("jobs", request),
+        (queued, skipped) => {
+          queuedSoFar = queued;
+          setRerunResult(
+            `Queued ${queued} summary rerun(s); ${skipped} already queued. Keep this page open until queueing finishes.`,
+          );
+        },
       );
-      await Promise.all([modelArtifactQuery.refetch(), taskQuery.refetch()]);
+      setRerunResult(
+        `Queueing complete: ${result.queued} summary rerun(s); ${result.skipped} already queued. Originals remain available for comparison.`,
+      );
+      await Promise.all([
+        query.refetch(),
+        modelArtifactQuery.refetch(),
+        taskQuery.refetch(),
+      ]);
     } catch (error) {
       setRerunResult(
-        error instanceof Error ? error.message : "Failed to queue reruns",
+        `Queueing stopped after ${queuedSoFar} confirmed rerun(s). ${
+          error instanceof Error ? error.message : "Failed to queue reruns"
+        } Retry the same range to continue; existing jobs are skipped.`,
       );
     } finally {
       setRerunPending(false);
@@ -836,7 +856,11 @@ export default function SummaryHistoryPage() {
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Date range (optional)</Label>
+            <Label>
+              {view === "tasks"
+                ? "Task creation date"
+                : "Summary generation date"}
+            </Label>
             <Select
               value={datePreset}
               onValueChange={(value) => applyDatePreset(value as DatePreset)}
@@ -893,6 +917,50 @@ export default function SummaryHistoryPage() {
           </Button>
         </div>
       </Card>
+
+      {(view === "summaries" ||
+        (view === "models" &&
+          (artifactType === "all" || artifactType === "summary"))) && (
+        <Card className="p-5">
+          <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+            <div>
+              <p className="font-medium">Rerun summaries in range</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Source:{" "}
+                <span className="font-mono">
+                  {model === "all" ? "All models" : model}
+                </span>. Append one new version per matching conversation,
+                across all results. Originals are kept. Select a generation-date
+                range above.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Target model</Label>
+              <ModelSelector
+                value={rerunTargetModel}
+                onChange={setRerunTargetModel}
+                providerValue={rerunTargetProviderId}
+                onSelectWithProvider={(_model, providerProfileId) =>
+                  setRerunTargetProviderId(providerProfileId)}
+                placeholder="Choose target model"
+                prefetch
+              />
+            </div>
+            <Button
+              onClick={rerunSummaries}
+              disabled={rerunPending || !dateBounds || !rerunTargetModel ||
+                rerunTargetModel === model}
+            >
+              {rerunPending ? "Queueing…" : "Rerun all in range"}
+            </Button>
+          </div>
+          {rerunResult && (
+            <p className="mt-3 rounded-md bg-muted p-3 text-sm">
+              {rerunResult}
+            </p>
+          )}
+        </Card>
+      )}
 
       {view === "summaries"
         ? (
@@ -1093,47 +1161,6 @@ export default function SummaryHistoryPage() {
                 </div>
               </div>
             </Card>
-
-            {(artifactType === "all" || artifactType === "summary") &&
-              model !== "all" && (
-              <Card className="p-5">
-                <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
-                  <div>
-                    <p className="font-medium">Quality rerun for summaries</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Source:{" "}
-                      <span className="font-mono">{model}</span>. A rerun
-                      appends a new summary version; the original is never
-                      deleted.
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Stronger target model</Label>
-                    <ModelSelector
-                      value={rerunTargetModel}
-                      onChange={setRerunTargetModel}
-                      providerValue={rerunTargetProviderId}
-                      onSelectWithProvider={(_model, providerProfileId) =>
-                        setRerunTargetProviderId(providerProfileId)}
-                      placeholder="Choose target model"
-                      prefetch
-                    />
-                  </div>
-                  <Button
-                    onClick={rerunSummaries}
-                    disabled={rerunPending || !rerunTargetModel ||
-                      rerunTargetModel === model}
-                  >
-                    {rerunPending ? "Queueing…" : "Append rerun summaries"}
-                  </Button>
-                </div>
-                {rerunResult && (
-                  <p className="mt-3 rounded-md bg-muted p-3 text-sm">
-                    {rerunResult}
-                  </p>
-                )}
-              </Card>
-            )}
 
             {modelArtifactQuery.isLoading && (
               <Card className="p-10 text-center text-muted-foreground">

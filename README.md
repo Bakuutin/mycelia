@@ -157,6 +157,13 @@ your own words.
 - Per-object audio player with transcript sync and segment navigation.
 - LLM summarization with model selection and cost estimation.
 - Summary comparison (side-by-side, star/favorite).
+- Bulk summary reruns: open `/summaries`, select a generation-date range and
+  **All models** (or one source model), choose a target model, then click
+  **Rerun all in range**. The range uses your configured timezone and includes
+  every matching conversation, regardless of the Results display limit. New
+  versions are appended; existing target-model versions and queued jobs are
+  skipped. Keep the page open until queueing completes; retry the same selection
+  after an interruption to continue.
 - Autosave with per-field throttling and version history.
 - Full-text search, category filtering, and relationship graph.
 - Lazy, cursor-paginated object sections with bounded backend queries and
