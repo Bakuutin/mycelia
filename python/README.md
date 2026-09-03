@@ -51,6 +51,9 @@ It runs discovery and ingestion automatically and exposes the authenticated
 `daemon.py` directly only for a foreground session or recovery, and do not run
 both ingestion processes simultaneously.
 
+Chunk ingestion uses unordered, idempotent `bulkWrite` batches of 50. Retrying
+an interrupted source safely reuses the existing `(original_id, index)` chunks.
+
 The normal daemon does **not** run voice activity detection. VAD normally runs
 as a backend job in `python-worker`; use `daemon.py --vad-only` only as a direct
 recovery or backfill path.

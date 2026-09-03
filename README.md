@@ -384,6 +384,10 @@ cycle. Ingestion remains host-side because local source paths are deliberately
 not mounted into the Docker Python worker. Grant Full Disk Access to the
 background process if Apple Voice Memos reports permission errors.
 
+Audio chunks are written with idempotent MongoDB upserts in batches of 50. A
+retry after interruption reuses `(original_id, index)` and does not duplicate
+chunks, while avoiding one HTTP round trip for every 10-second segment.
+
 For a foreground session instead, use:
 
 ```bash

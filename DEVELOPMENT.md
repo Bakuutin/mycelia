@@ -1164,6 +1164,10 @@ Required for accessing Voice Memos:
 2. Add your terminal app (Terminal, iTerm, VS Code, etc.)
 3. Restart the terminal
 
+Source ingestion writes audio chunks as unordered 50-operation `bulkWrite`
+batches. The `$setOnInsert` contract on `(original_id, index)` makes a retry
+idempotent; do not replace it with plain inserts when changing batch size.
+
 ## Project Structure
 
 ```
