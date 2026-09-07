@@ -432,6 +432,10 @@ exact duplicates. Unchanged paths reuse previous size/mtime-matched hashes.
 Disconnecting the disk preserves existing metadata and previews; reconnect it
 before importing or processing originals. Unavailable folders are marked in the
 picker, with an actionable error if scanning cannot read one.
+The backend image must include `exiftool` (already declared in its Dockerfile).
+If an older running image lacks it, new metadata inspection fails explicitly
+instead of silently dropping capture time and GPS. Rebuild the backend image
+before retrying such files; source-code hot reload does not install OS packages.
 
 Local discovery/import does not call Google. Recognition still uses a separate
 priced preview and confirmation, at most 20,000 photos per receipt; a larger
