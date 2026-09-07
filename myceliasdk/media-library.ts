@@ -118,6 +118,8 @@ export const zMediaFolderCampaignProgress = z.object({
   filesPerSecond: z.number().nonnegative().optional(),
   etaSeconds: z.number().int().nonnegative().optional(),
   waitingForRecovery: z.boolean().optional(),
+  totalKnown: z.boolean().optional(),
+  currentPath: z.string().optional(),
   chunkSize: z.number().int().positive(),
   message: z.string().min(1),
   nextStep: z.string().min(1),
@@ -131,6 +133,7 @@ export const zMediaSourceFolderListing = z.object({
   folders: z.array(z.object({
     name: z.string().min(1),
     relativePath: z.string().min(1),
+    unavailableReason: z.string().optional(),
   })),
 });
 

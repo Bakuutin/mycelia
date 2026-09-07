@@ -1,4 +1,8 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert@^1.0.15";
+import {
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "jsr:@std/assert@^1.0.15";
 import { PDFDocument } from "pdf-lib";
 import {
   assertSafeMediaRelativePath,
@@ -7,6 +11,8 @@ import {
   listMediaSourceFolders,
   mediaLocationFromMetadata,
   prepareUploadedMedia,
+  readMediaSourceDirectoryPage,
+  resolveMediaSourcePath,
 } from "./local.server.ts";
 
 Deno.test("mounted media paths must stay relative to the configured root", () => {
@@ -22,6 +28,53 @@ Deno.test("mounted media paths must stay relative to the configured root", () =>
     Error,
     '".." are not allowed',
   );
+});
+
+Deno.test("directory inventory pages over 20000 files without following symlinks or losing names", async () => {
+  const root = await Deno.makeTempDir();
+  try {
+    for (let index = 0; index < 20_025; index++) {
+      await Deno.writeTextFile(
+        `${root}/${String(index).padStart(6, "0")}.jpg`,
+        "",
+      );
+    }
+    await Deno.mkdir(`${root}/nested`);
+    await Deno.writeTextFile(`${root}/sidecar.xmp`, "");
+    await Deno.symlink(`${root}/nested`, `${root}/linked-folder`);
+    await Deno.symlink(`${root}/000000.jpg`, `${root}/linked-photo.jpg`);
+    const seen = new Set<string>();
+    let afterName: string | undefined;
+    do {
+      const page = await readMediaSourceDirectoryPage(
+        ".",
+        afterName,
+        1_000,
+        root,
+      );
+      assertEquals(page.entries.length <= 1_000, true);
+      for (const entry of page.entries) {
+        assertEquals(seen.has(entry.relativePath), false);
+        seen.add(entry.relativePath);
+      }
+      afterName = page.nextAfterName;
+    } while (afterName);
+    assertEquals(seen.size, 20_027);
+    assertEquals(seen.has("linked-photo.jpg"), false);
+    assertEquals(seen.has("linked-folder"), false);
+    await assertRejects(
+      () => resolveMediaSourcePath("linked-folder", root),
+      Error,
+      "symlinks are not allowed",
+    );
+    await assertRejects(
+      () => readMediaSourceDirectoryPage("missing-disk", "", 1_000, root),
+      Error,
+      "Connect the external disk",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });
 
 Deno.test("mounted media folder browser lists directories without following symlinks", async () => {

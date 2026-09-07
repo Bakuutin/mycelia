@@ -97,6 +97,22 @@ Deno.test("folder scan progress separates checked ready files from pending work"
   assertEquals(interrupted.etaSeconds, undefined);
 });
 
+Deno.test("inventory progress reports discovered files without inventing a total or ETA", () => {
+  const progress = folderCampaignProgress({
+    status: "queued",
+    relativePath: "external-photos",
+    inventoryDiscovered: 23_500,
+    inventoryCurrentPath: "external-photos/2026",
+    createdAt: new Date(Date.now() - 10_000),
+  }, { total: 23_500, pending: 23_000, unsupported: 500 });
+  assertEquals(progress.stage, "inventory");
+  assertEquals(progress.processed, 23_500);
+  assertEquals(progress.totalKnown, false);
+  assertEquals(progress.percent, 0);
+  assertEquals(progress.etaSeconds, undefined);
+  assertEquals(progress.currentPath, "external-photos/2026");
+});
+
 Deno.test("recognition batch progress reports terminal work and live queue states", () => {
   assertEquals(
     recognitionBatchProgress("running", {

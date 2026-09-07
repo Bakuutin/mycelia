@@ -402,6 +402,42 @@ links remain local deterministic evidence and cannot be changed by the model.
 
 ## Media inventory and batches
 
+### External photo libraries
+
+Keep the disk mounted at a stable host path. Set `MEDIA_SOURCE_EXTRA_HOST_PATH`
+to its photo folder in the uncommitted `.env`, and optionally set
+`MEDIA_SOURCE_EXTRA_NAME` (default `external-photos`). Append
+`docker-compose.media-external.yml` after the existing UAT Compose overlays.
+It adds a read-only subfolder under `/media-source`; keep the same subfolder
+name on subsequent recreates because existing asset references use it. Existing
+installations using `icloud-backup` should retain that name. The host directory
+must exist; Compose will not create an empty substitute for a disconnected disk.
+
+After connecting the disk, recreate only backend with the full overlay list and
+restart nginx, then verify readiness as described in `DEVELOPMENT.md`. In
+**Media → Choose folder**, select the mounted library and **Scan**. Discovery
+saves at most 1,000 entries per request and a durable directory/name cursor, with
+no 20,000-file or directory-depth cutoff. It shows discovered files and the
+current directory; a total and ETA become meaningful after discovery. Metadata
+and previews continue in 25-file steps. Restarting resumes discovery and file
+work; replayed pages do not reset prior work. Keep the source tree stable during
+a scan; a later sync discovers files added behind an already committed cursor.
+
+Review the local report, then **Confirm local import**. JPEG/PNG/WebP originals
+remain on the external disk. Mycelia stores SHA-256, EXIF/GPS, 256px and 1280px
+WebP derivatives, and processing results. HEIC/RAW, video, PDF, and sidecars are
+counted as unsupported by the photo-folder pipeline. Exact-byte duplicates
+within the same owner resolve to the existing asset; re-encoded copies are not
+exact duplicates. Unchanged paths reuse previous size/mtime-matched hashes.
+Disconnecting the disk preserves existing metadata and previews; reconnect it
+before importing or processing originals. Unavailable folders are marked in the
+picker, with an actionable error if scanning cannot read one.
+
+Local discovery/import does not call Google. Recognition still uses a separate
+priced preview and confirmation, at most 20,000 photos per receipt; a larger
+selection now asks for narrower date/filename filters instead of silently
+truncating. The library itself is not capped to that batch size.
+
 The `/media` page is the local library and import workspace. It uses cursor
 pagination, a responsive thumbnail gallery, background refresh, and a focused
 detail viewer, so an archive of 900 or more photos is not truncated to the

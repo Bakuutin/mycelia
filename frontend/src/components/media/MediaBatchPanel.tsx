@@ -210,7 +210,9 @@ export function MediaBatchPanel({
     ].includes(folderCampaign.status);
     if (!activeFolder) return;
     const timer = globalThis.setInterval(() => {
-      void loadFolderCampaign(idOf(folderCampaign._id));
+      void loadFolderCampaign(idOf(folderCampaign._id)).catch(() => {
+        // Keep the last known progress; the next poll retries after a reload.
+      });
     }, 3_000);
     return () => globalThis.clearInterval(timer);
   }, [folderCampaign, loadFolderCampaign]);
@@ -328,7 +330,8 @@ export function MediaBatchPanel({
               </CollapsibleTrigger>
               <Button
                 onClick={startFolderScan}
-                disabled={busy || folderBrowserLoading}
+                disabled={busy || folderBrowserLoading ||
+                  Boolean(folderBrowserError)}
                 size="sm"
                 aria-label="Scan selected folder recursively"
               >
@@ -415,10 +418,15 @@ export function MediaBatchPanel({
                   size="sm"
                   className="w-full justify-start"
                   onClick={() => browseMountedFolder(folder.relativePath)}
-                  disabled={folderBrowserLoading}
+                  disabled={folderBrowserLoading ||
+                    Boolean(folder.unavailableReason)}
+                  title={folder.unavailableReason}
                 >
                   <Folder className="mr-2 h-4 w-4 text-primary" />
                   {folder.name}
+                  {folder.unavailableReason && (
+                    <span className="ml-auto text-xs">Disk unavailable</span>
+                  )}
                 </Button>
               ))}
               {!folderBrowserLoading &&
@@ -456,20 +464,27 @@ export function MediaBatchPanel({
                     <div className="flex justify-between gap-3 text-xs">
                       <span>{folderCampaign.progress.message}</span>
                       <strong>
-                        {folderCampaign.progress.percent.toFixed(1)}%
+                        {folderCampaign.progress.totalKnown === false
+                          ? "Discovering…"
+                          : `${folderCampaign.progress.percent.toFixed(1)}%`}
                       </strong>
                     </div>
                     <Progress
-                      value={folderCampaign.progress.percent}
+                      value={folderCampaign.progress.totalKnown === false
+                        ? undefined
+                        : folderCampaign.progress.percent}
                       className="h-2"
                     />
                     <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       <span>
-                        {folderCampaign.progress.processed} of{" "}
-                        {folderCampaign.progress.total}{" "}
-                        {folderCampaign.progress.stage === "creating_previews"
-                          ? "photos imported"
-                          : "supported files checked"}
+                        {folderCampaign.progress.totalKnown === false
+                          ? `${folderCampaign.progress.processed} files discovered`
+                          : `${folderCampaign.progress.processed} of ${folderCampaign.progress.total} ${
+                            folderCampaign.progress.stage ===
+                                "creating_previews"
+                              ? "photos imported"
+                              : "supported files checked"
+                          }`}
                       </span>
                       {folderCampaign.progress.remaining > 0 && (
                         <span>
@@ -478,6 +493,12 @@ export function MediaBatchPanel({
                       )}
                     </div>
                   </div>
+                  {folderCampaign.progress.totalKnown === false && (
+                    <div className="truncate text-xs text-muted-foreground">
+                      {folderCampaign.progress.currentPath}{" "}
+                      · Total and ETA available after discovery
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     {folderCampaign.progress.filesPerSecond != null && (
                       <span>

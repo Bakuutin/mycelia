@@ -14,7 +14,6 @@ import {
   listMediaSourceFolders,
   mediaSourceConfigured,
   resolveMediaSourcePath,
-  scanMediaSourceInventory,
 } from "@/lib/media/local.server.ts";
 import {
   enqueueConfirmedAsset,
@@ -36,9 +35,10 @@ import {
   zMediaRecognitionSelection,
 } from "@myceliasdk/media-library.ts";
 import { mediaRecognitionAssetReservationId } from "./recognition-reservation-fence.server.ts";
+import { processMediaFolderInventory } from "./folder-inventory.server.ts";
 
 export const FOLDER_CHUNK_SIZE = 25;
-const MAX_FOLDER_FILES = 20_000;
+const MAX_RECOGNITION_BATCH_ASSETS = 20_000;
 export const RECOGNITION_WINDOW = 16;
 const PREVIEW_TTL_MS = 60 * 60 * 1000;
 const RESERVATION_PREPARE_TTL_MS = 15 * 60 * 1000;
@@ -760,7 +760,8 @@ export function folderCampaignProgress(
   const importRemaining = (rawCounts.ready ?? 0) +
     (rawCounts.importing ?? 0);
   const importProcessed = Math.max(0, confirmedReady - importRemaining);
-  const stage = status === "queued"
+  const stage = status === "queued" ||
+      (status === "scanning" && campaign.inventoryInitialized === false)
     ? "inventory"
     : status === "scanning"
     ? "metadata_scan"
@@ -779,14 +780,14 @@ export function folderCampaignProgress(
     ? confirmedReady
     : supportedTotal;
   const processed = stage === "inventory"
-    ? 0
+    ? Number(campaign.inventoryDiscovered ?? totalEntries)
     : stage === "metadata_scan"
     ? scanProcessed
     : stage === "creating_previews"
     ? importProcessed
     : total;
   const remaining = Math.max(0, total - processed);
-  const percent = total > 0
+  const percent = stage !== "inventory" && total > 0
     ? Math.min(100, Math.max(0, Number((processed / total * 100).toFixed(1))))
     : 0;
   const startedAt = stage === "creating_previews"
@@ -798,7 +799,7 @@ export function folderCampaignProgress(
   const filesPerSecond = processed > 0 && elapsedSeconds > 0
     ? Number((processed / elapsedSeconds).toFixed(2))
     : undefined;
-  const etaSeconds = filesPerSecond && remaining > 0
+  const etaSeconds = stage !== "inventory" && filesPerSecond && remaining > 0
     ? Math.ceil(remaining / filesPerSecond)
     : undefined;
   const lastProgressAt = campaign.lastProgressAt ?? campaign.updatedAt;
@@ -814,8 +815,8 @@ export function folderCampaignProgress(
     }
     : stage === "inventory"
     ? {
-      message: "Building a recursive local file inventory",
-      nextStep: "Metadata and hashes will be checked locally in 25-file steps",
+      message: "Discovering files and folders locally",
+      nextStep: "The total and ETA become available after directory discovery",
     }
     : stage === "metadata_scan"
     ? {
@@ -852,6 +853,12 @@ export function folderCampaignProgress(
     };
   return {
     stage,
+    ...(stage === "inventory"
+      ? {
+        totalKnown: false,
+        currentPath: campaign.inventoryCurrentPath ?? campaign.relativePath,
+      }
+      : {}),
     processed,
     total,
     remaining,
@@ -1023,82 +1030,6 @@ async function publicFolderCampaign(db: Db, campaign: any) {
     updatedAt: campaign.updatedAt,
     completedAt: campaign.completedAt,
   };
-}
-
-async function initializeFolderInventory(db: Db, campaign: any): Promise<void> {
-  const inventory = await scanMediaSourceInventory(
-    campaign.relativePath,
-    MAX_FOLDER_FILES,
-    { includeUnsupported: true },
-  );
-  if (inventory.truncated) {
-    throw new Error(
-      `Mounted folder contains more than ${MAX_FOLDER_FILES} files; split it into subfolders`,
-    );
-  }
-  if (inventory.paths.length === 0 && inventory.unsupportedPaths.length === 0) {
-    throw new Error("No supported JPEG, PNG, WebP, or PDF files were found");
-  }
-  const items = db.collection("media_folder_items");
-  const inventoryItems = [
-    ...inventory.paths.map((relativePath) => ({
-      relativePath,
-      state: "pending",
-    })),
-    ...inventory.unsupportedPaths.map((relativePath) => ({
-      relativePath,
-      state: "unsupported",
-    })),
-  ].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-  for (let index = 0; index < inventoryItems.length; index += 1_000) {
-    const page = inventoryItems.slice(index, index + 1_000);
-    await items.bulkWrite(
-      page.map((entry) => ({
-        updateOne: {
-          filter: {
-            campaignId: campaign._id,
-            relativePath: entry.relativePath,
-          },
-          update: {
-            $setOnInsert: {
-              _id: deterministicObjectId([
-                "media-folder-item-v1",
-                campaign._id,
-                entry.relativePath,
-              ]),
-              campaignId: campaign._id,
-              owner: campaign.owner,
-              relativePath: entry.relativePath,
-              state: entry.state,
-              ...(entry.state === "unsupported"
-                ? { safeError: "Unsupported file type" }
-                : {}),
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            },
-          },
-          upsert: true,
-        },
-      })),
-      { ordered: false },
-    );
-  }
-  const scanStartedAt = campaign.scanStartedAt ?? new Date();
-  await db.collection("media_folder_campaigns").updateOne(
-    { _id: campaign._id, inventoryInitialized: { $ne: true } },
-    {
-      $set: {
-        inventoryInitialized: true,
-        inventoryTruncated: false,
-        status: "scanning",
-        scanStartedAt,
-        lastProgressAt: scanStartedAt,
-        updatedAt: scanStartedAt,
-      },
-    },
-  );
-  campaign.scanStartedAt = scanStartedAt;
-  campaign.lastProgressAt = scanStartedAt;
 }
 
 export function mediaFolderReusableHashQuery(
@@ -1464,9 +1395,13 @@ async function processFolderCampaign(
   const config = await loadConfig();
   try {
     if (!campaign.inventoryInitialized) {
-      await initializeFolderInventory(db, campaign);
-      campaign.inventoryInitialized = true;
-      campaign.status = "scanning";
+      const inventory = await processMediaFolderInventory(db, campaign);
+      return await folderWorkerResult(
+        db,
+        campaign._id,
+        inventory.processed,
+        true,
+      );
     }
     if (campaign.status === "queued" || campaign.status === "scanning") {
       const processed = await inspectFolderChunk(db, campaign, config);
@@ -1771,7 +1706,7 @@ export async function activeRecognitionReservationAssetIds(
   await cleanupExpiredRecognitionReservations(db, now);
   return await db.collection<any>("media_recognition_asset_reservations")
     .find({ owner }, { projection: { assetId: 1 } })
-    .limit(MAX_FOLDER_FILES).map((entry) => entry.assetId as ObjectId)
+    .map((entry) => entry.assetId as ObjectId)
     .toArray();
 }
 
@@ -2244,7 +2179,13 @@ async function prepareRecognitionBatch(
         source: 1,
       },
     },
-  ).sort({ createdAt: 1, _id: 1 }).limit(MAX_FOLDER_FILES).toArray();
+  ).sort({ createdAt: 1, _id: 1 }).limit(MAX_RECOGNITION_BATCH_ASSETS + 1)
+    .toArray();
+  if (candidates.length > MAX_RECOGNITION_BATCH_ASSETS) {
+    throw new Error(
+      `This selection exceeds ${MAX_RECOGNITION_BATCH_ASSETS} photos per recognition batch. Narrow the date or filename filters; the local library has no file-count limit.`,
+    );
+  }
 
   const eligible: Array<{ _id: ObjectId; sha256: string }> = [];
   const missingIds: ObjectId[] = [];
@@ -2944,6 +2885,9 @@ async function startFolderCampaign(
     throw new Error("Mounted media source is not configured");
   }
   const resolved = await resolveMediaSourcePath(relativePath);
+  if (!(await Deno.stat(resolved.realPath)).isDirectory) {
+    throw new Error("Select a mounted folder to scan recursively");
+  }
   const canonicalRelativePath = resolved.relativePath;
   const campaigns = db.collection<any>("media_folder_campaigns");
   const existing = await campaigns.findOne({

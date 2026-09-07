@@ -1485,6 +1485,7 @@ export function JobProgressCell({ job }: { job: JobInfo }) {
       : (result.progress ?? {});
     const processed = Number(folderProgress.processed ?? 0);
     const total = Number(folderProgress.total ?? 0);
+    const discovering = folderProgress.totalKnown === false;
     const percent = Number.isFinite(Number(folderProgress.percent))
       ? Number(folderProgress.percent)
       : total > 0
@@ -1525,19 +1526,28 @@ export function JobProgressCell({ job }: { job: JobInfo }) {
             Open Media
           </Link>
         </div>
-        {total > 0 && <Progress value={percent} className="h-1.5" />}
+        {total > 0 && (
+          <Progress
+            value={discovering ? undefined : percent}
+            className="h-1.5"
+          />
+        )}
         <div className="flex justify-between gap-3 text-[11px] text-muted-foreground">
-          <span>{processed}/{total || "?"} files</span>
-          <span>{percent.toFixed(1)}%</span>
+          <span>
+            {discovering
+              ? `${processed} files discovered`
+              : `${processed}/${total || "?"} files`}
+          </span>
+          {!discovering && <span>{percent.toFixed(1)}%</span>}
         </div>
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          {folderProgress.remaining != null && (
+          {!discovering && folderProgress.remaining != null && (
             <span>{folderProgress.remaining} remaining</span>
           )}
           {folderProgress.filesPerSecond != null && (
             <span>{Number(folderProgress.filesPerSecond).toFixed(2)}/sec</span>
           )}
-          {eta && <span>ETA {eta}</span>}
+          {!discovering && eta && <span>ETA {eta}</span>}
           {folderProgress.unsupported > 0 && (
             <span>{folderProgress.unsupported} unsupported</span>
           )}
