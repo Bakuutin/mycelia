@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { format, formatDistanceToNow, subDays } from "date-fns";
@@ -8,7 +8,6 @@ import {
   CalendarRange,
   CheckCircle2,
   CircleDashed,
-  Clock3,
   Cpu,
   ExternalLink,
   FileText,
@@ -21,6 +20,7 @@ import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import {
@@ -38,6 +38,7 @@ import {
   normalizeSummaryHistoryResult,
   normalizeSummaryTaskResult,
   type SummaryHistoryEntry,
+  summaryPreview,
   type SummaryTaskEntry,
   type SummaryTaskStatus,
 } from "@/lib/summaryHistory";
@@ -53,7 +54,11 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { resolveDefaultTimeZone } from "@/lib/timeZones";
 import { zonedDateKey, zonedDateKeyToDate } from "@/lib/datePicker";
 
-import { queueSummaryRerunRange, summaryDateBounds } from "@/lib/summaryRerun";
+import {
+  queueSummaryRerunRange,
+  queueSummaryRerunSelection,
+  summaryDateBounds,
+} from "@/lib/summaryRerun";
 
 type HistoryView = "summaries" | "tasks" | "models";
 type DatePreset = "all" | "7d" | "30d" | "custom";
@@ -79,213 +84,87 @@ function formatCoverage(entry: SummaryHistoryEntry): string {
   return `${startText} – ${endText}`;
 }
 
-function formatTokens(value?: number): string {
-  return typeof value === "number" ? value.toLocaleString() : "—";
-}
-
 function SummaryHistoryCard({ entry }: { entry: SummaryHistoryEntry }) {
-  const generatedAt = new Date(entry.generatedAt);
-  const requestedDiffers = entry.requestedModel &&
-    entry.requestedModel !== entry.executedModel;
-  const sourceRefs = entry.sourceRefs;
-  const sourceStart = sourceRefs
-    ? new Date(sourceRefs.coverageStart).getTime()
-    : NaN;
-  const sourceEnd = sourceRefs
-    ? new Date(sourceRefs.coverageEnd).getTime()
-    : NaN;
+  const sourceStart = new Date(
+    entry.sourceRefs?.coverageStart ?? entry.coverageStart ?? "",
+  ).getTime();
+  const sourceEnd = new Date(
+    entry.sourceRefs?.coverageEnd ?? entry.coverageEnd ?? "",
+  ).getTime();
   const transcriptHref =
     Number.isFinite(sourceStart) && Number.isFinite(sourceEnd)
       ? `/transcript?start=${sourceStart}&end=${sourceEnd}`
       : undefined;
-
+  const modelName = entry.executedModel?.split("/").pop() || "Unknown model";
   return (
-    <Card className="overflow-hidden">
-      <div className="space-y-4 p-5">
-        <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                to={`/objects/${entry.objectId}`}
-                className="text-lg font-semibold hover:text-primary hover:underline"
+    <Card className="overflow-hidden rounded-2xl border-border/60 shadow-sm transition-colors hover:border-primary/30">
+      <div className="space-y-4 p-5 sm:p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 space-y-2">
+            <Link
+              to={`/objects/${entry.objectId}`}
+              className="text-base font-semibold leading-snug hover:text-primary sm:text-lg"
+            >
+              {entry.objectEmoji && (
+                <span className="mr-2">{entry.objectEmoji}</span>
+              )}
+              {entry.objectName}
+            </Link>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span
+                className="max-w-full break-all rounded-md bg-muted/70 px-2 py-1"
+                title={entry.executedModel}
               >
-                {entry.objectEmoji && (
-                  <span className="mr-1">{entry.objectEmoji}</span>
-                )}
-                {entry.objectName}
-              </Link>
-              <Badge variant="outline" className="gap-1">
-                <CheckCircle2 className="h-3 w-3" />
-                Summary saved
-              </Badge>
-              {entry.jobState === "failed" && (
-                <Badge variant="destructive">
-                  Batch job failed after this summary was saved
-                </Badge>
-              )}
-              {entry.jobState === "cancelled" && (
-                <Badge variant="secondary">
-                  Batch job was cancelled after this summary was saved
-                </Badge>
-              )}
-              {entry.jobState && ![
-                "completed",
-                "failed",
-                "cancelled",
-              ].includes(entry.jobState) && (
-                <Badge variant="secondary">
-                  Batch job record: {entry.jobState}
-                </Badge>
-              )}
-              {entry.fallbackUsed && (
-                <Badge variant="destructive">Fallback used</Badge>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <Clock3 className="h-3.5 w-3.5" />
-                Generated {formatDateTime(entry.generatedAt)}
+                {modelName}
               </span>
-              {!Number.isNaN(generatedAt.getTime()) && (
-                <span>
-                  {formatDistanceToNow(generatedAt, { addSuffix: true })}
-                </span>
+              <span>Generated {formatDateTime(entry.generatedAt)}</span>
+              {entry.fallbackUsed && (
+                <Badge variant="outline">Fallback used</Badge>
               )}
             </div>
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" asChild>
-              <Link to={`/objects/${entry.objectId}`}>
-                Open conversation
-                <ExternalLink className="ml-1 h-3.5 w-3.5" />
-              </Link>
-            </Button>
-            {entry.jobId && (
-              <Button variant="outline" size="sm" asChild>
-                <Link to={`/jobs/${entry.jobId}`}>Open job</Link>
-              </Button>
-            )}
-          </div>
+          <Button variant="ghost" size="icon" asChild>
+            <Link
+              to={`/objects/${entry.objectId}`}
+              aria-label={`Open ${entry.objectName}`}
+            >
+              <ExternalLink className="h-4 w-4" />
+            </Link>
+          </Button>
         </div>
-
-        <div className="grid gap-3 rounded-lg bg-muted/40 p-4 md:grid-cols-2 xl:grid-cols-4">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Executed model
-            </p>
-            <p className="mt-1 break-all font-mono text-xs">
-              {entry.executedModel || "Unknown"}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Requested model
-            </p>
-            <p className="mt-1 break-all font-mono text-xs">
-              {entry.requestedModel || "Unknown"}
-            </p>
-            {requestedDiffers && !entry.fallbackUsed && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Alias or legacy override resolved to the executed model.
-              </p>
-            )}
-          </div>
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Failure policy
-            </p>
-            <p className="mt-1 break-all text-xs">
-              {entry.fallbackModel
-                ? `Retry once with ${entry.fallbackModel}`
-                : "Stop with error"}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Source time
-            </p>
-            <p className="mt-1 text-xs">{formatCoverage(entry)}</p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-          <span>Prompt: {entry.promptName || "Default"}</span>
-          <span>Prompt tokens: {formatTokens(entry.usage?.promptTokens)}</span>
-          <span>
-            Completion tokens: {formatTokens(entry.usage?.completionTokens)}
-          </span>
-          <span>Total tokens: {formatTokens(entry.usage?.totalTokens)}</span>
-          {typeof entry.usage?.cost === "number" && (
-            <span>Cost: ${entry.usage.cost.toFixed(6)}</span>
-          )}
-        </div>
-
-        <div className="rounded-lg border p-3 text-xs">
-          {sourceRefs
-            ? (
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-3">
-                  <Badge variant="secondary">Exact summary source</Badge>
-                  <span>
-                    {sourceRefs.conversationChunkIds.length}{" "}
-                    conversation chunk(s)
-                  </span>
-                  <span>
-                    {sourceRefs.transcriptionIds.length} transcription(s)
-                  </span>
-                  {transcriptHref && (
-                    <Link
-                      className="font-medium hover:underline"
-                      to={transcriptHref}
-                    >
-                      Open source transcript
-                    </Link>
-                  )}
-                  {sourceRefs.extractorJobId && (
-                    <Link
-                      className="font-medium hover:underline"
-                      to={`/jobs/${sourceRefs.extractorJobId}`}
-                    >
-                      Open extraction job
-                    </Link>
-                  )}
-                </div>
-                {sourceRefs.conversationChunkIds.length > 0 && (
-                  <div className="break-all font-mono text-muted-foreground">
-                    Chunk: {sourceRefs.conversationChunkIds.join(", ")}
-                  </div>
-                )}
-                <details>
-                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                    Show transcription IDs
-                  </summary>
-                  <div className="mt-2 break-all font-mono text-muted-foreground">
-                    {sourceRefs.transcriptionIds.join(", ") ||
-                      "No transcription IDs recorded"}
-                  </div>
-                </details>
-              </div>
-            )
-            : (
-              <div className="text-muted-foreground">
-                Legacy summary: exact source chunk and transcription IDs were
-                not recorded when this version was generated.
-              </div>
-            )}
-        </div>
-
-        <details className="group rounded-lg border">
-          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium hover:bg-muted/40">
-            <span className="group-open:hidden">View summary</span>
-            <span className="hidden group-open:inline">Hide summary</span>
+        <p className="line-clamp-3 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+          {summaryPreview(entry.text)}
+        </p>
+        <details className="group">
+          <summary className="w-fit cursor-pointer text-sm font-medium text-primary">
+            <span className="group-open:hidden">Read summary</span>
+            <span className="hidden group-open:inline">Close summary</span>
           </summary>
-          <div className="border-t px-4 py-4">
-            <div className="prose prose-sm max-w-none dark:prose-invert">
-              <Markdown>{entry.text}</Markdown>
-            </div>
+          <div className="prose prose-sm mt-4 max-w-none border-t pt-4 dark:prose-invert">
+            <Markdown>{entry.text}</Markdown>
           </div>
         </details>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <CalendarRange className="h-3.5 w-3.5" />
+            {formatCoverage(entry)}
+          </span>
+          <div className="flex items-center gap-4">
+            {transcriptHref && (
+              <Link className="hover:text-foreground" to={transcriptHref}>
+                Transcript
+              </Link>
+            )}
+            {entry.jobId && (
+              <Link
+                className="hover:text-foreground"
+                to={`/jobs/${entry.jobId}`}
+              >
+                Job details
+              </Link>
+            )}
+          </div>
+        </div>
       </div>
     </Card>
   );
@@ -366,7 +245,7 @@ function SummaryTaskCard({ task }: { task: SummaryTaskEntry }) {
       <div className="mt-4 grid gap-3 rounded-lg bg-muted/40 p-4 md:grid-cols-3">
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Requested model
+            Model
           </p>
           <p className="mt-1 break-all font-mono text-xs">
             {task.requestedModel}
@@ -409,8 +288,6 @@ function SummaryTaskCard({ task }: { task: SummaryTaskEntry }) {
 }
 
 function ModelArtifactCard({ entry }: { entry: ModelArtifactEntry }) {
-  const requestedDiffers = entry.requestedModel && entry.executedModel &&
-    entry.requestedModel !== entry.executedModel;
   return (
     <Card className="p-5">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
@@ -450,22 +327,13 @@ function ModelArtifactCard({ entry }: { entry: ModelArtifactEntry }) {
         </Button>
       </div>
 
-      <div className="mt-4 grid gap-3 rounded-lg bg-muted/40 p-4 md:grid-cols-3">
+      <div className="mt-4 grid gap-3 rounded-lg bg-muted/40 p-4 md:grid-cols-2">
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Executed model
+            Model
           </p>
           <p className="mt-1 break-all font-mono text-xs">
             {entry.executedModel || "Unknown"}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Requested route
-          </p>
-          <p className="mt-1 break-all font-mono text-xs">
-            {entry.requestedModel || "Unknown"}
-            {requestedDiffers ? " -> resolved above" : ""}
           </p>
         </div>
         <div>
@@ -518,6 +386,7 @@ export default function SummaryHistoryPage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [limit, setLimit] = useState("100");
+  const [displayLimit, setDisplayLimit] = useState(100);
   const [rerunTargetModel, setRerunTargetModel] = useState("");
   // Set when the target model was picked from a specific provider's group;
   // rerun jobs then route to that provider only.
@@ -528,9 +397,21 @@ export default function SummaryHistoryPage() {
   const [rerunResult, setRerunResult] = useState<string | null>(null);
 
   const dateBounds = summaryDateBounds(from, to, pickerTimeZone);
+  const amount = limit.trim() ? Number(limit) : undefined;
+  const amountValid = amount == null ||
+    (Number.isInteger(amount) && amount >= 1 && amount <= 10000);
+  const periodValid = datePreset === "all" || dateBounds != null;
 
   const query = useQuery({
-    queryKey: ["summary-history", model, from, to, pickerTimeZone, limit],
+    queryKey: [
+      "summary-history",
+      model,
+      from,
+      to,
+      pickerTimeZone,
+      limit,
+      displayLimit,
+    ],
     queryFn: async () => {
       const result = await api.callResource("mongo", {
         action: "aggregate",
@@ -538,12 +419,13 @@ export default function SummaryHistoryPage() {
         pipeline: buildSummaryHistoryPipeline({
           model,
           ...(dateBounds ?? {}),
-          limit: Number(limit),
+          limit: displayLimit,
+          ...(amount != null ? { amount } : {}),
         }),
       });
       return normalizeSummaryHistoryResult(result);
     },
-    enabled: view === "summaries",
+    enabled: view === "summaries" && amountValid && periodValid,
   });
 
   const taskQuery = useQuery({
@@ -557,7 +439,7 @@ export default function SummaryHistoryPage() {
           model,
           from: from || undefined,
           to: to || undefined,
-          limit: Number(limit),
+          limit: Math.min(amount || 100, 500),
         }),
       });
       return normalizeSummaryTaskResult(result);
@@ -579,7 +461,7 @@ export default function SummaryHistoryPage() {
       const result = await api.callResource("jobs", {
         action: "model_artifacts",
         model,
-        limit: Number(limit),
+        limit: Math.min(amount || 100, 500),
         ...(artifactType === "all" ? {} : { artifactTypes: [artifactType] }),
         ...(dateBounds ?? {}),
       });
@@ -588,7 +470,14 @@ export default function SummaryHistoryPage() {
     enabled: view === "models",
   });
 
-  const data = query.data ?? { entries: [], models: [], total: 0 };
+  const data = query.data ??
+    {
+      entries: [],
+      models: [],
+      total: 0,
+      objectCount: 0,
+      selectedObjectIds: [],
+    };
   const taskData = taskQuery.data ?? {
     entries: [],
     models: [],
@@ -606,10 +495,6 @@ export default function SummaryHistoryPage() {
     : view === "tasks"
     ? taskData.models
     : artifactData.models;
-  const latestAt = useMemo(
-    () => data.entries[0]?.generatedAt,
-    [data.entries],
-  );
 
   const applyDatePreset = (preset: DatePreset) => {
     setDatePreset(preset);
@@ -638,6 +523,8 @@ export default function SummaryHistoryPage() {
     setModel("all");
     setTaskStatus("all");
     setArtifactType("all");
+    setLimit("100");
+    setDisplayLimit(100);
     setRerunTargetModel("");
     setRerunTargetProviderId(undefined);
     setRerunResult(null);
@@ -651,6 +538,7 @@ export default function SummaryHistoryPage() {
     setFrom("");
     setTo("");
     setLimit("100");
+    setDisplayLimit(100);
   };
 
   const refreshCurrentView = () => {
@@ -665,19 +553,32 @@ export default function SummaryHistoryPage() {
     ? taskQuery.isFetching
     : modelArtifactQuery.isFetching;
 
+  const canRerun = view === "summaries" && amountValid && periodValid &&
+    (amount != null || dateBounds != null) && !query.isFetching &&
+    !query.isError &&
+    data.objectCount > 0 && !!rerunTargetModel && rerunTargetModel !== model &&
+    !rerunPending;
+
   const rerunSummaries = async () => {
-    if (!dateBounds || !rerunTargetModel || rerunPending) return;
+    if (!canRerun) return;
+    const artifactIds = [...data.selectedObjectIds];
     if (model === rerunTargetModel) {
       setRerunResult("Choose a target model different from the source model.");
       return;
     }
     const accepted = await confirmAction({
-      title: "Rerun all summaries in this range?",
-      description:
-        `Append one new version per conversation with summaries generated from ${from} through ${to} (${pickerTimeZone}), ${
-          model === "all" ? "across all source models" : `from ${model}`
-        }, using ${rerunTargetModel}. This includes all matching conversations, beyond the displayed results. Existing target-model versions and queued jobs are skipped. Originals are kept.`,
-      actionLabel: "Queue all in range",
+      title:
+        `Rerun summaries for ${data.objectCount.toLocaleString()} conversations?`,
+      description: `${data.total.toLocaleString()} summaries match ${
+        amount != null ? `the latest ${amount}` : "all summaries"
+      }${
+        dateBounds
+          ? ` from ${from} through ${to} (${pickerTimeZone})`
+          : " across all dates"
+      }${
+        model !== "all" ? `, from ${model}` : ""
+      }. Append one new version per conversation using ${rerunTargetModel}. Originals are kept; existing target-model versions and queued jobs are skipped.`,
+      actionLabel: "Rerun summaries",
     });
     if (!accepted) return;
 
@@ -685,23 +586,33 @@ export default function SummaryHistoryPage() {
     setRerunResult(null);
     let queuedSoFar = 0;
     try {
-      const result = await queueSummaryRerunRange(
-        {
-          ...dateBounds,
-          ...(model !== "all" ? { sourceModel: model } : {}),
-          targetModel: rerunTargetModel,
-          ...(rerunTargetProviderId
-            ? { targetProviderProfileId: rerunTargetProviderId }
-            : {}),
-        },
-        (request) => api.callResource("jobs", request),
-        (queued, skipped) => {
-          queuedSoFar = queued;
-          setRerunResult(
-            `Queued ${queued} summary rerun(s); ${skipped} already queued. Keep this page open until queueing finishes.`,
-          );
-        },
-      );
+      const target = {
+        ...(model !== "all" ? { sourceModel: model } : {}),
+        targetModel: rerunTargetModel,
+        ...(rerunTargetProviderId
+          ? { targetProviderProfileId: rerunTargetProviderId }
+          : {}),
+      };
+      const call = (request: Record<string, unknown>) =>
+        api.callResource("jobs", request);
+      const onProgress = (queued: number, skipped: number) => {
+        queuedSoFar = queued;
+        setRerunResult(
+          `Queued ${queued} summary rerun(s); ${skipped} already queued. Keep this page open until queueing finishes.`,
+        );
+      };
+      const result = amount != null
+        ? await queueSummaryRerunSelection(
+          { ...target, artifactIds },
+          call,
+          onProgress,
+        )
+        : await queueSummaryRerunRange(
+          { ...target, ...dateBounds! },
+          call,
+          onProgress,
+        );
+
       setRerunResult(
         `Queueing complete: ${result.queued} summary rerun(s); ${result.skipped} already queued. Originals remain available for comparison.`,
       );
@@ -714,7 +625,7 @@ export default function SummaryHistoryPage() {
       setRerunResult(
         `Queueing stopped after ${queuedSoFar} confirmed rerun(s). ${
           error instanceof Error ? error.message : "Failed to queue reruns"
-        } Retry the same range to continue; existing jobs are skipped.`,
+        } Retry the same selection to continue; existing jobs are skipped.`,
       );
     } finally {
       setRerunPending(false);
@@ -727,11 +638,10 @@ export default function SummaryHistoryPage() {
         <div>
           <div className="flex items-center gap-2">
             <Sparkles className="h-6 w-6 text-primary" />
-            <h1 className="text-2xl font-semibold">AI output history</h1>
+            <h1 className="text-2xl font-semibold">AI history</h1>
           </div>
           <p className="mt-1 text-muted-foreground">
-            Audit summaries, conversation extraction, and tagging by the model
-            that actually produced each saved result.
+            Browse your summaries and revisit them with a different model.
           </p>
         </div>
         <Button
@@ -748,50 +658,28 @@ export default function SummaryHistoryPage() {
         </Button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Button
-          variant={view === "summaries" ? "default" : "outline"}
-          className="h-auto justify-start p-4 text-left"
-          onClick={() => changeView("summaries")}
-        >
-          <FileText className="mr-3 h-5 w-5" />
-          <span>
-            <span className="block font-medium">Saved summaries</span>
-            <span className="block text-xs opacity-75">
-              Browse generated text by executed model and generation date.
-            </span>
-          </span>
-        </Button>
-        <Button
-          variant={view === "tasks" ? "default" : "outline"}
-          className="h-auto justify-start p-4 text-left"
-          onClick={() => changeView("tasks")}
-        >
-          <ListChecks className="mr-3 h-5 w-5" />
-          <span>
-            <span className="block font-medium">Task activity</span>
-            <span className="block text-xs opacity-75">
-              See successful, unfinished, failed, and cancelled jobs.
-            </span>
-          </span>
-        </Button>
-        <Button
-          variant={view === "models" ? "default" : "outline"}
-          className="h-auto justify-start p-4 text-left"
-          onClick={() => changeView("models")}
-        >
-          <Cpu className="mr-3 h-5 w-5" />
-          <span>
-            <span className="block font-medium">All model outputs</span>
-            <span className="block text-xs opacity-75">
-              Find saved results by executed model and provenance quality.
-            </span>
-          </span>
-        </Button>
+      <div className="flex flex-wrap gap-1 rounded-xl bg-muted/50 p-1 w-fit">
+        {([
+          ["summaries", "Summaries", FileText],
+          ["tasks", "Activity", ListChecks],
+          ["models", "All outputs", Cpu],
+        ] as const).map(([key, label, Icon]) => (
+          <Button
+            key={key}
+            variant={view === key ? "secondary" : "ghost"}
+            className={`gap-2 rounded-lg ${
+              view === key ? "bg-background shadow-sm" : "text-muted-foreground"
+            }`}
+            onClick={() => changeView(key)}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </Button>
+        ))}
       </div>
 
-      <Card className="p-5">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <Card className="overflow-hidden rounded-2xl border-border/60 shadow-sm">
+        <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3 sm:p-6">
           {view === "tasks" && (
             <div className="space-y-2">
               <Label>Task status</Label>
@@ -837,9 +725,9 @@ export default function SummaryHistoryPage() {
               </Select>
             </div>
           )}
-          <div className="space-y-2 xl:col-span-2">
+          <div className="space-y-2">
             <Label>
-              {view === "tasks" ? "Requested model" : "Executed model"}
+              Model
             </Label>
             <Select value={model} onValueChange={setModel}>
               <SelectTrigger>
@@ -857,9 +745,7 @@ export default function SummaryHistoryPage() {
           </div>
           <div className="space-y-2">
             <Label>
-              {view === "tasks"
-                ? "Task creation date"
-                : "Summary generation date"}
+              {view === "tasks" ? "Task creation date" : "Period (generated)"}
             </Label>
             <Select
               value={datePreset}
@@ -876,24 +762,33 @@ export default function SummaryHistoryPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label>Results</Label>
-            <Select value={limit} onValueChange={setLimit}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="25">Latest 25</SelectItem>
-                <SelectItem value="50">Latest 50</SelectItem>
-                <SelectItem value="100">Latest 100</SelectItem>
-                <SelectItem value="250">Latest 250</SelectItem>
-                <SelectItem value="500">Latest 500</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          {view === "summaries" && (
+            <div className="space-y-2">
+              <Label htmlFor="summary-amount">Last X (optional)</Label>
+              <Input
+                id="summary-amount"
+                type="number"
+                min={1}
+                max={10000}
+                step={1}
+                placeholder="All matching summaries"
+                value={limit}
+                onChange={(event) => {
+                  setLimit(event.target.value);
+                  setDisplayLimit(100);
+                }}
+                aria-invalid={!amountValid}
+              />
+              {!amountValid && (
+                <p className="text-xs text-destructive">
+                  Enter a whole number from 1 to 10,000, or leave empty.
+                </p>
+              )}
+            </div>
+          )}
         </div>
         {datePreset === "custom" && (
-          <div className="mt-4 rounded-lg border bg-muted/20 p-4">
+          <div className="mx-5 mb-5 rounded-xl border bg-muted/20 p-4 sm:mx-6">
             <DateRangePicker
               label={view === "tasks" ? "Created range" : "Generated range"}
               value={{
@@ -910,86 +805,85 @@ export default function SummaryHistoryPage() {
             />
           </div>
         )}
-        <div className="mt-4 flex justify-end">
-          <Button variant="ghost" size="sm" onClick={resetFilters}>
-            <RotateCcw className="mr-2 h-4 w-4" />
-            Reset filters
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 px-5 py-3 sm:px-6"
+          aria-live="polite"
+        >
+          <p className="text-sm text-muted-foreground">
+            {view === "summaries"
+              ? (
+                !amountValid || !periodValid
+                  ? "Choose valid filters"
+                  : query.isFetching
+                  ? "Counting matches…"
+                  : query.isError
+                  ? "Could not count matches"
+                  : (
+                    <>
+                      <strong className="font-semibold text-foreground">
+                        {data.objectCount.toLocaleString()} conversations
+                      </strong>
+                      <span className="mx-2">·</span>
+                      {data.total.toLocaleString()} summaries match
+                    </>
+                  )
+              )
+              : view === "tasks"
+              ? `${taskData.counts.total.toLocaleString()} tasks`
+              : `${artifactData.total.toLocaleString()} outputs`}
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 text-muted-foreground"
+            onClick={resetFilters}
+          >
+            <RotateCcw className="mr-2 h-3.5 w-3.5" />Reset
           </Button>
         </div>
-      </Card>
-
-      {(view === "summaries" ||
-        (view === "models" &&
-          (artifactType === "all" || artifactType === "summary"))) && (
-        <Card className="p-5">
-          <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
-            <div>
-              <p className="font-medium">Rerun summaries in range</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Source:{" "}
-                <span className="font-mono">
-                  {model === "all" ? "All models" : model}
-                </span>. Append one new version per matching conversation,
-                across all results. Originals are kept. Select a generation-date
-                range above.
-              </p>
+        {view === "summaries" && (
+          <div className="space-y-3 border-t border-border/60 bg-muted/20 p-5 sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="min-w-0 flex-1 space-y-2">
+                <Label>Rerun with</Label>
+                <ModelSelector
+                  value={rerunTargetModel}
+                  onChange={setRerunTargetModel}
+                  providerValue={rerunTargetProviderId}
+                  onSelectWithProvider={(_model, providerProfileId) =>
+                    setRerunTargetProviderId(providerProfileId)}
+                  placeholder="Choose a model"
+                  prefetch
+                />
+              </div>
+              <Button
+                className="gap-2 rounded-lg"
+                onClick={rerunSummaries}
+                disabled={!canRerun}
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${rerunPending ? "animate-spin" : ""}`}
+                />
+                {rerunPending ? "Queueing…" : "Rerun summaries"}
+              </Button>
             </div>
-            <div className="space-y-2">
-              <Label>Target model</Label>
-              <ModelSelector
-                value={rerunTargetModel}
-                onChange={setRerunTargetModel}
-                providerValue={rerunTargetProviderId}
-                onSelectWithProvider={(_model, providerProfileId) =>
-                  setRerunTargetProviderId(providerProfileId)}
-                placeholder="Choose target model"
-                prefetch
-              />
-            </div>
-            <Button
-              onClick={rerunSummaries}
-              disabled={rerunPending || !dateBounds || !rerunTargetModel ||
-                rerunTargetModel === model}
-            >
-              {rerunPending ? "Queueing…" : "Rerun all in range"}
-            </Button>
-          </div>
-          {rerunResult && (
-            <p className="mt-3 rounded-md bg-muted p-3 text-sm">
-              {rerunResult}
+            <p className="text-xs text-muted-foreground">
+              {amount == null && !dateBounds
+                ? "Set an amount or period to choose what to rerun."
+                : "One new version per conversation. Originals are kept."}
             </p>
-          )}
-        </Card>
-      )}
+            {rerunResult && (
+              <p role="status" className="rounded-lg bg-background p-3 text-sm">
+                {rerunResult}
+              </p>
+            )}
+          </div>
+        )}
+      </Card>
 
       {view === "summaries"
         ? (
           <>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Card className="p-4">
-                <p className="text-sm text-muted-foreground">Saved summaries</p>
-                <p className="mt-1 text-2xl font-semibold">
-                  {data.total.toLocaleString()}
-                </p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-sm text-muted-foreground">
-                  Executed models in history
-                </p>
-                <p className="mt-1 text-2xl font-semibold">
-                  {data.models.length}
-                </p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-sm text-muted-foreground">
-                  Most recent summary
-                </p>
-                <p className="mt-1 text-sm font-medium">
-                  {latestAt ? formatDateTime(latestAt) : "None"}
-                </p>
-              </Card>
-            </div>
-
             {query.isLoading && (
               <Card className="p-10 text-center text-muted-foreground">
                 Loading summary history…
@@ -1020,15 +914,23 @@ export default function SummaryHistoryPage() {
               ))}
             </div>
             {data.total > data.entries.length && (
-              <Card className="flex items-center justify-between gap-3 p-4 text-sm">
-                <span className="text-muted-foreground">
-                  Showing {data.entries.length} of {data.total} saved summaries.
+              <div className="flex items-center justify-between gap-3 py-2 text-sm text-muted-foreground">
+                <span>
+                  Showing {data.entries.length} of {data.total.toLocaleString()}
+                  {" "}
+                  matching summaries. Reruns include the full selection.
                 </span>
-                <div className="flex items-center gap-2">
-                  <CalendarRange className="h-4 w-4 text-muted-foreground" />
-                  Increase “Results” or narrow the optional date range.
-                </div>
-              </Card>
+                {displayLimit < 500 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setDisplayLimit(Math.min(displayLimit + 100, 500))}
+                  >
+                    Show more
+                  </Button>
+                )}
+              </div>
             )}
           </>
         )
@@ -1105,63 +1007,6 @@ export default function SummaryHistoryPage() {
         )
         : (
           <>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Card className="p-4">
-                <p className="text-sm text-muted-foreground">
-                  Matching AI outputs
-                </p>
-                <p className="mt-1 text-2xl font-semibold">
-                  {artifactData.total.toLocaleString()}
-                </p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-sm text-muted-foreground">
-                  Executed models
-                </p>
-                <p className="mt-1 text-2xl font-semibold">
-                  {artifactData.models.length}
-                </p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-sm text-muted-foreground">
-                  Legacy summaries without exact route
-                </p>
-                <p className="mt-1 text-2xl font-semibold">
-                  {artifactData.gaps.legacySummariesWithoutExactRouting
-                    .toLocaleString()}
-                </p>
-              </Card>
-              <Card className="p-4">
-                <p className="text-sm text-muted-foreground">
-                  Legacy extraction / tag gaps
-                </p>
-                <p className="mt-1 text-2xl font-semibold">
-                  {(artifactData.gaps.legacyExtractionsWithRequestedAliasOnly +
-                    artifactData.gaps.legacyTagRelationshipsWithoutProvenance)
-                    .toLocaleString()}
-                </p>
-              </Card>
-            </div>
-
-            <Card className="border-amber-200 bg-amber-50/50 p-5">
-              <div className="flex gap-3">
-                <AlertTriangle className="mt-0.5 h-5 w-5 text-amber-700" />
-                <div className="space-y-1 text-sm">
-                  <p className="font-medium text-amber-900">
-                    Historical confidence is explicit
-                  </p>
-                  <p className="text-amber-800">
-                    Older summaries usually retain the provider response model.
-                    Older conversation extraction stores aliases such as small
-                    or medium, so the exact executed model cannot be
-                    reconstructed. Existing tag relationships have no model
-                    provenance. New runs record the exact route, provider,
-                    fallback, job, and parser result.
-                  </p>
-                </div>
-              </div>
-            </Card>
-
             {modelArtifactQuery.isLoading && (
               <Card className="p-10 text-center text-muted-foreground">
                 Loading model-produced data…

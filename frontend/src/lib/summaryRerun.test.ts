@@ -1,6 +1,56 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { queueSummaryRerunRange, summaryDateBounds } from "./summaryRerun";
+import {
+  queueSummaryRerunRange,
+  queueSummaryRerunSelection,
+  summaryDateBounds,
+} from "./summaryRerun";
+
+describe("latest summary reruns", () => {
+  it("queues only the displayed conversations, deduplicated across summary versions", async () => {
+    const ids = Array.from(
+      { length: 250 },
+      (_, i) => (i + 1).toString(16).padStart(24, "0"),
+    );
+    const call = vi.fn().mockResolvedValue({
+      queued: [{}],
+      nextCursor: ids[99],
+    });
+    await queueSummaryRerunSelection(
+      {
+        artifactIds: [...ids.map((id) => `${id}:0`), `${ids[0]}:1`],
+        targetModel: "qwen3.8-27b-uncensored",
+        targetProviderProfileId: "qwen-unc",
+      },
+      call,
+      () => {},
+    );
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(call.mock.calls.map(([request]) => request.artifactIds.length))
+      .toEqual([100, 100, 50]);
+    expect(call.mock.calls.flatMap(([request]) => request.artifactIds)).toEqual(
+      ids,
+    );
+    for (const [request] of call.mock.calls) {
+      expect(request).not.toHaveProperty("start");
+      expect(request).not.toHaveProperty("afterObjectId");
+      expect(request.targetProviderProfileId).toBe("qwen-unc");
+    }
+  });
+
+  it("never submits an empty selection as an unrestricted rerun", async () => {
+    const call = vi.fn();
+    await expect(
+      queueSummaryRerunSelection(
+        { artifactIds: [], targetModel: "new" },
+        call,
+        () => {},
+      ),
+    )
+      .rejects.toThrow("No summaries selected");
+    expect(call).not.toHaveBeenCalled();
+  });
+});
 
 describe("summary rerun range", () => {
   it("uses inclusive calendar dates in the selected timezone", () => {

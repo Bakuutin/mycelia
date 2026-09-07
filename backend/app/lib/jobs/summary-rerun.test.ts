@@ -12,6 +12,22 @@ const range = {
   end: "2026-08-31T00:00:00Z",
 };
 
+Deno.test("explicit latest-summary selection needs no dates and cannot expand to other conversations", () => {
+  const ids = ["000000000000000000000001:0", "000000000000000000000002:1"];
+  const input = ReprocessModelArtifactsSchema.parse({
+    action: "reprocess_model_artifacts",
+    artifactType: "summary",
+    targetModel: "qwen3.8-27b-uncensored",
+    artifactIds: ids,
+    limit: 100,
+  });
+  const pipeline = buildSummaryRerunPipeline(input);
+  const match = pipeline[0].$match as any;
+  expect(match._id.$in.map((id: { toString(): string }) => id.toString()))
+    .toEqual(ids.map((id) => id.split(":")[0]));
+  expect(input.start).toBeUndefined();
+});
+
 Deno.test("range reruns accept all models but reject unbounded and malformed selections", () => {
   expect(ReprocessModelArtifactsSchema.safeParse(range).success).toBe(true);
   for (

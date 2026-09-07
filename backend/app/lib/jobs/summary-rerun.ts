@@ -23,10 +23,13 @@ export const ReprocessModelArtifactsSchema = z.object({
   ) {
     ctx.addIssue({ code: "custom", message: "End must be after start" });
   }
-  if ((!value.sourceModel || value.sourceModel === "all") && !value.start) {
+  if (
+    (!value.sourceModel || value.sourceModel === "all") && !value.start &&
+    !value.artifactIds?.length
+  ) {
     ctx.addIssue({
       code: "custom",
-      message: "Choose a date range for all models",
+      message: "Choose a date range or explicit summaries for all models",
     });
   }
 });
