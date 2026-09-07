@@ -49,14 +49,25 @@ bash scripts/install-ingestion-service.sh
 It runs discovery and ingestion automatically and exposes the authenticated
 `POST /jobs/ingestion` endpoint used by Jobs -> Ingestion -> Run now. Use
 `daemon.py` directly only for a foreground session or recovery, and do not run
-both ingestion processes simultaneously. The installer waits for `/health`, and
+both ingestion processes simultaneously. The installer waits up to 90 seconds
+for `/readiness`, independently of the first ingestion batch, and
 the service adds the standard Homebrew binary paths required for `ffmpeg` and
 `ffprobe` when running under launchd.
 
-`GET http://127.0.0.1:8001/health` reports per-source discovery state. A
+`GET http://127.0.0.1:8001/health` reports per-source discovery state and
+`lastCycle.ingestion` counts (`attempted`, `succeeded`, `failed`, `remaining`,
+and unresolved `cached_errors`). A
 configured Apple staging database that is missing or cannot be queried makes
 the service `degraded`; it is no longer reported as an empty successful scan.
-The response also reports `appleVoiceMemosMode`.
+The response also reports `appleVoiceMemosMode`. Upload failures and cached
+errors within this daemon's source scope also make health `degraded`; pending
+work alone does not. Cached failures require an explicit retry. `/readiness`
+reports application startup completion with service `mycelia-host-ingestion`
+and includes the current health details. Installation can succeed while health
+is `starting` or `degraded`; the installer prints that state separately.
+Invalid batch or interval settings fail application startup before readiness.
+Readiness requests have a total transfer deadline; interrupted or malformed
+responses are retried within the installer's 90-second budget.
 
 The recommended macOS background mode is verified staging:
 

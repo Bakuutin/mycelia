@@ -395,11 +395,30 @@ seconds, and ingests bounded batches on the host. The Jobs page's ingestion
 **Run now** button calls the same serialized service, so it cannot overlap the
 automatic cycle. Ingestion remains host-side because local source paths are
 deliberately not mounted into the Docker Python worker. The installer waits up
-to 90 seconds for a healthy response and prints the per-source result; the
+to 90 seconds for `/readiness`, independently of ingestion completion, and
+prints the ingestion health and per-source result; the
 service includes standard Intel and Apple Silicon Homebrew paths so `uv`,
 `ffmpeg`, and `ffprobe` remain available under launchd's minimal environment.
 The health response is `degraded` when a configured staging source cannot be
-opened; an empty, readable catalog remains a healthy cycle.
+opened, an upload fails, or eligible sources have unresolved cached errors.
+`lastCycle.ingestion` reports attempted, successful, failed, remaining, and
+cached-error counts. An empty readable catalog with no unresolved ingestion
+failures remains healthy. Installation can succeed while ingestion health is
+`starting` or `degraded`; readiness confirms application startup only.
+Invalid ingestion batch or interval settings prevent startup. The installer
+bounds each complete HTTP request within its overall 90-second deadline and
+retries interrupted or malformed readiness responses.
+
+Open **Audio → Pipeline → Audio processing overview** for ingestion reachability,
+last completed scan, last imported files (recording and import dates), staging
+publication time, and the Import → VAD → Transcription backlog in one place.
+**Check service** refreshes lightweight status; **Scan staging now** queues one
+serialized ingestion batch, not a refresh of Apple's protected library.
+**Update audio counts** explicitly recalculates the corpus snapshot. Counts keep
+their calculation time, and unavailable counts appear as `—`, not zero. Service
+and queue status refresh every 15 seconds while the page is visible; exact audio
+counts never run on that timer. A running service with cached errors or an old
+staging publication does not mean all Apple recordings have been imported.
 
 To preview a Voice Memos archive refresh without changing anything, then apply
 and verify it when ready:

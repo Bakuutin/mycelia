@@ -474,6 +474,24 @@ chunk: zero is exact, while existing work is shown either as the persisted
 campaign estimate (`≈N`, with its update time) or as `Work remains` when no
 estimate is available.
 
+The unified **Audio processing overview** uses authenticated
+`GET /api/audio/pipeline/operations`, cached/coalesced for 15 seconds per
+authorization scope. Each refresh reads host ingestion `/health`, three BullMQ
+queue counters, one `_id`-indexed persisted snapshot, and at most five recent
+imports. The latter uses migration `0082_audio_imports_recent.ts`'s
+`audio_imports_recent_v1` index and a 1-second Mongo deadline; a missing index
+returns an explicit warning, never an unhinted fallback scan. No corpus counts
+or audio payloads are read by this endpoint. **Update audio counts** reuses the
+existing explicit pipeline calculation and saves its small summary in
+`jobs_dashboard_snapshots` (`audio_operations:v1`). A failed core-audio count keeps
+the last complete data and timestamp, marking it stale instead of publishing
+fallback zeros; unrelated job-history failures do not invalidate audio counts.
+Publishing a snapshot invalidates the lightweight cache immediately.
+The host adds scan start/finish/trigger, interval/batch settings,
+and a bounded read of the configured staging database's publication receipt.
+Changing Python source requires restarting only the host ingestion LaunchAgent;
+frontend/backend readiness does not prove the host daemon has reloaded.
+
 Jobs **First 8 on** enables diarization routes in displayed order up to the
 enforced eight-slot total. Routes that do not fit remain disabled, and the card
 keeps the enabled/total route count visible. The same maximum applies to saved
@@ -565,7 +583,8 @@ Keep live service availability separate from corpus-wide statistics:
 - Jobs and Settings read one canonical worker catalog. The last successful
   catalog is persisted in `jobs_dashboard_snapshots`; discovery or Python
   `/capabilities` failure marks rows stale/degraded instead of returning an
-  empty list. `ingestion` is daemon-managed and has no queue controls.
+  empty list. `ingestion` is daemon-managed: only a bounded **Run now** request
+  is allowed; daemon pause, schedule, and concurrency remain host-controlled.
 - Page load reads only live queue totals and persisted snapshots. **Update
   history**, **Update backlog**, and the Timeline audit action return an
   operation id immediately; old values remain visible while the leased refresh
@@ -1185,14 +1204,30 @@ process may read the protected library either, export recordings from Voice
 Memos to a user-readable folder and import that folder instead.
 
 When `/health` is `degraded`, inspect `appleVoiceMemosMode` and
-`lastCycle.sources` before changing any data. A readable source with no new
+`lastCycle.sources` and `lastCycle.ingestion` before changing any data. The
+ingestion counts are `attempted`, `succeeded`, `failed`, `remaining`, and
+`cached_errors`, scoped to this daemon's eligible sources or explicitly
+selected IDs. Current failures and unresolved cached errors degrade health;
+pending work alone does not. A readable source with no new
 files is `completed` with `discovered: 0`; SQLite corruption and missing-path
-failures are explicit. A healthy staged cycle proves the published paths are
-readable, not that the interactive archive refresh is current. For a bounded
+failures are explicit. Health describes the latest cycle's discovery and
+eligible ingestion work; full media verification and snapshot freshness must
+be checked through the interactive staging refresh. For a bounded
 recovery, also set `MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` to a timezone-aware ISO
 timestamp. Stop the LaunchAgent only when running a separate foreground
 recovery process; publishing a new staging snapshot is atomic and does not
 require a stop.
+
+The host service's `/readiness` endpoint reports application startup with
+`service: mycelia-host-ingestion` and includes current ingestion health. The
+installer polls it for at most 90 seconds; readiness is independent of slow
+authentication, discovery, and audio processing. A ready service with
+`starting` or `degraded` ingestion health is installed successfully, with that
+state printed for inspection. `/health` remains the ingestion outcome signal.
+Invalid batch or interval settings fail startup before readiness is enabled.
+The installer uses a total transfer timeout and a subprocess deadline for each
+HTTP probe, both bounded by the remaining 90-second budget. Interrupted and
+malformed responses are retried; late responses cannot report success.
 
 Source ingestion writes audio chunks as unordered 50-operation `bulkWrite`
 batches. The `$setOnInsert` contract on `(original_id, index)` makes a retry
