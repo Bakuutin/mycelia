@@ -4,6 +4,7 @@ import {
   assertThrows,
 } from "jsr:@std/assert@^1.0.15";
 import { PDFDocument } from "pdf-lib";
+import { stub } from "@std/testing/mock";
 import {
   assertSafeMediaRelativePath,
   detectMediaMime,
@@ -11,6 +12,7 @@ import {
   listMediaSourceFolders,
   mediaLocationFromMetadata,
   prepareUploadedMedia,
+  readExifMetadata,
   readMediaSourceDirectoryPage,
   resolveMediaSourcePath,
 } from "./local.server.ts";
@@ -28,6 +30,25 @@ Deno.test("mounted media paths must stay relative to the configured root", () =>
     Error,
     '".." are not allowed',
   );
+});
+
+Deno.test("missing exiftool fails visibly instead of importing silently without GPS or time", async () => {
+  const command = stub(
+    Deno,
+    "Command",
+    function () {
+      throw new Deno.errors.NotFound("exiftool is not installed");
+    },
+  );
+  try {
+    await assertRejects(
+      () => readExifMetadata("photo.jpg"),
+      Error,
+      "EXIF_METADATA_TOOL_UNAVAILABLE",
+    );
+  } finally {
+    command.restore();
+  }
 });
 
 Deno.test("directory inventory pages over 20000 files without following symlinks or losing names", async () => {

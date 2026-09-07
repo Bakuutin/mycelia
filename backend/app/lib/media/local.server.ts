@@ -380,7 +380,7 @@ async function inspectMediaFile(
   } else {
     const [technical, exif] = await Promise.all([
       ffprobe(path),
-      exiftool(path),
+      readExifMetadata(path),
     ]);
     const location = normalizeMediaLocation({
       latitude: exif.GPSLatitude,
@@ -446,7 +446,9 @@ async function ffprobe(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(new TextDecoder().decode(output.stdout));
 }
 
-async function exiftool(path: string): Promise<Record<string, unknown>> {
+export async function readExifMetadata(
+  path: string,
+): Promise<Record<string, unknown>> {
   try {
     const output = await new Deno.Command("exiftool", {
       args: ["-json", "-n", "-a", "-s", path],
@@ -460,7 +462,11 @@ async function exiftool(path: string): Promise<Record<string, unknown>> {
     const { SourceFile: _sourceFile, ...metadata } = first;
     return metadata;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return {};
+    if (error instanceof Deno.errors.NotFound) {
+      throw new Error(
+        "EXIF_METADATA_TOOL_UNAVAILABLE: rebuild the backend image with exiftool before importing photos; capture time and GPS cannot be inspected safely",
+      );
+    }
     throw error;
   }
 }
