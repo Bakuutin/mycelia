@@ -86,6 +86,26 @@ Configure `.env` with `MYCELIA_APPLE_VOICEMEMOS_MODE=staged`, the local
 only that bounded audio set from the external archive. The LaunchAgent reads
 only local ordinary paths; do not grant Full Disk Access to its `uv` executable.
 New Voice Memos enter staging only after the interactive refresh command runs.
+Incremental publication reuses audio only after size and hash verification.
+Required free space covers audio needing copying, a temporary SQLite snapshot,
+and a 1 GiB reserve, including full replacement-file sizes.
+Existing audio symlinks need full copy space and are replaced with verified
+regular files. Symlinked staging directories are rejected so publication
+cannot write through them to an external location.
+
+Apple identity lookup is paginated, so catalogs larger than 1,000 records stay
+deduplicated. A unique pending UUID can move to a readable configured copy
+without creating another source. Its cached error remains until explicit
+retry; completed sources stay unchanged. Ambiguous matches and unreadable
+replacement paths appear as discovery warnings. Multiple catalog paths for
+one UUID are also ambiguous; neither insertion nor path repair runs for that
+UUID until the catalog is reconciled.
+
+For custom archives, export `MYCELIA_VOICE_MEMOS_ARCHIVE_ROOT` and set the
+archive tool's effective `ARCHIVE_TARGET` to the same directory. The wrapper
+uses the tool's config loader before each archive command and rejects
+mismatched resolved paths. The tool reads `ICLOUD_ARCHIVE_CONFIG` or its own
+`config.env`; that config can override an exported `ARCHIVE_TARGET`.
 
 Apple backup recovery supports separate paths and a bounded date range:
 

@@ -1195,7 +1195,13 @@ archive verification, then hash-verifies and materializes the audio at or after
 `MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` alongside the newest completed SQLite
 snapshot in `~/Library/mycelia/voice-memos-staging`. The database is replaced
 last and atomically. The archive and local audio staging are additive; the
-wrapper does not delete source or archived recordings. Keeping the audio local
+wrapper does not delete source or archived recordings. Incremental refreshes
+reuse size-and-hash-verified files.
+The capacity check budgets only audio needing copying, the temporary SQLite
+snapshot, and a 1 GiB reserve. Full replacement-file sizes are included while
+old files still exist. Duplicate catalog paths count once. Existing staged
+audio symlinks are copied into regular files, even when target hashes match;
+symlinked staging directories are rejected before publication. Keeping audio local
 also prevents launchd from crossing the removable-volume privacy boundary. A
 fully unattended read of Apple's Group Container still requires a
 TCC-authorized background process, so `live` mode remains an explicit legacy
@@ -1217,6 +1223,25 @@ recovery, also set `MYCELIA_APPLE_VOICEMEMOS_NOT_BEFORE` to a timezone-aware ISO
 timestamp. Stop the LaunchAgent only when running a separate foreground
 recovery process; publishing a new staging snapshot is atomic and does not
 require a stop.
+
+Apple UUID lookup uses paginated Mongo finds with projection, sort, and limit
+under `options`; catalogs and existing duplicate sets can exceed 1,000 records.
+A single pending UUID match can have its path updated to a readable regular
+file in the configured root. The guarded update preserves source identity,
+metadata, and cached failures. Completed sources are not rebound; ambiguous
+matches and unreadable replacement paths produce discovery warnings. A catalog
+with multiple paths for the same UUID is skipped with a warning before either
+insertion or path repair, including when that UUID has only one Mongo record. Cached
+errors still require explicit retries through `python/manage_errors.py`.
+
+Before invoking the archive tool for a plan, refresh, or verification, the
+staging wrapper loads its `scripts/common.sh` and calls `load_config`. Its
+effective `ARCHIVE_TARGET` must resolve to the same directory as
+`MYCELIA_VOICE_MEMOS_ARCHIVE_ROOT`; a mismatch fails before that archive command
+runs. Configure a custom root in both places. The archive tool uses
+`ICLOUD_ARCHIVE_CONFIG`, falling back to its `config.env`, which can override
+shell environment values. Equivalent paths through archive symlinks are
+accepted; staging-directory symlinks remain rejected.
 
 The host service's `/readiness` endpoint reports application startup with
 `service: mycelia-host-ingestion` and includes current ingestion health. The

@@ -255,7 +255,7 @@ class AppleVoiceMemosImporter(Importer):
     def get_known_identities(
         candidate_paths: set[str],
         candidate_unique_ids: set[str],
-    ) -> tuple[set[str], set[str]]:
+    ) -> list[dict]:
         """Refresh identities for this catalog without relying on find defaults."""
         clauses = []
         if candidate_paths:
@@ -268,28 +268,64 @@ class AppleVoiceMemosImporter(Importer):
             })
 
         if not clauses:
-            return set(), set()
+            return []
 
-        records = call_resource('mongo', {
-            "action": "find",
+        records = []
+        after_id = None
+        while True:
+            query = {"$or": clauses}
+            if after_id is not None:
+                query["_id"] = {"$gt": after_id}
+            page = call_resource('mongo', {
+                "action": "find",
+                "collection": "source_files",
+                "query": query,
+                "options": {
+                    "projection": {
+                        "path": 1,
+                        "voicememo.ZUNIQUEID": 1,
+                        "ingested": 1,
+                        "_id": 1,
+                    },
+                    "sort": {"_id": 1},
+                    "limit": 1000,
+                },
+            })
+            records.extend(page)
+            if len(page) < 1000:
+                return records
+            # Existing duplicates can outnumber the candidate identities.
+            after_id = page[-1]["_id"]
+
+    @staticmethod
+    def repair_pending_path(source: dict, path: str) -> str | None:
+        """Rebind a pending identity without clearing its cached failure."""
+        if source.get("ingested") is not False or source.get("path") == path:
+            return None
+        try:
+            if not Path(path).is_file():
+                return f"Replacement is not a readable regular file: {path}"
+            with open(path, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    return f"Replacement is not a regular file: {path}"
+        except OSError as exc:
+            return f"Replacement cannot be read: {path} ({exc})"
+
+        result = call_resource('mongo', {
+            "action": "updateOne",
             "collection": "source_files",
-            "query": {"$or": clauses},
-            "projection": {
-                "path": 1,
-                "voicememo.ZUNIQUEID": 1,
-                "_id": 0,
+            "query": {
+                "_id": source["_id"],
+                "voicememo.ZUNIQUEID": source["voicememo"]["ZUNIQUEID"],
+                "path": source.get("path"),
+                "ingested": False,
             },
-            # The resource has a conservative default find limit. The result
-            # cannot exceed the number of candidate identities in this query.
-            "limit": len(candidate_paths) + len(candidate_unique_ids),
+            "update": {"$set": {"path": path}},
         })
-        paths = {record["path"] for record in records if record.get("path")}
-        unique_ids = {
-            record.get("voicememo", {}).get("ZUNIQUEID")
-            for record in records
-            if record.get("voicememo", {}).get("ZUNIQUEID")
-        }
-        return paths, unique_ids
+        if result.get("matchedCount") != 1:
+            return f"Pending recording changed during path repair: {source['_id']}"
+        source["path"] = path
+        return None
 
     def discover(self) -> Iterable[Metadata]:
         self.last_warning = None
@@ -315,11 +351,30 @@ class AppleVoiceMemosImporter(Importer):
             for memo in sqlite_data
             if memo.get("ZUNIQUEID")
         }
-        known_paths, known_unique_ids = self.get_known_identities(
+        catalog_paths_by_uuid: dict[str, set[str]] = {}
+        for memo in sqlite_data:
+            if memo.get("ZUNIQUEID") and memo.get("ZPATH"):
+                catalog_paths_by_uuid.setdefault(memo["ZUNIQUEID"], set()).add(
+                    os.path.join(root, memo["ZPATH"])
+                )
+        ambiguous_catalog_ids = {
+            unique_id for unique_id, paths in catalog_paths_by_uuid.items()
+            if len(paths) > 1
+        }
+        known_records = self.get_known_identities(
             candidate_paths,
             candidate_unique_ids,
         )
+        known_paths = {record["path"] for record in known_records if record.get("path")}
+        records_by_uuid: dict[str, list[dict]] = {}
+        for record in known_records:
+            unique_id = record.get("voicememo", {}).get("ZUNIQUEID")
+            if unique_id:
+                records_by_uuid.setdefault(unique_id, []).append(record)
+        known_unique_ids = set(records_by_uuid)
         missing_media: list[str] = []
+        recovery_warnings: list[str] = []
+        warned_catalog_ids: set[str] = set()
 
         with tqdm(
             total=total_memos,
@@ -333,6 +388,30 @@ class AppleVoiceMemosImporter(Importer):
                         continue
                     path = os.path.join(root, memo["ZPATH"])
                     unique_id = memo.get("ZUNIQUEID")
+
+                    if unique_id in ambiguous_catalog_ids:
+                        if unique_id not in warned_catalog_ids:
+                            recovery_warnings.append(
+                                f"Ambiguous Voice Memos catalog paths for UUID: {unique_id}"
+                            )
+                            warned_catalog_ids.add(unique_id)
+                        continue
+
+                    matches = records_by_uuid.get(unique_id, [])
+                    if matches:
+                        if len(matches) > 1 or (
+                            path in known_paths and matches[0].get("path") != path
+                        ):
+                            recovery_warnings.append(
+                                f"Ambiguous existing Voice Memo identity: {unique_id}"
+                            )
+                        else:
+                            warning = self.repair_pending_path(matches[0], path)
+                            if warning:
+                                recovery_warnings.append(warning)
+                            if matches[0].get("path"):
+                                known_paths.add(matches[0]["path"])
+                        continue
 
                     if path in known_paths or (
                         unique_id and unique_id in known_unique_ids
@@ -371,12 +450,20 @@ class AppleVoiceMemosImporter(Importer):
                 finally:
                     pbar.update(1)
 
+        warnings = []
         if missing_media:
             examples = ", ".join(missing_media[:3])
-            self.last_warning = (
+            warnings.append(
                 f"{len(missing_media)} Voice Memos catalog entries could not "
                 f"be read from {root}; examples: {examples}"
             )
+        if recovery_warnings:
+            warnings.append(
+                f"{len(recovery_warnings)} Voice Memos recovery warnings; "
+                + "; ".join(recovery_warnings[:3])
+            )
+        if warnings:
+            self.last_warning = "; ".join(warnings)
             self.logger.warning(self.last_warning)
 
 

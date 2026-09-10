@@ -7,7 +7,6 @@ archive_tool_root="${ICLOUD_ARCHIVE_TOOL_ROOT:-${HOME}/claude-cowork/icloud-arch
 archive_root="${MYCELIA_VOICE_MEMOS_ARCHIVE_ROOT:-/Volumes/TM_data/iCloudArchive}"
 staging_root="${MYCELIA_VOICE_MEMOS_STAGING_ROOT:-${HOME}/Library/mycelia/voice-memos-staging}"
 audio_root="${archive_root}/data/voice-memos/audio-original"
-snapshot_root="${archive_root}/data/voice-memos/native-metadata/snapshots"
 staged_audio_root="${staging_root}/audio-original"
 stable_database="${staging_root}/CloudRecordings.snapshot.db"
 status_file="${staging_root}/sync-status.json"
@@ -69,9 +68,13 @@ if [[ $# -eq 1 ]]; then
   esac
 fi
 
+if [[ -d "${archive_tool_root}" ]]; then
+  archive_tool_root="$(cd "${archive_tool_root}" && pwd -P)"
+fi
 archive_run="${archive_tool_root}/scripts/run.sh"
 archive_verify="${archive_tool_root}/scripts/verify.sh"
-if [[ ! -f "${archive_run}" || ! -f "${archive_verify}" ]]; then
+archive_common="${archive_tool_root}/scripts/common.sh"
+if [[ ! -f "${archive_run}" || ! -f "${archive_verify}" || ! -f "${archive_common}" ]]; then
   echo "Voice Memos archive tool is unavailable at ${archive_tool_root}" >&2
   echo "Set ICLOUD_ARCHIVE_TOOL_ROOT to its checkout." >&2
   exit 1
@@ -80,6 +83,30 @@ if [[ ! -d "${archive_root}" ]]; then
   echo "Archive volume is unavailable at ${archive_root}" >&2
   exit 1
 fi
+
+run_archive_tool() (
+  publication_root="$(cd "${archive_root}" && pwd -P)"
+  cd "${archive_tool_root}"
+  # The archive tool's config can override exported ARCHIVE_TARGET. Resolve it
+  # through the same loader before every plan, refresh, or verification call.
+  # shellcheck disable=SC1090
+  source "${archive_common}"
+  load_config
+  /usr/bin/python3 - "${publication_root}" "${ARCHIVE_TARGET}" <<'PY'
+import sys
+from pathlib import Path
+
+publication_root, tool_root = (Path(value).resolve() for value in sys.argv[1:])
+if publication_root != tool_root:
+    raise SystemExit(
+        "Voice Memos archive mismatch: "
+        f"MYCELIA_VOICE_MEMOS_ARCHIVE_ROOT resolves to {publication_root}, "
+        f"but the archive tool's effective ARCHIVE_TARGET resolves to {tool_root}. "
+        "Configure both to use the same archive before retrying."
+    )
+PY
+  exec bash "$@"
+)
 
 latest_snapshot() {
   /usr/bin/python3 - "${archive_root}" <<'PY'
@@ -126,6 +153,10 @@ publish_snapshot() {
     exit 1
   fi
 
+  if [[ -L "${staging_root}" ]]; then
+    echo "Staging root must be a local directory, not a symbolic link: ${staging_root}" >&2
+    exit 1
+  fi
   mkdir -p "${staging_root}"
   chmod 700 "${staging_root}"
   if ! mkdir "${lock_directory}" 2>/dev/null; then
@@ -154,6 +185,8 @@ source, destination, status_path, archive_audio_root, staged_audio_root = map(
     sys.argv[1:6],
 )
 cutoff_value = sys.argv[6]
+if destination.parent.is_symlink() or staged_audio_root.is_symlink():
+    raise SystemExit("Staging directories must not be symbolic links")
 if not source.is_file():
     raise SystemExit(f"Snapshot is missing: {source}")
 if not archive_audio_root.is_dir():
@@ -204,12 +237,21 @@ def sha256(path: Path) -> str:
 
 
 audio_entries: list[tuple[Path, Path, int]] = []
+seen_paths: set[Path] = set()
 for (catalog_path,) in catalog:
-    relative = Path(catalog_path)
-    if not catalog_path or relative.is_absolute() or ".." in relative.parts:
+    if not catalog_path:
         raise SystemExit(f"Unsafe Voice Memos catalog path: {catalog_path!r}")
+    relative = Path(catalog_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise SystemExit(f"Unsafe Voice Memos catalog path: {catalog_path!r}")
+    if relative in seen_paths:
+        continue
+    seen_paths.add(relative)
     archive_file = archive_audio_root / relative
     staged_file = staged_audio_root / relative
+    for relative_parent in relative.parents:
+        if (staged_audio_root / relative_parent).is_symlink():
+            raise SystemExit(f"Staged audio parent must not be a symbolic link: {staged_file.parent}")
     if not archive_file.is_file():
         raise SystemExit(f"Archived Voice Memo is missing: {archive_file}")
     audio_entries.append((archive_file, staged_file, archive_file.stat().st_size))
@@ -217,25 +259,34 @@ for (catalog_path,) in catalog:
 staged_audio_root.mkdir(parents=True, exist_ok=True)
 staged_audio_root.chmod(0o700)
 catalog_bytes = sum(size for _, _, size in audio_entries)
-free_bytes = os.statvfs(staged_audio_root).f_bavail * os.statvfs(staged_audio_root).f_frsize
+copy_entries: list[tuple[Path, Path, int, str]] = []
+reused_audio = 0
+for archive_file, staged_file, source_size in audio_entries:
+    source_digest = sha256(archive_file)
+    if (
+        not staged_file.is_symlink()
+        and staged_file.is_file()
+        and staged_file.stat().st_size == source_size
+        and sha256(staged_file) == source_digest
+    ):
+        reused_audio += 1
+    else:
+        copy_entries.append((archive_file, staged_file, source_size, source_digest))
+
+copy_bytes = sum(size for _, _, size, _ in copy_entries)
+capacity = os.statvfs(staged_audio_root)
+free_bytes = capacity.f_bavail * capacity.f_frsize
 minimum_headroom = 1024 * 1024 * 1024
-if free_bytes < catalog_bytes + minimum_headroom:
+required_bytes = copy_bytes + source.stat().st_size + minimum_headroom
+if free_bytes < required_bytes:
     raise SystemExit(
         "Insufficient free space for bounded Voice Memos staging: "
-        f"need at least {catalog_bytes + minimum_headroom} bytes, "
+        f"need at least {required_bytes} bytes ({copy_bytes} audio bytes to copy), "
         f"have {free_bytes}"
     )
 
 copied_audio = 0
-reused_audio = 0
-for archive_file, staged_file, source_size in audio_entries:
-    source_digest = None
-    if staged_file.is_file() and staged_file.stat().st_size == source_size:
-        source_digest = sha256(archive_file)
-        if sha256(staged_file) == source_digest:
-            reused_audio += 1
-            continue
-
+for archive_file, staged_file, source_size, source_digest in copy_entries:
     staged_file.parent.mkdir(parents=True, exist_ok=True)
     staged_file.parent.chmod(0o700)
     temporary_audio = staged_file.with_name(
@@ -251,7 +302,7 @@ for archive_file, staged_file, source_size in audio_entries:
             os.fsync(output.fileno())
         temporary_audio.chmod(0o600)
         copied_digest = copy_digest.hexdigest()
-        if source_digest is not None and copied_digest != source_digest:
+        if copied_digest != source_digest:
             raise SystemExit(f"Archived Voice Memo changed while copying: {archive_file}")
         if sha256(temporary_audio) != copied_digest:
             raise SystemExit(f"Staged Voice Memo hash mismatch: {staged_file}")
@@ -288,6 +339,7 @@ try:
         "staged_audio_files": len(audio_entries),
         "staged_audio_bytes": catalog_bytes,
         "copied_audio_files": copied_audio,
+        "copied_audio_bytes": copy_bytes,
         "reused_audio_files": reused_audio,
         "source_snapshot": str(source),
         "published_database": str(destination),
@@ -313,10 +365,7 @@ PY
 }
 
 if [[ "${mode}" == "plan" ]]; then
-  (
-    cd "${archive_tool_root}"
-    bash "${archive_run}" --components voice-memos
-  )
+  run_archive_tool "${archive_run}" --components voice-memos
   snapshot="$(latest_snapshot)"
   echo
   echo "Latest completed snapshot: ${snapshot}"
@@ -330,16 +379,10 @@ if [[ "${mode}" == "plan" ]]; then
 fi
 
 if [[ "${mode}" == "apply" ]]; then
-  (
-    cd "${archive_tool_root}"
-    bash "${archive_run}" --execute --components voice-memos
-  )
+  run_archive_tool "${archive_run}" --execute --components voice-memos
 fi
 
-(
-  cd "${archive_tool_root}"
-  bash "${archive_verify}" --components voice-memos --full
-)
+run_archive_tool "${archive_verify}" --components voice-memos --full
 
 snapshot="$(latest_snapshot)"
 publish_snapshot "${snapshot}"

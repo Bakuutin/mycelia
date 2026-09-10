@@ -436,6 +436,21 @@ the database is replaced atomically only after every bounded audio file passes
 a hash check. Start it interactively so only the trusted Terminal crosses the
 macOS privacy and external-volume boundaries; the background `uv` process never
 does. The LaunchAgent discovers the local published update on its next cycle.
+Incremental staging budgets space for audio needing copying, a temporary
+SQLite snapshot, and a 1 GiB reserve; verified unchanged audio is reused.
+Existing audio symlinks are materialized as regular local files; symlinked
+staging directories are rejected before publication.
+UUID lookup is paginated. A unique pending recording can be rebound to a
+readable configured copy, preserving its source ID and cached error. Retry
+cached failures explicitly after repair; ambiguous identities are reported
+for review without creating another source or changing a pending path. This
+includes catalog entries assigning multiple paths to the same UUID.
+
+For a custom archive, export `MYCELIA_VOICE_MEMOS_ARCHIVE_ROOT` and configure
+the archive tool's `ARCHIVE_TARGET` to point to the same directory. The wrapper
+loads `ICLOUD_ARCHIVE_CONFIG` (or the tool's `config.env`) and compares the
+resolved paths before every preview, refresh, and verification. A mismatch
+stops the command; the tool's config can override an exported `ARCHIVE_TARGET`.
 
 For a verified backup whose audio and database snapshot are stored separately,
 run one bounded recovery cycle like this:
